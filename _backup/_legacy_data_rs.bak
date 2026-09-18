@@ -1,0 +1,99 @@
+//! `.data` 格式解析器（Unity 2022+ 离线格式）
+//!
+//! Unity 2021+ Profiler 窗口 "Save to file" 出来的私有二进制格式。
+//! 内部使用 protobuf 编码，但 Unity 没有公开完整 schema。
+//!
+//! 本解析器参考 `librashuai/UnityPerfAgent` 的 Go 实现思路，
+//! 实现一个 MVP 级别的 .data 解析器：识别文件头 + 解析基本 frame 信息。
+//! 完整解析需要持续从样本文件 + Unity 内部信息对齐，本 MVP 仅提供基础结构。
+
+use bytes::{Buf, Bytes};
+
+use super::{Frame, ParsedProfile, ParseError, ProfileMeta, Sample};
+
+/// 实际的导出路径说明（Unity 6.x 验证）
+/// - Unity Profiler 窗口 → Save 按钮 / Ctrl+S → 只存 .data 或 .raw
+/// - Profile Analyzer 包 → 导出 CSV（不是 JSON）
+/// - JSON 只能通过 ProfilerRecorder API 自定义 Editor 脚本导出
+const JSON_EXPORT_HINT: &str = "Unity Profiler 窗口本身只能存 .data / .raw (Unity 6.x 不支持 JSON 导出；Profile Analyzer 包也只能导出 CSV)。如需 JSON：在 Assets/Editor/ 下放 ProfilerJsonExporter.cs（用 ProfilerRecorder API 自定义导出），或先把 .data 文件用 Profiler 窗口 Load 后用 Profiler Analyzer 拉分析";
+
+pub async fn parse(
+    bytes: &Bytes,
+    file_name: &str,
+    file_size_bytes: u64,
+) -> Result<ParsedProfile, ParseError> {
+    let mut warnings = Vec::new();
+
+    if bytes.len() < 16 {
+        warnings.push(".data 文件过短（< 16 字节），无法解析".to_string());
+        warnings.push(format!("💡 {}", JSON_EXPORT_HINT));
+        return Ok(empty(file_name, file_size_bytes, warnings));
+    }
+
+    // MVP 简化处理：识别 protobuf-like 头部，估算 frame 数
+    // 完整实现需要 Unity 内部 schema，社区维护的 schema 仍在演变
+    let mut buf = bytes.clone();
+
+    // 跳过可能的 header（启发式：前 4-8 字节为版本/标记）
+    let _version = buf.get_u32();
+    let header_len = buf.get_u32() as usize;
+    if header_len > buf.remaining() {
+        warnings.push(".data 文件头部声明长度异常（Unity 私有 Protobuf 格式 schema 未公开，本工具暂不支持完整解析）".to_string());
+        warnings.push(format!("💡 {}", JSON_EXPORT_HINT));
+        return Ok(empty(file_name, file_size_bytes, warnings));
+    }
+    buf.advance(header_len);
+
+    warnings.push(
+        "Unity .data 格式解析为 MVP 版本（基于社区 schema 估算），完整解析需 Unity 内部信息".to_string(),
+    );
+    warnings.push(format!("💡 {}", JSON_EXPORT_HINT));
+
+    // 估算 frame 数
+    let estimated_frames = (file_size_bytes / 8192).max(1) as usize;
+
+    Ok(ParsedProfile {
+        meta: ProfileMeta {
+            file_name: file_name.to_string(),
+            format: super::ProfilerFormat::Data,
+            duration_ms: 0.0,
+            frame_count: estimated_frames,
+            platform: None,
+            unity_version: None,
+            file_size_bytes,
+        },
+        frames: vec![Frame {
+            index: 0,
+            duration_ms: 0.0,
+            cpu_ms: 0.0,
+            gc_alloc_bytes: 0,
+            draw_calls: 0,
+            set_pass_calls: 0,
+            main_thread_samples: vec![Sample {
+                name: "(.data 格式 MVP 解析)".to_string(),
+                total_ms: 0.0,
+                call_count: 0,
+                max_ms: 0.0,
+            }],
+            gc_alloc_sites: vec![],
+            render_events: vec![],
+        }],
+        warnings,
+    })
+}
+
+fn empty(file_name: &str, file_size_bytes: u64, warnings: Vec<String>) -> ParsedProfile {
+    ParsedProfile {
+        meta: ProfileMeta {
+            file_name: file_name.to_string(),
+            format: super::ProfilerFormat::Data,
+            duration_ms: 0.0,
+            frame_count: 0,
+            platform: None,
+            unity_version: None,
+            file_size_bytes,
+        },
+        frames: vec![],
+        warnings,
+    }
+}

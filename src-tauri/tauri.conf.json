@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0.0",
+  "productName": "Unity Profiler Analysis Agent",
+  "version": "0.1.0",
+  "identifier": "com.ray.unity-profiler-analysis-agent",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Unity Profiler Analysis Agent",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 1000,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png"
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "Unity Profiler 自动化分析工具",
+    "longDescription": "通过 ACP Client + MCP Server 接入 Claude Code / Gemini CLI 等 Agent，自动诊断 Unity 游戏性能瓶颈"
+  }
+}

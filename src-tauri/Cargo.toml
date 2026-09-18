@@ -1,0 +1,73 @@
+[package]
+name = "unity-profiler-analysis-agent"
+version = "0.1.0"
+description = "Unity Profiler 自动化分析工具：ACP Client + MCP Server + Tauri 桌面壳"
+authors = ["ray"]
+license = "MIT"
+repository = "https://github.com/ray/UnityProfilerAnalysisAgent"
+edition = "2021"
+rust-version = "1.75"
+
+[lib]
+name = "unity_profiler_analysis_agent_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri v2 桌面壳
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# 错误处理
+thiserror = "1"
+anyhow = "1"
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# 二进制解析
+bytes = "1"
+prost = "0.13"
+byteorder = "1"
+
+# MCP（Model Context Protocol）
+# 注：rmcp 0.5 仍处于活跃开发，使用时需查阅最新文档
+rmcp = { version = "0.5", features = ["server", "transport-io", "macros"] }
+# schemars 用于 MCP 工具的 JSON Schema 推导
+schemars = { version = "0.8", features = ["derive"] }
+
+# ACP（Agent Client Protocol）
+agent-client-protocol = "0.4"
+
+# 时间
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# 路径处理
+dirs = "5"
+
+# 配置
+config = { version = "0.14", default-features = false, features = ["toml"] }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
+incremental = false
