@@ -40,10 +40,10 @@ pub fn builtin_presets() -> Vec<AgentPreset> {
         },
         AgentPreset {
             id: "codex".to_string(),
-            label: "Codex CLI".to_string(),
+            label: "Codex (ACP)".to_string(),
             command: "codex-acp".to_string(),
             args: vec![],
-            description: "OpenAI Codex CLI（ACP 适配器）".to_string(),
+            description: "Codex ACP 适配器（@agentclientprotocol/codex-acp）；检测 codex-acp，不是 codex CLI".to_string(),
             available: false,
         },
     ]
