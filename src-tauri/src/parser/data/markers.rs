@@ -1,7 +1,7 @@
 //! Unity 2022.3 marker 定义表解析
 //!
 //! 复刻 `librashuai/UnityPerfAgent/internal/capture/capture.go::readMarkers`
-//! ```
+//! ```text
 //! int32 markerCount
 //! for each marker:
 //!     u32 markerID
@@ -23,7 +23,10 @@ pub struct MarkerInfo {
     pub category_id: u16,
 }
 
-pub fn read_markers(r: &mut Reader, markers: &mut HashMap<u32, MarkerInfo>) -> Result<(), ParseError> {
+pub fn read_markers(
+    r: &mut Reader,
+    markers: &mut HashMap<u32, MarkerInfo>,
+) -> Result<(), ParseError> {
     let n = r.i32();
     if n < 0 || n > MAX_MARKER_DEFS {
         return Err(ParseError::Other(format!("marker count {} invalid", n)));
@@ -34,7 +37,10 @@ pub fn read_markers(r: &mut Reader, markers: &mut HashMap<u32, MarkerInfo>) -> R
         let group_flags = r.u32();
         let meta = r.i32();
         if meta < 0 || meta > MAX_MARKER_DEFS {
-            return Err(ParseError::Other(format!("marker meta count {} invalid", meta)));
+            return Err(ParseError::Other(format!(
+                "marker meta count {} invalid",
+                meta
+            )));
         }
         markers.insert(
             id,
@@ -82,11 +88,7 @@ mod tests {
 
     #[test]
     fn reads_markers_table() {
-        let buf = buf_with_markers(&[
-            ("GC.Alloc", 17),
-            ("PlayerLoop", 0),
-            ("BehaviourUpdate", 1),
-        ]);
+        let buf = buf_with_markers(&[("GC.Alloc", 17), ("PlayerLoop", 0), ("BehaviourUpdate", 1)]);
         let mut r = R::new(&buf);
         let mut markers = HashMap::new();
         read_markers(&mut r, &mut markers).unwrap();

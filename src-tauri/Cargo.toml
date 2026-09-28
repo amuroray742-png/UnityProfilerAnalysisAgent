@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Unity Profiler 自动化分析工具：ACP Client + MCP Server + Tauri 桌面壳"
 authors = ["ray"]
 license = "MIT"
-repository = "https://github.com/ray/UnityProfilerAnalysisAgent"
+repository = "https://github.com/amuroray742-png/UnityProfilerAnalysisAgent"
 edition = "2021"
 rust-version = "1.75"
 
@@ -71,3 +71,6 @@ lto = true
 opt-level = "s"
 strip = true
 incremental = false
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security"] }

@@ -1,0 +1,56 @@
+name: Windows validation
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Prepare Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Frontend regression
+        run: npm test
+      - name: Frontend build
+        run: npm run build
+      - name: Rust and public protocol regression
+        run: cargo +stable test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Research decoder regression
+        run: python -m unittest discover -s tools -p 'test_*.py'
+      - name: Windows installers
+        run: npm run tauri:build
+      - name: Release stdio bridge regression
+        env:
+          UPAA_TEST_APP_EXE: ${{ github.workspace }}/src-tauri/target/release/unity-profiler-analysis-agent.exe
+        run: cargo +stable test --manifest-path src-tauri/Cargo.toml --locked --test mcp_wire --test acp_stdio_roundtrip
+      - name: Build production benchmark
+        run: cargo +stable build --manifest-path src-tauri/Cargo.toml --release --locked --example profile_benchmark
+      - name: NSIS installation and removal
+        run: ./tools/test-windows-install.ps1
+      - name: Public fixture benchmark smoke
+        run: ./tools/measure-profile.ps1 -InputPath ./src-tauri/tests/fixtures/editor-dump.json -Repeats 2
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-unsigned-validation
+          path: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+          retention-days: 7

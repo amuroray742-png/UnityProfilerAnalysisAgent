@@ -1,6 +1,6 @@
-//! Frame body header（24 字节，两版本共用）
+//! Frame body header（28 字节，两版本共用）
 //!
-//! ```
+//! ```text
 //! frameID          i32   // Unity 2022.3: == duplicateID; Unity 6.x: session counter
 //! duplicateID      i32   // 6.x = frameID + 306（实测）
 //! startNS          u64   // 单调时间戳（ns）

@@ -90,7 +90,7 @@ export function UploadDropzone({ onFileSelected, disabled }: UploadDropzoneProps
         {disabled ? '正在解析...' : '点击选择 Unity Profiler 文件'}
       </div>
       <div className="dropzone-hint">
-        支持 Profiler 录制或导出的离线文件，最大 500MB
+        推荐 Unity Editor dump JSON 或 Unity 6000.3.23f1 .data；其他格式能力有限
       </div>
       <div className="dropzone-formats">
         {SUPPORTED_EXTENSIONS.map((ext) => (

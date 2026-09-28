@@ -1,7 +1,7 @@
 //! Unity 6000.x marker 定义表解析（实测格式）
 //!
 //! 与 Unity 2022.3 不同：实测 marker entry 布局：
-//! ```
+//! ```text
 //! [markerId u32][1 u32][unknown u32][name_size u32][name bytes (no NUL)]
 //! ```
 //!
@@ -25,7 +25,10 @@ pub fn read_markers(r: &mut Reader) -> Result<HashMap<u32, Unity6MarkerEntry>, P
     let mut out = HashMap::new();
     let n = r.i32();
     if n < 0 || n > MAX_MARKER_DEFS {
-        return Err(ParseError::Other(format!("unity6 marker count {} invalid", n)));
+        return Err(ParseError::Other(format!(
+            "unity6 marker count {} invalid",
+            n
+        )));
     }
     for _ in 0..n {
         let id = r.u32();
@@ -42,7 +45,10 @@ pub fn read_markers(r: &mut Reader) -> Result<HashMap<u32, Unity6MarkerEntry>, P
         let name_size_u = name_size as usize;
         let advance = name_size_u;
         if let Some(e) = r.err.as_ref() {
-            return Err(ParseError::Other(format!("unity6 marker #{} header: {}", id, e)));
+            return Err(ParseError::Other(format!(
+                "unity6 marker #{} header: {}",
+                id, e
+            )));
         }
         let _ = kind;
         let name_bytes = read_aligned_bytes(r, advance)?;
@@ -50,12 +56,18 @@ pub fn read_markers(r: &mut Reader) -> Result<HashMap<u32, Unity6MarkerEntry>, P
         out.insert(
             id,
             Unity6MarkerEntry {
-                info: MarkerInfo { name, category_id: 0 },
+                info: MarkerInfo {
+                    name,
+                    category_id: 0,
+                },
                 unknown_field: unknown,
             },
         );
         if let Some(e) = r.err.as_ref() {
-            return Err(ParseError::Other(format!("unity6 marker #{} body: {}", id, e)));
+            return Err(ParseError::Other(format!(
+                "unity6 marker #{} body: {}",
+                id, e
+            )));
         }
     }
     Ok(out)

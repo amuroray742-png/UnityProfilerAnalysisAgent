@@ -1,7 +1,7 @@
 //! Unity 2022.3 主线程采样表解析
 //!
 //! 复刻 `librashuai/UnityPerfAgent/internal/capture/capture.go::readMainThreadSamples`
-//! ```
+//! ```text
 //! int32 threadCount
 //! for each thread:
 //!     u64 threadId
@@ -30,7 +30,10 @@ pub struct DiskSample {
 pub fn read_main_thread_samples(r: &mut Reader) -> Result<Vec<DiskSample>, ParseError> {
     let threads = r.i32();
     if threads < 0 || threads > MAX_THREADS_PER_FRAME {
-        return Err(ParseError::Other(format!("thread count {} invalid", threads)));
+        return Err(ParseError::Other(format!(
+            "thread count {} invalid",
+            threads
+        )));
     }
     for _ in 0..threads {
         r.u64(); // threadId
@@ -75,10 +78,10 @@ mod tests {
         v.extend_from_slice(&1i32.to_le_bytes());
         // thread[0]
         v.extend_from_slice(&42u64.to_le_bytes()); // threadId
-        // groupName "" + NUL + pad
+                                                   // groupName "" + NUL + pad
         v.push(0);
         v.extend_from_slice(&[0, 0, 0]); // pad to 4-byte
-        // threadName "Main Thread\0\0\0" (11 chars + NUL = 12 bytes already 4-aligned)
+                                         // threadName "Main Thread\0\0\0" (11 chars + NUL = 12 bytes already 4-aligned)
         let main = b"Main Thread";
         v.extend_from_slice(main);
         v.push(0);
@@ -115,7 +118,7 @@ mod tests {
         let mut buf = Vec::new();
         buf.extend_from_slice(&1i32.to_le_bytes()); // threadCount
         buf.extend_from_slice(&1u64.to_le_bytes()); // threadId
-        // groupName ""
+                                                    // groupName ""
         buf.push(0);
         buf.extend_from_slice(&[0, 0, 0]);
         // threadName "Worker"

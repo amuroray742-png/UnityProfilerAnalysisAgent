@@ -2,9 +2,9 @@
 //!
 //! 支持：
 //! - Unity 2022.3.x：完整 port `librashuai/UnityPerfAgent/internal/capture/capture.go`
-//! - Unity 6000.x：共用 block 迭代 + 部分 body 解码（marker 表 + memory counter scan）
+//! - Unity 6000.3.23f1：顺序结构解析，跨帧 marker 状态，CPU / GC 有限样本验证
 //!
-//! 流式读取避免 1.1 GB 文件 OOM。
+//! 分块读取输入；结果仍保留于内存，尚无容量上限承诺。
 
 pub mod categories;
 pub mod constants;
@@ -22,15 +22,15 @@ pub mod unity6_gc_alloc_scan;
 pub mod unity6_layout;
 pub mod unity6_markers;
 pub mod unity6_memory_counters;
+pub mod unity6_structured;
 
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
 
 use bytes::Bytes;
-use byteorder::ByteOrder;
 
-use crate::parser::{Frame, ParsedProfile, ParseError, ProfileMeta, ProfilerFormat, Sample};
+use crate::parser::{Frame, ParseError, ParsedProfile, ProfileMeta, ProfilerFormat, Sample};
 
 use self::forest::{accumulate_cpu, build_forest, roll_up_gc_alloc, CpuBreakdown, SampleNode};
 use self::frame_header::{read_frame_header, FrameHeader};
@@ -53,6 +53,7 @@ pub fn parse_path_with_progress(
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<ParsedProfile, ParseError> {
     let file = File::open(path)?;
+    let mut details = super::detail::FrameStore::binary_file(file.try_clone()?)?;
     let total_size = file.metadata().map(|m| m.len()).unwrap_or(0);
     let mut reader = BufReader::with_capacity(1 << 20, file);
 
@@ -62,6 +63,9 @@ pub fn parse_path_with_progress(
     let mut is_unity6: Option<bool> = None;
     let mut first_block_seen = false;
     let mut last_done: u64 = 0;
+    let mut unity6_decoder = unity6_structured::Decoder::default();
+    let mut previous_start_ns = None;
+    let mut block_index = 0;
 
     loop {
         // Peek 4 字节判定 EOF marker 或 block header magic
@@ -114,8 +118,7 @@ pub fn parse_path_with_progress(
         match reader.read_exact(&mut rest) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                warnings.push("truncated block header".into());
-                break;
+                return Err(ParseError::Truncated("incomplete block header".into()));
             }
             Err(e) => return Err(e.into()),
         }
@@ -131,6 +134,10 @@ pub fn parse_path_with_progress(
             unity_version = Some(block_header.unity_version_string());
             is_unity6 = Some(block_header.is_unity_6_or_later());
             first_block_seen = true;
+        } else if unity_version.as_deref() != Some(block_header.unity_version_string().as_str()) {
+            return Err(ParseError::Other(
+                "Unity version changed within capture".into(),
+            ));
         }
 
         // 读取 frame body
@@ -139,11 +146,10 @@ pub fn parse_path_with_progress(
         match reader.read_exact(&mut body) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                warnings.push(format!(
+                return Err(ParseError::Truncated(format!(
                     "truncated frame body at offset {}: expected {} bytes, file ended",
                     last_done, body_size
-                ));
-                break;
+                )));
             }
             Err(e) => return Err(e.into()),
         }
@@ -161,13 +167,28 @@ pub fn parse_path_with_progress(
             body[body_size - 1],
         ]);
         if end_marker != constants::FRAME_END_MARKER {
-            warnings.push(format!(
+            return Err(ParseError::Other(format!(
                 "frame body end marker 0x{:08x} != 0xAFAFAFAF (body_size={})",
                 end_marker, body_size
-            ));
-            continue;
+            )));
         }
 
+        let frame_index = block_index;
+        block_index += 1;
+        if block_header.unity_version_string() == "6000.3.23f1" {
+            details.index_binary(
+                frame_index,
+                last_done - body_size as u64,
+                &body,
+                unity6_decoder.clone(),
+            );
+            let decoded = unity6_decoder
+                .decode(&body)
+                .map_err(|e| ParseError::Other(format!("frame[{frame_index}]: {e}")))?;
+            append_structured_frame(&mut frames, &mut previous_start_ns, decoded, frame_index)?;
+            progress(last_done, total_size);
+            continue;
+        }
         let frame_header = read_frame_header_from_body(&body);
         if frame_header.is_synthetic() {
             warnings.push("dropped synthetic frame".into());
@@ -180,7 +201,6 @@ pub fn parse_path_with_progress(
             continue;
         }
 
-        let frame_index = frames.len();
         let unity6 = is_unity6.unwrap_or(false);
         match if unity6 {
             parse_unity6_frame_body(&body, &frame_header, frame_index)
@@ -210,7 +230,9 @@ pub fn parse_path_with_progress(
         file_size_bytes: total_size,
     };
 
+    details.set_durations(&frames);
     Ok(ParsedProfile {
+        details: (!details.is_empty()).then(|| std::sync::Arc::new(details)),
         meta,
         frames,
         warnings,
@@ -229,16 +251,24 @@ pub async fn parse(
     let mut is_unity6: Option<bool> = None;
     let mut first_block_seen = false;
     let mut pos = 0usize;
+    let mut details = super::detail::FrameStore::binary_bytes(bytes.clone());
+    let mut saw_end = false;
+    let mut unity6_decoder = unity6_structured::Decoder::default();
+    let mut previous_start_ns = None;
+    let mut block_index = 0;
 
     while pos < bytes.len() {
         if pos + 4 > bytes.len() {
             if !first_block_seen {
                 return Err(ParseError::Truncated("empty .data file".into()));
             }
-            return Err(ParseError::Truncated("missing 0xDEADFEED end marker".into()));
+            return Err(ParseError::Truncated(
+                "missing 0xDEADFEED end marker".into(),
+            ));
         }
         let first4 = &bytes[pos..pos + 4];
         if is_file_end_marker(first4) {
+            saw_end = true;
             break;
         }
         if pos + 28 > bytes.len() {
@@ -259,6 +289,10 @@ pub async fn parse(
             unity_version = Some(block_header.unity_version_string());
             is_unity6 = Some(block_header.is_unity_6_or_later());
             first_block_seen = true;
+        } else if unity_version.as_deref() != Some(block_header.unity_version_string().as_str()) {
+            return Err(ParseError::Other(
+                "Unity version changed within capture".into(),
+            ));
         }
         if block_header.body_size < 4 {
             warnings.push(format!("frame body too small: {}", block_header.body_size));
@@ -271,17 +305,30 @@ pub async fn parse(
             body[block_header.body_size as usize - 1],
         ]);
         if end_marker != constants::FRAME_END_MARKER {
-            warnings.push(format!(
+            return Err(ParseError::Other(format!(
                 "frame body end marker 0x{:08x} != 0xAFAFAFAF",
                 end_marker
-            ));
+            )));
+        }
+        let frame_index = block_index;
+        block_index += 1;
+        if block_header.unity_version_string() == "6000.3.23f1" {
+            details.index_binary(
+                frame_index,
+                (body_end - body.len()) as u64,
+                body,
+                unity6_decoder.clone(),
+            );
+            let decoded = unity6_decoder
+                .decode(body)
+                .map_err(|e| ParseError::Other(format!("frame[{frame_index}]: {e}")))?;
+            append_structured_frame(&mut frames, &mut previous_start_ns, decoded, frame_index)?;
             continue;
         }
         let frame_header = read_frame_header_from_body(body);
         if frame_header.is_synthetic() || frame_header.is_zero_duration() {
             continue;
         }
-        let frame_index = frames.len();
         let unity6 = is_unity6.unwrap_or(false);
         match if unity6 {
             parse_unity6_frame_body(body, &frame_header, frame_index)
@@ -293,6 +340,11 @@ pub async fn parse(
         }
     }
 
+    if !saw_end {
+        return Err(ParseError::Truncated(
+            "missing 0xDEADFEED end marker".into(),
+        ));
+    }
     let frame_count = frames.len();
     let duration_ms: f64 = frames.iter().map(|f| f.duration_ms).sum();
     let meta = ProfileMeta {
@@ -304,11 +356,42 @@ pub async fn parse(
         unity_version,
         file_size_bytes,
     };
+    details.set_durations(&frames);
     Ok(ParsedProfile {
+        details: (!details.is_empty()).then(|| std::sync::Arc::new(details)),
         meta,
         frames,
         warnings,
     })
+}
+
+fn append_structured_frame(
+    frames: &mut Vec<Frame>,
+    previous_start_ns: &mut Option<u64>,
+    decoded: unity6_structured::DecodedFrame,
+    index: usize,
+) -> Result<(), ParseError> {
+    if let (Some(previous), Some(start)) = (frames.last_mut(), *previous_start_ns) {
+        if let Some(interval) = decoded.header.start_ns.checked_sub(start) {
+            // Editor converts its integer interval via float nanoseconds to milliseconds.
+            previous.duration_ms = (interval as f32 * 1e-6_f32) as f64;
+            previous.quality.duration = true;
+            previous
+                .quality
+                .reasons
+                .retain(|r| r != "录制帧时间缺少下一帧起始时间戳");
+        } else {
+            previous
+                .quality
+                .reasons
+                .push("帧起始时间戳倒退，录制帧时间不可用".into());
+        }
+    }
+    *previous_start_ns = Some(decoded.header.start_ns);
+    let mut frame = decoded.summary(index);
+    super::compact::compact(&mut frame)?;
+    frames.push(frame);
+    Ok(())
 }
 
 fn read_frame_header_from_body(body: &[u8]) -> FrameHeader {
@@ -353,7 +436,12 @@ fn parse_unity2022_frame_body(
     }
 
     let metadata_offset = r.pos() as usize;
-    gc_alloc::associate(body_no_end, metadata_offset, &mut disk_samples, &markers_map);
+    gc_alloc::associate(
+        body_no_end,
+        metadata_offset,
+        &mut disk_samples,
+        &markers_map,
+    );
 
     let _counters = memory_counters::find(body_no_end);
     let frame_start_ns = frame_header.start_ns;
@@ -378,6 +466,18 @@ fn parse_unity2022_frame_body(
     }
 
     Ok(Frame {
+        quality: super::FrameQuality {
+            duration: true,
+            cpu: true,
+            gc: true,
+            samples: true,
+            render: true,
+            draw: false,
+            set_pass: false,
+            sites: false,
+            source: "unity2022-data".into(),
+            ..Default::default()
+        },
         index: frame_index,
         duration_ms: main_thread_ms,
         cpu_ms: main_thread_ms,
@@ -390,132 +490,35 @@ fn parse_unity2022_frame_body(
     })
 }
 
-/// Unity 6000.x body 解码（增量支持）。
-///
-/// 当前已实测可解码的字段（Unity 6.3.23f1 frame body）：
-/// - Frame header（已知）
-/// - Memory counter scan（已知）
-/// - Main Thread sample table + GC.Alloc metadata（基于用户实测文件验证）
-///
-/// 余下未支持（占位 + 提示 warning）：
-/// - Stats block post-sentinel
-/// - Marker table / marker metadata
-/// - 其他 39 个 thread 的 sample table
+/// 未验证 Unity 6 版本的帧头 CPU 估算。旧 GC 扫描与合成热点不参与输出。
 fn parse_unity6_frame_body(
     body: &[u8],
     frame_header: &FrameHeader,
     frame_index: usize,
 ) -> Result<Frame, ParseError> {
-    let body_no_end = &body[..body.len() - 4];
-
-    // 1) Memory counter scan（已在前面实现）
-    let counters = unity6_memory_counters::find_all(body_no_end);
-
-    // 2) GC.Alloc metadata — 优先用 layout 反推的 finder（更准），找不到再退回盲扫
-    let mut gc_alloc_pairs: Vec<unity6_layout::RawGcAlloc> = vec![];
-    let mut main_sample_table_offset: Option<usize> = None;
-    let mut main_sample_count: usize = 0;
-    if let Some((gc_off, entries)) = unity6_layout::find_gc_alloc_metadata(body_no_end) {
-        gc_alloc_pairs = entries;
-        // Main Thread sample table 的 GC.Alloc sample_index 最大值 = N
-        // 但样本数不是 max+1，可能更少。仍按 max+1 估一下。
-        if let Some(max_si) = gc_alloc_pairs.iter().map(|p| p.sample_index).max() {
-            main_sample_count = (max_si + 1) as usize;
-            // sample table 在 GC.Alloc metadata 之前
-            // 在 [gc_off - 20*max_si - 4, gc_off] 区间找 marker_id=1506 的 sample 0
-            // 简化：直接 search marker_id=1506 + total_ns ≈ frame_header.cpu_ms() 的位置
-            let expected_total_ms = frame_header.cpu_ms();
-            let search_start = gc_off.saturating_sub(20 * main_sample_count + 200);
-            let search_end = gc_off;
-            // 在更宽的区间搜：scanner 内部 4-byte stride
-            for o in (search_start..search_end).step_by(4) {
-                if o + 20 > body_no_end.len() {
-                    break;
-                }
-                let mid = byteorder::LittleEndian::read_u32(&body_no_end[o..o + 4]);
-                if mid == 1506 {
-                    // heuristic: this might be Main Thread sample 0
-                    main_sample_table_offset = Some(o);
-                    break;
-                }
-            }
-            let _ = expected_total_ms; // not used now
-        }
-    }
-
-    // 读 Main Thread samples（如找到）
-    let main_samples_data = if let Some(off) = main_sample_table_offset {
-        unity6_layout::read_samples(body_no_end, off, main_sample_count).unwrap_or_default()
-    } else {
-        vec![]
-    };
-
-    // 3) GC.Alloc 字节数累加
-    let gc_alloc_bytes: u64 = gc_alloc_pairs.iter().map(|p| p.alloc_bytes as u64).sum();
-
-    // 4) 构造输出 Frame
-    let mut main_samples = vec![Sample {
-        name: format!("Frame {}", frame_header.frame_id),
-        total_ms: frame_header.cpu_ms(),
-        call_count: 1,
-        max_ms: frame_header.cpu_ms(),
-    }];
-
-    if !main_samples_data.is_empty() {
-        main_samples.push(Sample {
-            name: format!(
-                "Main Thread samples (Unity 6 layout verified, {} samples)",
-                main_samples_data.len()
-            ),
-            total_ms: main_samples_data.iter().map(|s| s.total_ns as f64 / 1e6).sum(),
-            call_count: main_samples_data.len() as u64,
-            max_ms: main_samples_data
-                .iter()
-                .map(|s| s.total_ns as f64 / 1e6)
-                .fold(0.0, f64::max),
-        });
-    }
-
-    if !gc_alloc_pairs.is_empty() {
-        main_samples.push(Sample {
-            name: format!(
-                "GC.Alloc ({} metadata entries, total {} bytes)",
-                gc_alloc_pairs.len(),
-                gc_alloc_bytes
-            ),
-            total_ms: 0.0,
-            call_count: gc_alloc_pairs.len() as u64,
-            max_ms: 0.0,
-        });
-    }
-
-    if !counters.is_empty() {
-        main_samples.push(Sample {
-            name: format!("Memory counters: {}", counters.len()),
-            total_ms: 0.0,
-            call_count: counters.len() as u64,
-            max_ms: 0.0,
-        });
-    }
-
+    let _ = body;
+    let mut quality = super::FrameQuality::missing("unity6-data-experimental");
+    quality.cpu = true;
+    quality.estimated = true;
+    quality.reasons.push(
+        "该 Unity 6 版本未通过结构验证；仅展示帧头 CPU 估算，录制帧时间、GC、热点与渲染计数不可用"
+            .into(),
+    );
     Ok(Frame {
+        quality,
         index: frame_index,
         duration_ms: frame_header.cpu_ms(),
         cpu_ms: frame_header.cpu_ms(),
-        gc_alloc_bytes,
+        gc_alloc_bytes: 0,
         draw_calls: 0,
         set_pass_calls: 0,
-        main_thread_samples: main_samples,
+        main_thread_samples: vec![],
         gc_alloc_sites: vec![],
         render_events: vec![],
     })
 }
 
-fn flatten_for_samples(
-    node: &SampleNode,
-    main: &mut Vec<Sample>,
-    render: &mut Vec<Sample>,
-) {
+fn flatten_for_samples(node: &SampleNode, main: &mut Vec<Sample>, render: &mut Vec<Sample>) {
     main.push(Sample {
         name: node.name.clone(),
         total_ms: node.total_ms as f64,
@@ -535,13 +538,10 @@ fn flatten_for_samples(
     }
 }
 
-fn aggregate_gc_sites(forest: &[SampleNode]) -> Vec<Sample> {
+fn aggregate_gc_sites(forest: &[SampleNode]) -> Vec<super::AllocSite> {
     let mut acc: std::collections::HashMap<String, (f64, u64, f64)> =
         std::collections::HashMap::new();
-    fn walk(
-        node: &SampleNode,
-        acc: &mut std::collections::HashMap<String, (f64, u64, f64)>,
-    ) {
+    fn walk(node: &SampleNode, acc: &mut std::collections::HashMap<String, (f64, u64, f64)>) {
         if node.gc_alloc_kb > 0.0 {
             let e = acc.entry(node.name.clone()).or_insert((0.0, 0, 0.0));
             e.0 += node.gc_alloc_kb as f64 * 1024.0;
@@ -557,16 +557,17 @@ fn aggregate_gc_sites(forest: &[SampleNode]) -> Vec<Sample> {
     for n in forest {
         walk(n, &mut acc);
     }
-    let mut out: Vec<Sample> = acc
+    let mut out: Vec<super::AllocSite> = acc
         .into_iter()
-        .map(|(name, (total_bytes, calls, max_kb))| Sample {
+        .map(|(name, (total_bytes, calls, max_kb))| super::AllocSite {
             name,
-            total_ms: total_bytes,
+            thread: "Main Thread".into(),
+            total_bytes: total_bytes as u64,
             call_count: calls,
-            max_ms: max_kb * 1024.0,
+            max_bytes: (max_kb * 1024.0) as u64,
         })
         .collect();
-    out.sort_by(|a, b| b.total_ms.partial_cmp(&a.total_ms).unwrap_or(std::cmp::Ordering::Equal));
+    out.sort_by(|a, b| b.total_bytes.cmp(&a.total_bytes));
     out
 }
 
@@ -600,7 +601,7 @@ mod tests {
         buf.extend_from_slice(&16_000i32.to_le_bytes()); // cpuUS = 16ms
         buf.extend_from_slice(&0i32.to_le_bytes()); // gpuUS
         buf.extend_from_slice(&1u32.to_le_bytes()); // gatheredData (non-zero)
-        // Frame end marker
+                                                    // Frame end marker
         buf.extend_from_slice(&constants::FRAME_END_MARKER.to_le_bytes());
 
         // File end marker
@@ -625,13 +626,12 @@ mod tests {
     }
 
     #[test]
-    fn parses_unity6_file_block_headers() {
-        // 复用 Phase 1 已验证的字节：只解析 block header + frame header，
-        // body 不是有效 Unity 2022.3 格式，但 Unity 6 分支也走不通，
-        // 因此这里只检查能识别 Unity 6 + 跳过 body。
+    fn rejects_unity6_header_without_structured_body() {
+        // A supported version must not silently skip an undecodable body.
         let path = std::env::temp_dir()
             .join("upaa_data_test")
             .join("unity6_marker_only.data");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let mut buf = Vec::new();
         // Block header
         let body_size: u32 = constants::FRAME_HEADER_SIZE as u32 + 4;
@@ -653,9 +653,7 @@ mod tests {
         buf.extend_from_slice(&constants::FILE_END_MARKER.to_le_bytes());
 
         std::fs::write(&path, &buf).unwrap();
-        let profile = parse_path(&path).expect("parse_path");
-        assert_eq!(profile.meta.unity_version.as_deref(), Some("6000.3.23f1"));
-        // synthetic frame 被丢弃 → 0 frames
-        assert_eq!(profile.meta.frame_count, 0);
+        let error = parse_path(&path).unwrap_err().to_string();
+        assert!(error.contains("frame[0]"), "{error}");
     }
 }

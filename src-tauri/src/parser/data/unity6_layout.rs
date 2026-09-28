@@ -1,9 +1,9 @@
 //! Unity 6 .data body 解码（reverse-engineered 真实文件验证）
 //!
 //! 通过用户提供的 Unity Editor ExtractProfilerDump.cs 输出 JSON 作为 ground truth，
-//! 反推出来的 wire format（与 Unity 2022.3 主要差异在 marker 表，sample 表完全相同）：
+//! 在指定录制首帧固定偏移处验证的局部 wire format；不代表自动定位或所有线程已验证：
 //!
-//! ```
+//! ```text
 //! frame_body = [
 //!   frame_header(28B),                    // 已知，与 Unity 2022.3 一致
 //!   stats_block(N),                        // prefix 已知，post-sentinel 待逆向
@@ -14,8 +14,8 @@
 //! ]
 //! ```
 
-use byteorder::{ByteOrder, LittleEndian};
 use crate::parser::ParseError;
+use byteorder::{ByteOrder, LittleEndian};
 
 /// 20 字节采样
 #[derive(Debug, Clone, Copy)]
@@ -34,7 +34,11 @@ pub struct RawGcAlloc {
 }
 
 /// 尝试在 body 任意 4 字节对齐位置搜索 20 字节 sequence，要求 marker_id 匹配且 total_ns 在合理范围。
-pub fn find_main_thread_samples(body: &[u8], expected_marker: u32, expected_total_ms: f32) -> Option<usize> {
+pub fn find_main_thread_samples(
+    body: &[u8],
+    expected_marker: u32,
+    expected_total_ms: f32,
+) -> Option<usize> {
     let expected_total_ns = expected_total_ms * 1e6;
     let mut i = 0;
     while i + 20 <= body.len() {
@@ -60,7 +64,10 @@ pub fn find_gc_alloc_metadata(body: &[u8]) -> Option<(usize, Vec<RawGcAlloc>)> {
         if si >= 0 && si < 100_000 && bt > 0 && bt < 100_000 {
             // 尝试读后续 5 个 stride-4 或 stride-8 条
             for stride in [4usize, 8] {
-                let mut entries = vec![RawGcAlloc { sample_index: si, alloc_bytes: bt }];
+                let mut entries = vec![RawGcAlloc {
+                    sample_index: si,
+                    alloc_bytes: bt,
+                }];
                 let mut pos = i + stride;
                 let mut ok = true;
                 for _ in 0..4 {
@@ -79,7 +86,10 @@ pub fn find_gc_alloc_metadata(body: &[u8]) -> Option<(usize, Vec<RawGcAlloc>)> {
                         ok = false;
                         break;
                     }
-                    entries.push(RawGcAlloc { sample_index: next_si, alloc_bytes: next_bt });
+                    entries.push(RawGcAlloc {
+                        sample_index: next_si,
+                        alloc_bytes: next_bt,
+                    });
                     pos += stride;
                 }
                 if ok && entries.len() >= 5 {
@@ -93,7 +103,11 @@ pub fn find_gc_alloc_metadata(body: &[u8]) -> Option<(usize, Vec<RawGcAlloc>)> {
 }
 
 /// 读取从 sample_table_offset 开始的 N 个 sample。
-pub fn read_samples(body: &[u8], offset: usize, count: usize) -> Result<Vec<RawSample>, ParseError> {
+pub fn read_samples(
+    body: &[u8],
+    offset: usize,
+    count: usize,
+) -> Result<Vec<RawSample>, ParseError> {
     if offset + count * 20 > body.len() {
         return Err(ParseError::Truncated(format!(
             "need {} bytes for {} samples at {}, have {}",

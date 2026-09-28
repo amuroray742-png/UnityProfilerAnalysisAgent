@@ -8,12 +8,14 @@ interface AgentLogDrawerProps {
 function roleClass(event: DiagnoseEvent): string {
   switch (event.kind) {
     case 'chunk':
+    case 'log':
       return 'role-info';
     case 'mcp-call':
     case 'mcp-result':
       return 'role-tool';
     case 'started':
     case 'finished':
+    case 'cancelled':
       return 'role-system';
     case 'error':
       return 'role-error';
@@ -31,7 +33,11 @@ function eventLabel(event: DiagnoseEvent): string {
     case 'mcp-result':
       return `[mcp ← ${event.tool}]`;
     case 'finished':
-      return `[finished] total=${event.totalChunks}`;
+      return `[finished] ${event.stopReason} · total=${event.totalChunks}`;
+    case 'cancelled':
+      return '[cancelled]';
+    case 'log':
+      return '[log]';
     case 'error':
       return `[error] ${event.message}`;
   }
@@ -41,6 +47,8 @@ function eventPayload(event: DiagnoseEvent): string {
   switch (event.kind) {
     case 'chunk':
       return event.text.length > 200 ? event.text.slice(0, 200) + '...' : event.text;
+    case 'log':
+      return event.message.slice(0, 400);
     case 'mcp-call':
       return JSON.stringify(event.args, null, 2).slice(0, 400);
     case 'mcp-result':

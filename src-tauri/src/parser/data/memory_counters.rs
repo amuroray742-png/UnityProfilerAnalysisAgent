@@ -2,7 +2,7 @@
 //!
 //! 复刻 `librashuai/UnityPerfAgent/internal/capture/capture.go::findRawMemoryCounters`
 //! 34 条连续 record：
-//! ```
+//! ```text
 //! record = [counterId u32, valueCount u32=1, type u32, size u32, value bytes]
 //! type 2 = 4 bytes (u32 value)
 //! type 4 = 8 bytes (u64 value)
@@ -14,7 +14,7 @@
 use byteorder::{ByteOrder, LittleEndian};
 
 use super::constants::{
-    MEMORY_COUNTER_COUNT, RAW_MEMORY_COUNTER_SCHEMA, raw_memory_counter_value_size,
+    raw_memory_counter_value_size, MEMORY_COUNTER_COUNT, RAW_MEMORY_COUNTER_SCHEMA,
 };
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -63,18 +63,10 @@ pub fn find(body: &[u8]) -> Option<MemoryCounters> {
                 valid = false;
                 break;
             }
-            let count = u32::from_le_bytes([
-                body[pos + 4],
-                body[pos + 5],
-                body[pos + 6],
-                body[pos + 7],
-            ]);
-            let typ = u32::from_le_bytes([
-                body[pos + 8],
-                body[pos + 9],
-                body[pos + 10],
-                body[pos + 11],
-            ]);
+            let count =
+                u32::from_le_bytes([body[pos + 4], body[pos + 5], body[pos + 6], body[pos + 7]]);
+            let typ =
+                u32::from_le_bytes([body[pos + 8], body[pos + 9], body[pos + 10], body[pos + 11]]);
             let sz = u32::from_le_bytes([
                 body[pos + 12],
                 body[pos + 13],
@@ -215,25 +207,25 @@ mod tests {
             2_000_000,   // 9
             3_000_000,   // 10 audio_used
             0,
-            4_000_000,   // 12 video_used
+            4_000_000, // 12 video_used
             0,
             0,
             0,
-            50, // 16 asset_count
-            30, // 17 scene_object_count
-            20, // 18 game_object_count (≤ v[17])
-            5,  // 19 gc_alloc_frame_count
-            4096, // 20 gc_alloc_frame_bytes
-            50_000_000, // 21 gfx_used
+            50,          // 16 asset_count
+            30,          // 17 scene_object_count
+            20,          // 18 game_object_count (≤ v[17])
+            5,           // 19 gc_alloc_frame_count
+            4096,        // 20 gc_alloc_frame_bytes
+            50_000_000,  // 21 gfx_used
             100_000_000, // 22 gfx_reserved
-            30_000_000, // 23 texture_mem (≥ v[25])
-            100, // 24 texture_count
-            5_000_000, // 25 mesh_mem
-            50, // 26 mesh_count
-            1_000_000, // 27 material_mem
-            30, // 28 material_count
-            2_000_000, // 29 animation_clip_mem
-            10, // 30 animation_clip_count
+            30_000_000,  // 23 texture_mem (≥ v[25])
+            100,         // 24 texture_count
+            5_000_000,   // 25 mesh_mem
+            50,          // 26 mesh_count
+            1_000_000,   // 27 material_mem
+            30,          // 28 material_count
+            2_000_000,   // 29 animation_clip_mem
+            10,          // 30 animation_clip_count
             0,
             0,
             1000, // 33 object_count
