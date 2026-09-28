@@ -477,3 +477,51 @@ async fn public_isolated_peak_fixture_reconciles_metrics_and_original_threads() 
     let peak = p.details.as_ref().unwrap().load(160).unwrap();
     assert_eq!(peak.threads.iter().flat_map(|t| &t.samples).filter_map(|s| s.gc_alloc_bytes).sum::<u64>(), 8388608);
 }
+
+#[tokio::test]
+async fn diagnosis_summary_stays_small_and_hotspots_remain_queryable() {
+    use unity_profiler_analysis_agent_lib::mcp::{MetricsStore, transport::*};
+    let profile = parse(fixture()).await.unwrap();
+    let mut snapshot = extractor::extract(&profile);
+    let row = snapshot.cpu.top_hotspots[0].clone();
+    snapshot.cpu.top_hotspots = (0..2000).map(|i| {
+        let mut item = row.clone(); item.name = format!("marker-{i}-{}", "x".repeat(1000)); item
+    }).collect();
+    snapshot.warnings = (0..2000).map(|i|format!("warning {i}:{}", "x".repeat(1000))).collect();
+    snapshot.gc.site_quality.reasons = snapshot.warnings.clone();
+    let store = MetricsStore::new(); store.set(snapshot).await;
+    let summary = run_session_summary(&store).await.unwrap();
+    assert!(serde_json::to_vec_pretty(&summary).unwrap().len() < 16000);
+    assert_eq!(summary["warningsTotal"], 2000);
+    assert_eq!(summary["warningsTruncated"], true);
+    assert_eq!(summary["gc"]["siteQuality"]["reasonsTotal"], 2000);
+    assert_eq!(summary["metricSemantics"], metric_semantics());
+    assert!(summary["cpu"].get("topHotspots").is_none());
+    assert_eq!(summary["hotspotCounts"]["cpu"], 2000);
+    let page = run_hotspots(&store,"cpu",1999,1).await.unwrap();
+    assert_eq!(page["rows"][0]["name"],format!("marker-1999-{}", "x".repeat(1000)));
+    assert!(page["nextStart"].is_null());
+    assert!(run_hotspots(&store,"cpu",2001,1).await.is_err());
+    assert!(run_hotspots(&store,"cpu",0,0).await.is_err());
+    assert!(run_hotspots(&store,"invalid",0,1).await.is_err());
+}
+
+#[tokio::test]
+async fn hotspot_candidates_exist_below_threshold_and_preserve_quality() {
+    use unity_profiler_analysis_agent_lib::mcp::{MetricsStore, transport::*};
+    let profile = parse(fixture()).await.unwrap();
+    let mut snapshot = extractor::extract(&profile);
+    snapshot.gc.site_quality.status = "partial".into();
+    let store = MetricsStore::new(); store.set(snapshot).await;
+    let analysis = run_analysis(&store,"all").await.unwrap();
+    assert_eq!(analysis["issues"],json!([]));
+    assert_eq!(analysis["investigationFrames"][1]["frames"][0]["frameIndex"],10);
+    assert_eq!(analysis["investigationFrames"][1]["frames"][1]["value"].as_f64(),Some(0.0));
+    let gc = run_hotspots(&store,"gc",0,10).await.unwrap();
+    assert_eq!(gc["quality"]["status"],"partial");
+    assert_eq!(gc["rows"][0]["name"],"Update");
+    assert_eq!(gc["rows"][0]["totalBytes"],24);
+    assert_eq!(gc["rows"][0]["callCount"],2);
+    assert_eq!(gc["rows"][1]["totalBytes"],8);
+    assert!(run_hotspots(&MetricsStore::new(),"cpu",0,10).await.is_err());
+}

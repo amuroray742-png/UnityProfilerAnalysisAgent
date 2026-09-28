@@ -30,7 +30,41 @@ pub async fn run_session_summary(store: &MetricsStore) -> Result<Value, McpToolE
         .as_object_mut()
         .unwrap()
         .remove("frameTimeline");
-    value["metricSemantics"] = json!({
+    value["cpu"].as_object_mut().unwrap().remove("topHotspots");
+    value["gc"].as_object_mut().unwrap().remove("topAllocSites");
+    value["rendering"].as_object_mut().unwrap().remove("topRenderEvents");
+    compact_descriptions(&mut value);
+    value["hotspotCounts"] = json!({"cpu":snapshot.cpu.top_hotspots.len(),"gc":snapshot.gc.top_alloc_sites.len()});
+    value["detailTools"] = json!({"hotspots":"performance_hotspots","semantics":"performance_metric_semantics","frames":"performance_frames"});
+    value["metricSemantics"] = metric_semantics();
+    Ok(value)
+}
+
+/// Keep frame-specific reason lists from overwhelming the diagnostic overview.
+/// Full per-frame quality remains available from the detail tools.
+fn compact_descriptions(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for key in ["reasons", "warnings"] {
+                if let Some(Value::Array(rows)) = map.get_mut(key) {
+                    let total = rows.len();
+                    rows.truncate(5);
+                    map.insert(format!("{key}Total"), json!(total));
+                    map.insert(format!("{key}Truncated"), json!(total > 5));
+                }
+            }
+            for item in map.values_mut() { compact_descriptions(item); }
+        }
+        Value::Array(rows) => for item in rows { compact_descriptions(item); },
+        Value::String(text) if text.chars().count() > 256 => {
+            *text = text.chars().take(256).collect::<String>() + "…[摘要省略，请查原始帧]";
+        }
+        _ => {}
+    }
+}
+
+pub fn metric_semantics() -> Value {
+    json!({
         "percentiles": {
             "population": "仅该指标的有效帧；真实零值参与排序，缺失值不参与",
             "method": "按升序排序，取零起始索引 round((n-1)*q)，半整数向上取整，不插值",
@@ -45,8 +79,29 @@ pub async fn run_session_summary(store: &MetricsStore) -> Result<Value, McpToolE
             "coverage": "调用树无分页/深度截断仅代表已导出样本读取完整，不证明所有运行工作都被 instrumentation 覆盖"
         },
         "gc": "每个 GC.Alloc 样本的字节独立计入（含嵌套分配）；按线程和最近非 GC.Alloc 父样本归因，和已校验的帧总量核对"
-    });
-    Ok(value)
+    })
+}
+
+/// Rankings are investigation candidates, not threshold-confirmed bottlenecks.
+pub async fn run_hotspots(store: &MetricsStore, area: &str, start: usize, limit: usize) -> Result<Value, McpToolError> {
+    if !["cpu", "gc"].contains(&area) || limit == 0 || limit > 50 {
+        return Err(McpToolError::BadArg("area 必须为 cpu/gc，limit 必须为 1..=50".into()));
+    }
+    let snapshot = store.get().await.ok_or(McpToolError::NoSnapshot)?;
+    let (total, quality) = if area == "cpu" {
+        (snapshot.cpu.top_hotspots.len(), &snapshot.cpu.hotspot_quality)
+    } else { (snapshot.gc.top_alloc_sites.len(), &snapshot.gc.site_quality) };
+    if start > total { return Err(McpToolError::BadArg("start 超出热点列表".into())); }
+    let end = start.saturating_add(limit).min(total);
+    let rows = if area == "cpu" {
+        json!(&snapshot.cpu.top_hotspots[start..end])
+    } else { json!(&snapshot.gc.top_alloc_sites[start..end]) };
+    let mut result = json!({"area":area,"start":start,"total":total,"returned":end-start,
+        "nextStart":if end < total {Some(end)} else {None},"quality":quality,"rows":rows,
+        "scope":if area == "cpu" {"主线程 marker，按累计 inclusive 毫秒降序；调用次数和单次最大耗时；父子与递归不可相加为总 CPU，须查帧树确认具体路径"} else {"已导出线程，按累计分配字节降序；按线程和最近非 GC.Alloc 父样本归因；分配不等于 GC 回收停顿"},
+        "interpretation":"排名用于确定调查顺序，不证明瓶颈；partial 仅覆盖有效样本，estimated 不作确定性结论；marker 名不能单独证明源码实现"});
+    compact_descriptions(&mut result["quality"]);
+    Ok(result)
 }
 
 /// Frame 时间序列
@@ -172,5 +227,18 @@ fn build_analysis(snapshot: &MetricsSnapshot, focus: &str) -> Value {
             }
         }
     }
-    json!({"issues":issues,"thresholdPolicy":{"source":"application-default-heuristic","userConfigured":false,"emptyIssuesMeaning":"未发现可用完整观测指标超过默认阈值，不等于没有性能问题；缺失、部分或估算指标不作确定性诊断"},"quality":{"cpu":snapshot.cpu.main_thread_ms.quality,"gc":snapshot.gc.alloc_per_frame_bytes.quality,"rendering":snapshot.rendering.draw_calls.quality},"warnings":snapshot.warnings})
+    let mut investigation_frames = Vec::new();
+    for area in ["cpu", "gc"] {
+        if focus != "all" && focus != area { continue; }
+        let mut ranked: Vec<_> = snapshot.cpu.frame_timeline.iter().filter_map(|f| {
+            let value = if area == "cpu" { f.ms } else { f.gc_alloc_bytes.map(|v| v as f64) }?;
+            Some((f.frame_index, value))
+        }).collect();
+        ranked.sort_by(|a,b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+        investigation_frames.push(json!({"area":area,"selection":"最高观测值候选，不等于超预算；质量见 quality",
+            "frames":ranked.iter().take(3).map(|(id,v)|json!({"frameIndex":id,"value":v})).collect::<Vec<_>>() }));
+    }
+    let mut result = json!({"investigationFrames":investigation_frames,"issues":issues,"thresholdPolicy":{"source":"application-default-heuristic","userConfigured":false,"emptyIssuesMeaning":"未发现可用完整观测指标超过默认阈值，不等于没有性能问题；缺失、部分或估算指标不作确定性诊断"},"quality":{"cpu":snapshot.cpu.main_thread_ms.quality,"gc":snapshot.gc.alloc_per_frame_bytes.quality,"rendering":snapshot.rendering.draw_calls.quality},"warnings":snapshot.warnings});
+    compact_descriptions(&mut result);
+    result
 }
