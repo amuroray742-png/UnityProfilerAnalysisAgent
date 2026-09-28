@@ -1,6 +1,12 @@
 # Windows 桌面验收记录与剩余检查
 
-状态：2026-09-28，下表的应用界面流程已由 release WebDriver 自动验收，并在 NSIS 安装目录中的程序上复验。测试仅替代系统文件选择框的返回值，实际点击界面并使用真实后端；原生选择框本身仍未验证。Windows 控制工具读取窗口成功，但截图报 `FrameArrived timed out`，点击报 `coordinate input geometry is unavailable`，因此不能将替代返回值计为原生选择框验收。证据与产物哈希见[性能与发布记录](performance-and-release.md)。
+状态：2026-09-28，下表的应用界面流程已由 release WebDriver 自动验收，并在 NSIS 安装目录中的程序上复验。测试仅替代系统文件选择框的返回值，实际点击界面并使用真实后端；原生选择框已由维护者另行人工验收，见下节。Windows 控制工具读取窗口成功，但截图报 `FrameArrived timed out`，点击报 `coordinate input geometry is unavailable`，因此不能将替代返回值计为原生选择框验收。证据与产物哈希见[性能与发布记录](performance-and-release.md)。
+
+## 原生文件选择人工验收（2026-09-28）
+
+维护者在本次会话提供 normal.json 导入后的应用截图，并确认取消选择时“无报错”。截图显示分析 2 帧 / 录制声明 20 帧、主线程 P95 12.00 ms、GC 每帧 P95 32 B，以及不可用的 Draw Call。由此记录“取消无报错、随后选择公开 fixture 并正常导入”人工验收通过，不再列为阻塞项。
+
+证据来源为维护者截图和文字确认，不是 Windows 控制工具自动验收。截图未提供程序哈希，结论仅覆盖本次本机运行，不外推所有安装包。交互安装向导、快捷方式、MSI GUI 与版本升级仍未验收。
 
 ## 准备
 

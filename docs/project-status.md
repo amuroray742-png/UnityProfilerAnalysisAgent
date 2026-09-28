@@ -21,8 +21,8 @@ P0 第二阶段已接通无扫描生产路径：[二进制布局对照记录](un
 |---|---|---|
 | Unity Editor dump 正式导入 | 已验证 | 6000.3.23f1、两份录制的 137 个参考帧，以及公开合成 fixture |
 | CPU / GC 聚合与质量信息 | 已验证 | 根样本 CPU、inclusive 热点、全部已导出线程 GC；缺失/部分/估算与零值区分 |
-| 指标卡与 GC 表 | 已验证 | 组件及 release 界面验证字节单位、缺失值、覆盖率及阈值；原生文件选择框未验证 |
-| 原始帧 / 线程 / 调用树查询 | 部分实现 | 存储、真实树分页、深度限制和释放已有回归；详见[查询契约](frame-queries.md)，release 界面帧/线程/深度/分页已验证，原生文件选择框除外 |
+| 指标卡与 GC 表 | 已验证 | 组件及 release 界面验证字节单位、缺失值、覆盖率及阈值；原生文件选择框另由维护者人工验收通过 |
+| 原始帧 / 线程 / 调用树查询 | 部分实现 | 存储、真实树分页、深度限制和释放已有回归；详见[查询契约](frame-queries.md)，release 界面帧/线程/深度/分页已验证，原生文件选择框另由维护者人工验收通过 |
 | 项目约定 V1 / V2 / 数组 JSON | 部分实现 | 分派回归通过，缺字段不再生成有效零值；V2 CPU 为估算 |
 | Unity 6 data | 部分实现 | 6000.3.23f1 的 CPU / GC / 站点及帧时间通过限定范围对照；末帧时间和渲染计数不可用，更广版本仍未验证 |
 | Unity 2022.3 data | 部分实现 | 原有 CPU/GC 解析保留；渲染计数不可用，旧 GC 站点未通过新归因验收，因此不输出为有效站点 |
@@ -126,7 +126,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked --offline --test editor
 |---|---|---|
 | P0 限定范围基线已验收 | dump 与 data 生产入口、多录制 CPU / 样本 / GC 对照，移除盲扫指标 | Windows 6000.3.23f1 两份录制的 137 个参考帧；缺失、零值、估算明确区分 |
 | 持续扩大输入证据 | 更多版本与录制、未知区段及全新 batch 导出环境 | 每种输入独立记录版本与范围，不外推现有证据 |
-| P1：分析结构 | 已实现原始帧/线程标识和调用树，提供分页查询与释放 | 合成、真实数据及组件回归；release 界面帧/线程/深度/分页已验证，原生文件选择框除外 |
+| P1：分析结构 | 已实现原始帧/线程标识和调用树，提供分页查询与释放 | 合成、真实数据及组件回归；release 界面帧/线程/深度/分页已验证，原生文件选择框另由维护者人工验收通过 |
 | P1：AI 闭环 | Windows Claude Code ACP 的会话、MCP 查询、流式诊断和取消已验证 | release 桌面诊断/取消已验证；其他 Agent 与完整性能预算仍待验收 |
 | P2：性能与发布 | 缓存释放、内存/耗时测量、Windows 安装回归与 CI | 记录硬件、规模、耗时及内存；新环境构建运行和安装卸载通过 |
 
@@ -134,7 +134,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked --offline --test editor
 
 ### 当前人工交接项（2026-09-28）
 
-[人工验收清单](manual-acceptance.md)与 5 个公开输入生成脚本已准备：正常、零 GC、部分 GC、损坏结构及分页。结果页控件和真实 Agent 诊断按钮已由 WebDriver 操作验收，见上述记录；仅原生文件选择框因 Windows 控制工具截图/坐标输入失败未覆盖。MSI perMachine 静默安装、安装后协议及卸载已由管理员 CI runner 验证。维护者已授权公开推送，PR #1 已合并，MSI 增量在 PR #2；提交 `3cd15e8` 的远端 CI 全流程通过。原生窗口控制再次重试仍报告 `coordinate input geometry is unavailable` 与截图超时，文件选择框和交互安装仍需可用桌面控制环境或人工操作。MIT LICENSE 已按维护者授权补齐；签名与正式发布身份仍需单独确认。
+[人工验收清单](manual-acceptance.md)与 5 个公开输入生成脚本已准备：正常、零 GC、部分 GC、损坏结构及分页。结果页控件和真实 Agent 诊断按钮已由 WebDriver 操作验收，见上述记录；仅原生文件选择框因 Windows 控制工具截图/坐标输入失败未覆盖。MSI perMachine 静默安装、安装后协议及卸载已由管理员 CI runner 验证。维护者已授权公开推送，PR #1 已合并，MSI 增量在 PR #2；提交 `3cd15e8` 的远端 CI 全流程通过。原生窗口控制再次重试仍报告 `coordinate input geometry is unavailable` 与截图超时，文件选择框已由维护者人工验收通过；交互安装仍需可用桌面控制环境或人工操作。MIT LICENSE 已按维护者授权补齐；签名与正式发布身份仍需单独确认。
 
 ### 桌面验收后的诊断范围修正（2026-09-28）
 
@@ -189,3 +189,7 @@ data B 含结果页的进程树采样峰值为工作集 837.80 MiB / 私有内�
 提交 `3cd15e8` 的 [push CI](https://github.com/amuroray742-png/UnityProfilerAnalysisAgent/actions/runs/36400361838) 与 [PR CI](https://github.com/amuroray742-png/UnityProfilerAnalysisAgent/actions/runs/36400633656) 均全部通过。已下载并核对 `windows-installation-evidence`：MSI 安装、安装后 8 项协议回归、卸载成功，安装目录及产品登记清除，未保留 vendor 登记。2 项真实 Agent 环境测试明确跳过，不计入这 8 项。
 
 同次 NSIS 安装/协议/卸载通过，其安装路径偏好由验收脚本清理。CI 不覆盖 GUI、原生文件选择框、交互向导或版本升级。PR #1 已由维护者合并；MSI 增量在[草稿 PR #2](https://github.com/amuroray742-png/UnityProfilerAnalysisAgent/pull/2) 中审阅。该证据解除管理员静默安装的环境阻塞，不改变正式发布与可信分析 MVP 尚未完成的结论。
+
+### 原生文件选择人工验收通过（2026-09-28）
+
+维护者截图确认 normal.json 导入显示 2 / 20 帧、CPU P95 12.00 ms、GC P95 32 B，随后文字确认取消选择“无报错”。此次本机原生文件选择验收通过，解除上文对应阻塞；这是人工证据，不改写此前自动化工具失败的历史。程序哈希未随截图提供，不外推到所有包。剩余交互安装、快捷方式、MSI GUI、升级和正式发布身份仍各自保留验证边界。详见[人工验收记录](manual-acceptance.md#原生文件选择人工验收2026-09-28)。
