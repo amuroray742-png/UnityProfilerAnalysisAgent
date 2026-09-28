@@ -51,12 +51,12 @@ P0 第二阶段已接通无扫描生产路径：[二进制布局对照记录](un
 
 | 检查 | 结果 |
 |---|---|
-| cargo test --manifest-path src-tauri/Cargo.toml --locked --offline | 81 项通过：单元 54、dump 11、结构解析 5、帧查询 3、MCP 进程 3、ACP 进程 5；11 项依赖环境的测试默认忽略 |
+| cargo test --manifest-path src-tauri/Cargo.toml --locked --offline | 84 项通过：单元 54、dump 14、结构解析 5、帧查询 3、MCP 进程 3、ACP 进程 5；12 项依赖环境的测试默认忽略 |
 | 私有 dump 生产入口（显式 --ignored） | 1 项通过；逐帧核对 CPU 根时间、样本数量、帧时间、GC 总量与站点合计 |
-| npm test | 15 项通过（4 项格式化、4 项指标组件、3 项调用树组件、4 项导入/诊断生命周期） |
+| npm test | 19 项通过（4 项格式化、4 项指标组件、7 项调用树/帧定位组件、4 项导入/诊断生命周期） |
 | npm run build | TypeScript / Vite 构建通过 |
 
-原有 unused variable / dead code 与链接器提示仍存在。安装包构建和独立解析进程峰值已测量；原生文件选择框、全新 Unity batch 启动、MSI GUI/安装向导及完整应用内存预算仍待验收。
+原有 unused variable / dead code 与链接器提示仍存在。安装包构建和独立解析进程峰值已测量；原生文件选择、EXE/MSI 交互安装、启动、快捷方式与卸载已由维护者确认。全新 Unity batch 启动、版本升级、签名及长期预算另行验收，不阻塞本轮 CPU/GC 与诊断功能。最新 release 桌面及真实 Agent 证据见文末。
 
 生产入口私有数据测试：
 
@@ -132,7 +132,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked --offline --test editor
 
 私有录制与完整 dump 不提交仓库。状态更新必须附验证命令与范围，跳过或弱断言测试不能计为能力完成。
 
-### 当前人工交接项（2026-09-28）
+### 历史人工交接项（2026-09-28，后续已解除）
 
 [人工验收清单](manual-acceptance.md)与 5 个公开输入生成脚本已准备：正常、零 GC、部分 GC、损坏结构及分页。结果页控件和真实 Agent 诊断按钮已由 WebDriver 操作验收，见上述记录；仅原生文件选择框因 Windows 控制工具截图/坐标输入失败未覆盖。MSI perMachine 静默安装、安装后协议及卸载已由管理员 CI runner 验证。维护者已授权公开推送，PR #1 已合并，MSI 增量在 PR #2；提交 `3cd15e8` 的远端 CI 全流程通过。原生窗口控制再次重试仍报告 `coordinate input geometry is unavailable` 与截图超时，文件选择框已由维护者人工验收通过；交互安装、快捷方式及 MSI GUI 也已由维护者确认通过，见下方最新记录。MIT LICENSE 已按维护者授权补齐；签名与正式发布身份仍需单独确认。
 

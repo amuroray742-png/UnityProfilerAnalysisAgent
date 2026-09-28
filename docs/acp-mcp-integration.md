@@ -60,7 +60,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked --offline --test acp_st
 
 真实 Agent 测试默认忽略；显式执行必须提供可用适配器与登录环境，失败不视为跳过。运行会把人工 fixture 的查询结果交给所选 Agent 的模型。模型结论受模型影响，上述验收只证明协议和数据链路，不保证诊断建议总是正确。
 
-实现依据：[ACP v1 初始化](https://agentclientprotocol.com/protocol/v1/initialization)、[会话配置](https://agentclientprotocol.com/protocol/v1/session-setup)、[prompt 与取消](https://agentclientprotocol.com/protocol/v1/prompt-turn)及[MCP stdio](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)。release 桌面与发布模式进程回归已有证据；剩余门槛包括原生窗口、更多 Agent、长期性能预算及发布，见[性能记录](performance-and-release.md)。
+实现依据：[ACP v1 初始化](https://agentclientprotocol.com/protocol/v1/initialization)、[会话配置](https://agentclientprotocol.com/protocol/v1/session-setup)、[prompt 与取消](https://agentclientprotocol.com/protocol/v1/prompt-turn)及[MCP stdio](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)。release 桌面与发布模式进程回归已有证据；原生窗口已由维护者验收；更多 Agent、长期性能预算及发布为后续范围，见[性能记录](performance-and-release.md)。
 
 ### 统计解释约束（2026-09-28）
 
