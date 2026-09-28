@@ -1,6 +1,6 @@
 # ACP / MCP 集成与验收
 
-当前已接通 Windows 上的 ACP v1 诊断与 MCP stdio 查询。真实 Claude Code ACP 0.16.2 的完成及取消流程通过公开 fixture 验证；release 桌面完成/取消/重试及 NSIS 安装后协议已通过；其他 Agent、MSI 与更广泛诊断内容仍待验收。完成范围见[项目状态](project-status.md)。
+当前已接通 Windows 上的 ACP v1 诊断与 MCP stdio 查询。真实 Claude Code ACP 0.16.2 的完成及取消流程通过公开 fixture 验证；release 桌面完成/取消/重试及 NSIS 安装后协议已通过；MSI 安装后协议也已在 Windows CI 通过；其他 Agent 与更广泛诊断内容仍待验收。完成范围见[项目状态](project-status.md)。
 
 ## 使用流程
 

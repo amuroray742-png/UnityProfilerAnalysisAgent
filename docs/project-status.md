@@ -134,7 +134,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked --offline --test editor
 
 ### 当前人工交接项（2026-09-28）
 
-[人工验收清单](manual-acceptance.md)与 5 个公开输入生成脚本已准备：正常、零 GC、部分 GC、损坏结构及分页。结果页控件和真实 Agent 诊断按钮已由 WebDriver 操作验收，见上述记录；仅原生文件选择框因 Windows 控制工具截图/坐标输入失败未覆盖。MSI 为 perMachine，需管理员环境。GitHub 登录及仓库权限已核对有效，但仓库公开，当前工作仍在本地，尚无 CI 运行记录；推送新分支运行 CI 的选择已交给维护者。MIT LICENSE 已按维护者授权补齐；签名与正式发布身份仍需单独确认。
+[人工验收清单](manual-acceptance.md)与 5 个公开输入生成脚本已准备：正常、零 GC、部分 GC、损坏结构及分页。结果页控件和真实 Agent 诊断按钮已由 WebDriver 操作验收，见上述记录；仅原生文件选择框因 Windows 控制工具截图/坐标输入失败未覆盖。MSI perMachine 静默安装、安装后协议及卸载已由管理员 CI runner 验证。维护者已授权公开推送，PR #1 已合并，MSI 增量在 PR #2；提交 `3cd15e8` 的远端 CI 全流程通过。原生窗口控制再次重试仍报告 `coordinate input geometry is unavailable` 与截图超时，文件选择框和交互安装仍需可用桌面控制环境或人工操作。MIT LICENSE 已按维护者授权补齐；签名与正式发布身份仍需单独确认。
 
 ### 桌面验收后的诊断范围修正（2026-09-28）
 
