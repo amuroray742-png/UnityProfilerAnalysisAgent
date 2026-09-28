@@ -143,10 +143,32 @@ fn build_analysis(snapshot: &MetricsSnapshot, focus: &str) -> Value {
         ("rendering", &snapshot.rendering.draw_calls, 1500.0),
     ] {
         if (focus == area || focus == "all") && stats.quality.can_diagnose() {
-            if let Some(p95) = stats.p95.filter(|v| *v > budget) {
-                issues.push(json!({"area":area,"severity":"medium","p95":p95,"budget":budget,"source":stats.quality.source}));
+            let trigger_value = if area == "rendering" { stats.p95 } else { stats.max };
+            if trigger_value.is_some_and(|v| v > budget) {
+                let mut frames: Vec<_> = snapshot.cpu.frame_timeline.iter().filter_map(|frame| {
+                    let value = match area {
+                        "cpu" => frame.ms,
+                        "gc" => frame.gc_alloc_bytes.map(|v| v as f64),
+                        _ => None,
+                    }?;
+                    (value > budget).then_some((frame.frame_index, value))
+                }).collect();
+                frames.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+                let affected = if area == "rendering" { None } else { Some(frames.len()) };
+                let evidence: Vec<_> = frames.iter().take(5).map(|(index, value)| {
+                    json!({"frameIndex": index, "value": value})
+                }).collect();
+                issues.push(json!({
+                    "area":area,"severity":"medium","kind":"threshold-exceeded",
+                    "p95":stats.p95,"max":stats.max,"budget":budget,"source":stats.quality.source,
+                    "unit":if area == "cpu" {"ms"} else if area == "gc" {"bytes"} else {"count"},
+                    "trigger":if stats.p95.is_some_and(|v| v > budget) {"p95"} else {"isolated-peak"},
+                    "affectedFrames":affected,"validFrames":stats.quality.valid_frames,
+                    "evidenceFrames":evidence,"evidenceLimit":5,
+                    "interpretation":"默认筛查阈值超限，需结合目标帧率、平台和原始样本核对；不能直接判定为已确认瓶颈"
+                }));
             }
         }
     }
-    json!({"issues":issues,"quality":{"cpu":snapshot.cpu.main_thread_ms.quality,"gc":snapshot.gc.alloc_per_frame_bytes.quality,"rendering":snapshot.rendering.draw_calls.quality},"warnings":snapshot.warnings})
+    json!({"issues":issues,"thresholdPolicy":{"source":"application-default-heuristic","userConfigured":false,"emptyIssuesMeaning":"未发现可用完整观测指标超过默认阈值，不等于没有性能问题；缺失、部分或估算指标不作确定性诊断"},"quality":{"cpu":snapshot.cpu.main_thread_ms.quality,"gc":snapshot.gc.alloc_per_frame_bytes.quality,"rendering":snapshot.rendering.draw_calls.quality},"warnings":snapshot.warnings})
 }

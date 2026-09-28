@@ -419,3 +419,48 @@ async fn experimental_binary_outputs_never_become_real_zero_metrics() {
         .unwrap();
     assert_eq!(extractor::extract(&raw).gc.total_alloc_bytes, None);
 }
+
+#[tokio::test]
+async fn analysis_traces_isolated_peaks_and_preserves_missing_data_boundary() {
+    use unity_profiler_analysis_agent_lib::mcp::{MetricsStore, transport::run_analysis};
+    let mut frames: Vec<Value> = (0..21).map(|i| json!({"frameIndex":100+i*3,"cpuMs":1.0,"gcAllocBytes":0})).collect();
+    frames[20]["cpuMs"] = json!(40.0);
+    frames[20]["gcAllocBytes"] = json!(8388608);
+    let store = MetricsStore::new();
+    store.set(extractor::extract(&parse(json!({"frames":frames})).await.unwrap())).await;
+    let analysis = run_analysis(&store, "all").await.unwrap();
+    assert_eq!(analysis["thresholdPolicy"]["userConfigured"], false);
+    let issues = analysis["issues"].as_array().unwrap();
+    assert_eq!(issues.len(), 2);
+    for issue in issues {
+        assert_eq!(issue["trigger"], "isolated-peak");
+        assert_eq!(issue["affectedFrames"], 1);
+        assert_eq!(issue["validFrames"], 21);
+        assert_eq!(issue["evidenceFrames"][0]["frameIndex"], 160);
+    }
+    assert_eq!(issues[0]["unit"], "ms");
+    assert_eq!(issues[0]["p95"], 1.0);
+    assert_eq!(issues[0]["evidenceFrames"][0]["value"], 40.0);
+    assert_eq!(issues[1]["unit"], "bytes");
+    frames[0].as_object_mut().unwrap().remove("gcAllocBytes");
+    store.set(extractor::extract(&parse(json!({"frames":frames})).await.unwrap())).await;
+    let partial = run_analysis(&store, "gc").await.unwrap();
+    assert_eq!(partial["quality"]["gc"]["status"], "partial");
+    assert_eq!(partial["issues"], json!([]));
+}
+
+#[tokio::test]
+async fn analysis_evidence_is_bounded_sorted_and_focus_specific() {
+    use unity_profiler_analysis_agent_lib::mcp::{MetricsStore, transport::run_analysis};
+    let frames: Vec<Value> = (0..9).map(|i| json!({"frameIndex":200+i*5,"cpuMs":20+i,"gcAllocBytes":0})).collect();
+    let store = MetricsStore::new();
+    store.set(extractor::extract(&parse(json!({"frames":frames})).await.unwrap())).await;
+    let analysis = run_analysis(&store, "cpu").await.unwrap();
+    let issues = analysis["issues"].as_array().unwrap();
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0]["affectedFrames"], 9);
+    assert_eq!(issues[0]["trigger"], "p95");
+    assert_eq!(issues[0]["evidenceFrames"].as_array().unwrap().len(), 5);
+    assert_eq!(issues[0]["evidenceFrames"][0]["frameIndex"], 240);
+    assert_eq!(run_analysis(&store, "gc").await.unwrap()["issues"], json!([]));
+}

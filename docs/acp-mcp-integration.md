@@ -67,3 +67,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked --offline --test acp_st
 桌面诊断内容复核发现模型将小样本 p50 误判为口径差异，并从 inclusive 样本猜测剩余 CPU。摘要现附 `metricSemantics`：统计使用有效帧（含真实零），排序后取 `round((n-1)*q)`，不插值；例如 [0,32] 的 p50 为 32，不是平均值 16。未提供已验证的 self/exclusive 耗时，不允许用热点列表或父子 inclusive 相减推断未解释 CPU。树完整返回也不代表 instrumentation 覆盖全部运行工作。
 
 该字段解释现有算法，未改变计算结果、查询上限或 Tauri 快照。MCP 真实 stdio 回归核对有效帧为 2、GC p50=32 及语义字段交付；诊断提示要求遵守它。工具数据正确和提示完整仍不等于模型输出必然正确。
+
+## 诊断筛查与帧证据
+
+`performance_analysis` 的 CPU/GC issues 区分 P95 超限与孤立峰值，附 `unit`、`affectedFrames`、`validFrames`、最多 5 项 `evidenceFrames` 和 `thresholdPolicy`。帧证据用原始帧号，需继续查询原始线程/样本解释原因。默认阈值仅用于筛查，不等于项目预算或已确认瓶颈；issues 为空不证明无性能问题。部分、估算或缺失的指标不触发确定性诊断。

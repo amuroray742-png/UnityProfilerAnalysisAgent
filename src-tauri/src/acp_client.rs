@@ -200,7 +200,7 @@ async fn run_session(
             });
         }
     });
-    let prompt="请只通过 unity-profiler MCP 工具分析当前录制，先调用 performance_session_summary 和 performance_frames，再选择有证据的帧调用 performance_frame / performance_cpu_hierarchy。用中文给出简洁结论、具体帧号和数据依据。遵守摘要中的 metricSemantics：分位数不是平均值，不能把小样本 p50 判为口径冲突；没有已验证的 exclusive/self 时间时不推断未解释或剩余 CPU 时间。仅 quality.status=available 可作确定性结论；partial 必须说明覆盖率，estimated/unavailable 不作确定性诊断。CPU 为 inclusive，父子耗时不可相加；GC 单位字节。调用树必须检查 queryWarnings、depthTruncated 和 nextStart；深度截断时增大 max_depth 并从 start=0 重查，有 nextStart 时续页；线程列表同样检查 nextStart。若未读取完整，明确说明只查看部分样本，不声称完整归因。GC.Alloc 可嵌套，每个样本的字节单独计入；按线程及最近的非 GC.Alloc 父样本归因。结论中的分配明细必须与已校验的线程/帧 GC 总量核对；不一致时说明尚未解释的差额，不猜测原因，不丢弃嵌套分配。缺失数据明确说明。不要读取或修改工作目录文件，不执行命令，不访问网络。".to_owned();
+    let prompt="请只通过 unity-profiler MCP 工具分析当前录制，先调用 performance_session_summary、performance_frames 和 performance_analysis，再选择有证据的帧调用 performance_frame / performance_cpu_hierarchy。用中文给出简洁结论、具体帧号和数据依据。遵守摘要中的 metricSemantics：分位数不是平均值，不能把小样本 p50 判为口径冲突；没有已验证的 exclusive/self 时间时不推断未解释或剩余 CPU 时间。performance_analysis 的默认阈值仅用于筛查，不是用户预算；核对 evidenceFrames 的原始样本后再解释，isolated-peak 是少量峰值而不是持续超限。issues 为空不代表没有性能问题。仅 quality.status=available 可作确定性结论；partial 必须说明覆盖率，estimated/unavailable 不作确定性诊断。CPU 为 inclusive，父子耗时不可相加；GC 单位字节。调用树必须检查 queryWarnings、depthTruncated 和 nextStart；深度截断时增大 max_depth 并从 start=0 重查，有 nextStart 时续页；线程列表同样检查 nextStart。若未读取完整，明确说明只查看部分样本，不声称完整归因。GC.Alloc 可嵌套，每个样本的字节单独计入；按线程及最近的非 GC.Alloc 父样本归因。结论中的分配明细必须与已校验的线程/帧 GC 总量核对；不一致时说明尚未解释的差额，不猜测原因，不丢弃嵌套分配。缺失数据明确说明。不要读取或修改工作目录文件，不执行命令，不访问网络。".to_owned();
     let mut peer = protocol::Peer::new(stdout, stdin, cancel, req.event_tx);
     let result = peer.run(&workspace.0, config, prompt).await;
     let chunks = peer.chunks;
