@@ -108,7 +108,7 @@ pub fn list_tool_schemas() -> serde_json::Value {
             },
             {
                 "name": "performance_analysis",
-                "description": "返回已计算的性能分析建议",
+                "description": "返回默认阈值筛查与最多 5 个原始帧证据；区分 P95 超限和孤立峰值。阈值不是用户预算，不能直接确认瓶颈，空 issues 不等于无问题",
                 "inputSchema": {
                     "type": "object",
                     "properties": {

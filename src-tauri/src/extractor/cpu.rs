@@ -45,6 +45,7 @@ pub struct FrameSample {
     pub frame_index: usize,
     pub ms: Option<f64>,
     pub frame_time_ms: Option<f64>,
+    pub gc_alloc_bytes: Option<u64>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -102,6 +103,7 @@ pub fn extract(frames: &[Frame]) -> CpuMetrics {
                 frame_index: f.index,
                 ms: f.quality.cpu.then_some(f.cpu_ms),
                 frame_time_ms: f.quality.duration.then_some(f.duration_ms),
+                gc_alloc_bytes: f.quality.gc.then_some(f.gc_alloc_bytes),
             })
             .collect(),
     }

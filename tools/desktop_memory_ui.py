@@ -74,15 +74,15 @@ def prepare_workload(js, request, input_path, inspect_heap=False, dom_control=Fa
         stage[0] = f'tree-query-{index + 1}'
         started = time.monotonic()
         button('CPU')
-        wait('return !!document.querySelector("section[aria-label=原始调用树] tbody tr")')
+        wait('return !!document.querySelector("table[aria-label=调用树样本] tbody tr")')
         details = js('''const select=document.querySelector('select[aria-label=帧]');
           return {frames:select.options.length, first:select.options[0].value,
             last:select.options[select.options.length-1].value};''')
         click('select[aria-label="帧"] option:last-child')
         wait('''const section=document.querySelector('section[aria-label=原始调用树]');
           const value=document.querySelector('select[aria-label=帧]').value;
-          return section.innerText.includes('帧 '+value+' ·') && !!section.querySelector('tbody tr');''')
-        details['lastPageRows'] = js('return document.querySelectorAll("section[aria-label=原始调用树] tbody tr").length')
+          return section.innerText.includes('帧 '+value+' ·') && !!section.querySelector('table[aria-label=调用树样本] tbody tr');''')
+        details['lastPageRows'] = js('return document.querySelectorAll("table[aria-label=调用树样本] tbody tr").length')
         assert 0 < details['lastPageRows'] <= 200
         query_ms = (time.monotonic() - started) * 1000
         stage[0] = f'tree-held-{index + 1}'

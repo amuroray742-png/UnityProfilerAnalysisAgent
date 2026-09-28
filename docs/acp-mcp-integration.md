@@ -38,7 +38,7 @@ session/update 中的 agent_message_chunk 才作为回答正文；其他会话�
 | 工具 | 参数 | 语义 |
 |---|---|---|
 | performance_session_summary | 无 | 聚合指标、质量与 metricSemantics（分位数算法、inclusive CPU 和覆盖语义），省略逐帧时间线；不承诺固定字节大小 |
-| performance_frames | start、limit | 时间线数组偏移，limit 为 1–500，默认 200；返回原始帧号 |
+| performance_frames | start、limit | 时间线数组偏移，limit 为 1–500，默认 200；返回原始帧号、主线程/录制帧时间与 gcAllocBytes（缺失为 null） |
 | performance_frame | frame_index、start、limit | 原始帧指标及线程分页，最多 128 个线程 |
 | performance_cpu_hierarchy | frame_index、thread_index、start、limit、max_depth | 原始前序树，最多 500 个样本、64 层；默认唯一 Main Thread |
 | performance_analysis | focus | 只对 available 指标应用规则，其余返回质量与警告 |
@@ -60,10 +60,14 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked --offline --test acp_st
 
 真实 Agent 测试默认忽略；显式执行必须提供可用适配器与登录环境，失败不视为跳过。运行会把人工 fixture 的查询结果交给所选 Agent 的模型。模型结论受模型影响，上述验收只证明协议和数据链路，不保证诊断建议总是正确。
 
-实现依据：[ACP v1 初始化](https://agentclientprotocol.com/protocol/v1/initialization)、[会话配置](https://agentclientprotocol.com/protocol/v1/session-setup)、[prompt 与取消](https://agentclientprotocol.com/protocol/v1/prompt-turn)及[MCP stdio](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)。release 桌面与发布模式进程回归已有证据；剩余门槛包括原生窗口、更多 Agent、长期性能预算及发布，见[性能记录](performance-and-release.md)。
+实现依据：[ACP v1 初始化](https://agentclientprotocol.com/protocol/v1/initialization)、[会话配置](https://agentclientprotocol.com/protocol/v1/session-setup)、[prompt 与取消](https://agentclientprotocol.com/protocol/v1/prompt-turn)及[MCP stdio](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)。release 桌面与发布模式进程回归已有证据；原生窗口已由维护者验收；更多 Agent、长期性能预算及发布为后续范围，见[性能记录](performance-and-release.md)。
 
 ### 统计解释约束（2026-09-28）
 
 桌面诊断内容复核发现模型将小样本 p50 误判为口径差异，并从 inclusive 样本猜测剩余 CPU。摘要现附 `metricSemantics`：统计使用有效帧（含真实零），排序后取 `round((n-1)*q)`，不插值；例如 [0,32] 的 p50 为 32，不是平均值 16。未提供已验证的 self/exclusive 耗时，不允许用热点列表或父子 inclusive 相减推断未解释 CPU。树完整返回也不代表 instrumentation 覆盖全部运行工作。
 
 该字段解释现有算法，未改变计算结果、查询上限或 Tauri 快照。MCP 真实 stdio 回归核对有效帧为 2、GC p50=32 及语义字段交付；诊断提示要求遵守它。工具数据正确和提示完整仍不等于模型输出必然正确。
+
+## 诊断筛查与帧证据
+
+`performance_analysis` 的 CPU/GC issues 区分 P95 超限与孤立峰值，附 `unit`、`affectedFrames`、`validFrames`、最多 5 项 `evidenceFrames` 和 `thresholdPolicy`。帧证据用原始帧号，需继续查询原始线程/样本解释原因。默认阈值仅用于筛查，不等于项目预算或已确认瓶颈；issues 为空不证明无性能问题。部分、估算或缺失的指标不触发确定性诊断。

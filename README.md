@@ -2,7 +2,9 @@
 
 面向 Unity Profiler 离线录制的本地桌面分析原型，使用 Tauri 2、React / TypeScript 和 Rust。首要目标是 **Windows 上的 Unity 6000.3 可信分析**，通过 ACP Agent 与 MCP 数据查询辅助诊断。
 
-当前已实现 Editor dump 的 CPU/GC 导入链路，以及 Unity 6000.3.23f1 `.data` 的无扫描结构解析。两份录制的 137 个参考帧已通过样本、CPU/GC 和站点归因对照，包含加载高峰和末帧。现已增加原始单帧调用树与分页查询。Windows Claude Code ACP 的 MCP 查询、流式回答和取消闭环已通过公开 fixture 验证。release 桌面主流程、NSIS 安装后界面/协议/卸载已在限定范围通过。可信分析 MVP 尚未完成：MSI 管理员静默安装/协议/卸载及远端 Windows CI 已通过；原生文件选择已由维护者本机人工验收；EXE/MSI 交互安装、启动、快捷方式与卸载已由维护者确认通过；版本升级及长期性能预算仍待验收。缺失指标显示“—”，有效零值仍显示为零。
+当前 CPU/GC 功能链路已完成本轮限定范围的本地验收：Editor dump 与 Unity 6000.3.23f1 `.data` 导入、指标聚合、慢帧/高分配帧定位、原始线程调用树，以及 Windows Claude Code ACP 的 MCP 查询、流式诊断、取消和重新诊断。两份录制的 137 个参考帧通过样本、CPU/GC 和站点归因对照，包含加载高峰和末帧；该证据不覆盖所有录制或 Unity 版本。缺失指标显示“—”，有效零值仍显示为零。AI 正文是辅助解释，须与原始样本核对。
+
+维护者确认本轮先完成 CPU/GC 与诊断；渲染、版本升级、签名及长期性能预算后续推进，不作为本轮功能验收阻塞。原生文件选择与 EXE/MSI 安装、启动、快捷方式、卸载已由维护者人工确认通过。完整可信分析 MVP 与正式发布仍按[状态台账](docs/project-status.md)分别验收。
 
 ## 文档导航
 
@@ -21,7 +23,7 @@
 
 | 能力 | 状态 | 边界 |
 |---|---|---|
-| 文件选择、解析进度、指标和诊断输出界面 | 部分实现 | release 结果页、树控件和诊断按钮已回归；原生文件选择返回值由测试替代，原生窗口本身未验证 |
+| 文件选择、解析进度、指标和诊断输出界面 | 已验证 | 限定 Windows release 主流程回归通过；自动化替代文件选择返回值，原生选择与取消另由维护者人工确认 |
 | Editor dump JSON 导入 | 已验证 | 64 帧参考 dump 与合成样本；CPU/GC 范围与有效帧数明确 |
 | 项目约定 JSON 解析与指标聚合 | 部分实现 | 有合成输入单元测试，不是任意 Unity JSON 通用导入器 |
 | Unity 2022.3 `.data` | 部分实现 | 有采样树与 GC metadata 解码；Draw Call / SetPass 标为不可用 |
@@ -60,7 +62,7 @@ npm run tauri:build
 1. 启动桌面应用，点击选择本地 Profiler 文件。
 2. 应用登记原文件路径，读取并解析，再展示指标与解析警告；不会复制文件到上传目录。
 3. 可选择 [ExtractProfilerDump.cs](docs/unity-scripts/ExtractProfilerDump.README.md) 导出的 `.dump.json`，或 Unity 6000.3.23f1 `.data`，查看 CPU/GC 指标及有效帧覆盖。`.data` 末帧的录制帧时间和全部渲染计数不可用；其他 Unity 6 版本仅提供帧头 CPU 估算。支持范围见[布局验证记录](docs/unity6-layout-research.md)。
-4. CPU 页可选择原始帧号、线程和深度，分页查看真实样本及 GC 字节；重置会释放当前快照和查询源。
+4. CPU / GC 页分别从慢帧或高分配帧列表定位原始帧，选择线程和深度，分页查看真实样本及 GC 字节；完整帧下拉仍保留。重置会释放当前快照和查询源。
 5. 选择已配置登录的 ACP Agent，点击“开始 AI 诊断”。当前验证了 Claude Code ACP 0.16.2；Agent 通过 MCP 查询本次录制。可点击取消，认证或协议失败会明确显示原因。
 
 当前没有统一文件大小上限；实际内存取决于输入结构。已移除未落实的“最大 500MB”提示，测量范围及已知内存峰值见[性能基线](docs/performance-and-release.md)。

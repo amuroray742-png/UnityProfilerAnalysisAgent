@@ -36,7 +36,7 @@ export interface CpuMetrics {
   mainThreadMs: FrameTimeStats;
   hotspotQuality: Quality;
   topHotspots: Hotspot[];
-  frameTimeline: Array<{ frameIndex: number; ms: number | null; frameTimeMs: number | null }>;
+  frameTimeline: Array<{ frameIndex: number; ms: number | null; frameTimeMs: number | null; gcAllocBytes: number | null }>;
 }
 
 export interface GcMetrics {
