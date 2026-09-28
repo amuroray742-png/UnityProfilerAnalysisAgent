@@ -32,7 +32,16 @@ def main():
     parser.add_argument('--measure-heap', action='store_true', help='Rendered mode: inspect DOM/heap, idle 30s, then diagnostically collect GC')
     parser.add_argument('--measure-dom-control', action='store_true', help='Heap investigation control: DOM events instead of WebDriver element handles; not UI acceptance')
     parser.add_argument('--measure-handle-control', action='store_true', help='DOM-event control plus WebDriver element lookup, without WebDriver click')
+    parser.add_argument('--render-input', type=Path, help='Validate rendering page on a local capture; never calls an Agent')
+    parser.add_argument('--render-reference', type=Path, help='Editor counter reference for --render-input')
     args = parser.parse_args()
+    if bool(args.render_input) != bool(args.render_reference):
+        parser.error('--render-input and --render-reference must be supplied together')
+    if args.render_input and (args.ui or args.real_agent or args.measure_input):
+        parser.error('--render-input is separate from --ui, --real-agent and --measure-input')
+    for path in (args.render_input, args.render_reference):
+        if path and not path.is_file():
+            raise FileNotFoundError(path)
     if args.measure_handle_control and not args.measure_dom_control:
         parser.error('--measure-handle-control requires --measure-dom-control')
     if args.measure_dom_control and not args.measure_heap:
@@ -52,7 +61,7 @@ def main():
     for path in (args.application, args.driver, args.native_driver):
         if not path.is_file():
             raise FileNotFoundError(path)
-    output = root / '.cache' / ('desktop-memory' if args.measure_input else 'desktop-ui' if args.ui else 'desktop-smoke')
+    output = root / '.cache' / ('desktop-render' if args.render_input else 'desktop-memory' if args.measure_input else 'desktop-ui' if args.ui else 'desktop-smoke')
     output.mkdir(parents=True, exist_ok=True)
     def port():
         with socket.socket() as sock:
@@ -140,6 +149,10 @@ def main():
                 report['scope'] = 'Release rendered UI and real backend; only native picker response substituted; excludes native picker and MSI'
                 report['realAgentRequested'] = args.real_agent
                 run_ui(js, lambda method, path, body=None: request(method, f'/session/{session}' + path, body), root, output, report, args.real_agent)
+            if args.render_input:
+                from desktop_render_checks import run_render_checks
+                report['scope'] = 'Release rendering page vs local Editor reference; native picker response substituted; excludes Agent'
+                run_render_checks(js, lambda method, path, body=None: request(method, f'/session/{session}' + path, body), args.render_input, args.render_reference, output, report)
             if args.measure_input:
                 from desktop_memory import measure
                 report['scope'] = 'Actual Tauri/WebView processes, real IPC import/query/release; excludes results rendering, Agent and native picker'

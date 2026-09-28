@@ -1,3 +1,4 @@
+import { RenderingPanel } from './components/RenderingPanel';
 import { useState } from 'react';
 import { FrameExplorer } from './components/FrameExplorer';
 import { UploadDropzone } from './components/UploadDropzone.tsx';
@@ -271,42 +272,7 @@ export default function App() {
             </>
           )}
 
-          {tab === 'rendering' && (
-            <>
-              <div className="metrics-grid">
-                <MetricCard
-                  label="Draw Call p95"
-                  quality={state.snapshot.rendering.drawCalls.quality}
-                  value={state.snapshot.rendering.drawCalls.p95}
-                  unit="count"
-                />
-                <MetricCard
-                  label="SetPass p95"
-                  quality={state.snapshot.rendering.setPassCalls.quality}
-                  value={state.snapshot.rendering.setPassCalls.p95}
-                  unit="count"
-                />
-                <MetricCard
-                  label="SRP Batcher 节省"
-                  detail="输入未提供观测值"
-                  value={state.snapshot.rendering.batchesSavedBySrpBatcher}
-                  unit="count"
-                />
-                <MetricCard
-                  label="渲染事件数"
-                  quality={state.snapshot.rendering.eventQuality}
-                  value={state.snapshot.rendering.eventQuality.status === "unavailable" ? null : state.snapshot.rendering.topRenderEvents.length}
-                  unit="count"
-                />
-              </div>
-              <HotspotTable
-                title="渲染事件 Top 10"
-                quality={state.snapshot.rendering.eventQuality}
-                hotspots={state.snapshot.rendering.topRenderEvents}
-                valueColumn="ms"
-              />
-            </>
-          )}
+          {tab === 'rendering' && <RenderingPanel metrics={state.snapshot.rendering} />}
 
           {tab === 'log' && <AgentLogDrawer events={state.events} />}
         </>

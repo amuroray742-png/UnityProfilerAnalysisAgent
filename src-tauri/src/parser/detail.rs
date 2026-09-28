@@ -51,10 +51,18 @@ pub struct FrameInfo {
     pub cpu_ms: Option<f64>,
     pub frame_time_ms: Option<f64>,
     pub gc_alloc_bytes: Option<u64>,
+    pub render_counters: BTreeMap<String, u64>,
     pub warnings: Vec<String>,
 }
 impl FrameInfo {
     pub fn summary(frame: &Frame) -> Self {
+        let mut render_counters = frame.render_counters.clone();
+        if frame.quality.draw {
+            render_counters.insert("Draw Calls Count".into(), frame.draw_calls as u64);
+        }
+        if frame.quality.set_pass {
+            render_counters.insert("SetPass Calls Count".into(), frame.set_pass_calls as u64);
+        }
         Self {
             frame_index: frame.index,
             raw_frame_id: None,
@@ -64,6 +72,7 @@ impl FrameInfo {
             cpu_ms: frame.quality.cpu.then_some(frame.cpu_ms),
             frame_time_ms: frame.quality.duration.then_some(frame.duration_ms),
             gc_alloc_bytes: frame.quality.gc.then_some(frame.gc_alloc_bytes),
+            render_counters,
             warnings: frame.quality.reasons.clone(),
         }
     }

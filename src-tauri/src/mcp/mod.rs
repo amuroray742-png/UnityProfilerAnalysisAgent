@@ -73,9 +73,9 @@ pub fn list_tool_schemas() -> serde_json::Value {
             },
             {
                 "name": "performance_hotspots",
-                "description": "CPU/GC 热点榜分页：累计 inclusive 毫秒或分配字节降序，含调用次数与单次最大值。排名不是瓶颈结论，结合 performance_analysis 的 investigationFrames 深入原始帧树；CPU 父子不可相加",
+                "description": "CPU/GC/渲染 CPU 热点榜分页：累计 inclusive 毫秒或分配字节降序，含调用次数与单次最大值。排名不是瓶颈结论，结合 performance_analysis 的 investigationFrames 深入原始帧树；CPU 父子不可相加",
                 "inputSchema": {"type":"object","properties":{
-                    "area":{"type":"string","enum":["cpu","gc"]},
+                    "area":{"type":"string","enum":["cpu","gc","rendering"]},
                     "start":{"type":"integer","minimum":0,"default":0},
                     "limit":{"type":"integer","minimum":1,"maximum":50,"default":10}
                 },"required":["area"]}

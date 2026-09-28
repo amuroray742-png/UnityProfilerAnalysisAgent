@@ -2,7 +2,7 @@
 //!
 //! 支持：
 //! - Unity 2022.3.x：完整 port `librashuai/UnityPerfAgent/internal/capture/capture.go`
-//! - Unity 6000.3.23f1：顺序结构解析，跨帧 marker 状态，CPU / GC 有限样本验证
+//! - Unity 6000.3.23f1 / 6000.3.9f1：顺序结构解析，跨帧 marker 状态，CPU / GC / 渲染有限录制验证
 //!
 //! 分块读取输入；结果仍保留于内存，尚无容量上限承诺。
 
@@ -175,7 +175,10 @@ pub fn parse_path_with_progress(
 
         let frame_index = block_index;
         block_index += 1;
-        if block_header.unity_version_string() == "6000.3.23f1" {
+        if matches!(
+            block_header.unity_version_string().as_str(),
+            "6000.3.23f1" | "6000.3.9f1"
+        ) {
             details.index_binary(
                 frame_index,
                 last_done - body_size as u64,
@@ -312,7 +315,10 @@ pub async fn parse(
         }
         let frame_index = block_index;
         block_index += 1;
-        if block_header.unity_version_string() == "6000.3.23f1" {
+        if matches!(
+            block_header.unity_version_string().as_str(),
+            "6000.3.23f1" | "6000.3.9f1"
+        ) {
             details.index_binary(
                 frame_index,
                 (body_end - body.len()) as u64,
@@ -484,6 +490,7 @@ fn parse_unity2022_frame_body(
         gc_alloc_bytes: total_gc_alloc_bytes,
         draw_calls: 0,
         set_pass_calls: 0,
+        render_counters: Default::default(),
         main_thread_samples: main_samples_flat,
         gc_alloc_sites: aggregate_gc_sites(&forest),
         render_events,
@@ -512,6 +519,7 @@ fn parse_unity6_frame_body(
         gc_alloc_bytes: 0,
         draw_calls: 0,
         set_pass_calls: 0,
+        render_counters: Default::default(),
         main_thread_samples: vec![],
         gc_alloc_sites: vec![],
         render_events: vec![],

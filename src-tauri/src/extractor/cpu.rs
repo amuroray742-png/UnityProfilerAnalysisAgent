@@ -42,6 +42,8 @@ pub struct Hotspot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FrameSample {
+    pub draw_calls: Option<u32>,
+    pub set_pass_calls: Option<u32>,
     pub frame_index: usize,
     pub ms: Option<f64>,
     pub frame_time_ms: Option<f64>,
@@ -100,6 +102,8 @@ pub fn extract(frames: &[Frame]) -> CpuMetrics {
         frame_timeline: frames
             .iter()
             .map(|f| FrameSample {
+                draw_calls: f.quality.draw.then_some(f.draw_calls),
+                set_pass_calls: f.quality.set_pass.then_some(f.set_pass_calls),
                 frame_index: f.index,
                 ms: f.quality.cpu.then_some(f.cpu_ms),
                 frame_time_ms: f.quality.duration.then_some(f.duration_ms),

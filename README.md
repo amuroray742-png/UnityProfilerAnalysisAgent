@@ -4,7 +4,7 @@
 
 当前 CPU/GC 功能链路已完成本轮限定范围的本地验收：Editor dump 与 Unity 6000.3.23f1 `.data` 导入、指标聚合、慢帧/高分配帧定位、原始线程调用树，以及 Windows Claude Code ACP 的 MCP 查询、流式诊断、取消和重新诊断。两份录制的 137 个参考帧通过样本、CPU/GC 和站点归因对照，包含加载高峰和末帧；该证据不覆盖所有录制或 Unity 版本。缺失指标显示“—”，有效零值仍显示为零。AI 正文是辅助解释，须与原始样本核对。
 
-维护者确认本轮先完成 CPU/GC 与诊断；渲染、版本升级、签名及长期性能预算后续推进，不作为本轮功能验收阻塞。原生文件选择与 EXE/MSI 安装、启动、快捷方式、卸载已由维护者人工确认通过。完整可信分析 MVP 与正式发布仍按[状态台账](docs/project-status.md)分别验收。
+CPU/GC 与诊断之后，新增 Unity 6000.3.9f1 渲染计数对照与展示，见[渲染验收记录](docs/rendering-validation.md)。GPU 时间、版本升级、签名及长期性能预算仍后续推进。原生文件选择与 EXE/MSI 安装、启动、快捷方式、卸载已由维护者人工确认通过。完整可信分析 MVP 与正式发布仍按[状态台账](docs/project-status.md)分别验收。
 
 ## 文档导航
 
@@ -27,7 +27,8 @@
 | Editor dump JSON 导入 | 已验证 | 64 帧参考 dump 与合成样本；CPU/GC 范围与有效帧数明确 |
 | 项目约定 JSON 解析与指标聚合 | 部分实现 | 有合成输入单元测试，不是任意 Unity JSON 通用导入器 |
 | Unity 2022.3 `.data` | 部分实现 | 有采样树与 GC metadata 解码；Draw Call / SetPass 标为不可用 |
-| Unity 6000.3.23f1 `.data` | 部分实现 | 两份录制的指定范围通过 CPU/GC 对照；帧时间来自下一帧起点，末帧不可用；渲染计数与更广版本支持待完成 |
+| Unity 6000.3.23f1 `.data` | 部分实现 | 两份录制的指定范围通过 CPU/GC 对照；帧时间来自下一帧起点，末帧不可用；渲染计数已接入，渲染数值对照范围为另一个 6000.3.9f1 录制；更广版本待验证 |
+| Unity 6000.3.9f1 `.data` | 已验证（限定范围） | 单录制 2,000 帧五类渲染计数逐帧对照，1,998 帧有效；CPU/GC 对照 7 帧；GPU 与 SRP 收益不可用 |
 | `.pd3u` / `.raw` | 占位 | 文件头识别及帧数估算，不具备实质性能分析能力 |
 | ACP / MCP | 部分实现 | Windows Claude Code ACP 0.16.2 的 MCP 查询、流式诊断和取消通过；release 完成/取消/重新诊断已验证；其他 Agent 与广泛诊断准确性待验收 |
 | 跨平台安装包、体积和性能承诺 | 待验证 | 不能从框架支持推导出本项目已验证 |
@@ -61,7 +62,7 @@ npm run tauri:build
 
 1. 启动桌面应用，点击选择本地 Profiler 文件。
 2. 应用登记原文件路径，读取并解析，再展示指标与解析警告；不会复制文件到上传目录。
-3. 可选择 [ExtractProfilerDump.cs](docs/unity-scripts/ExtractProfilerDump.README.md) 导出的 `.dump.json`，或 Unity 6000.3.23f1 `.data`，查看 CPU/GC 指标及有效帧覆盖。`.data` 末帧的录制帧时间和全部渲染计数不可用；其他 Unity 6 版本仅提供帧头 CPU 估算。支持范围见[布局验证记录](docs/unity6-layout-research.md)。
+3. 可选择 [ExtractProfilerDump.cs](docs/unity-scripts/ExtractProfilerDump.README.md) 导出的 `.dump.json`，或 Unity 6000.3.23f1 / 6000.3.9f1 `.data`，查看 CPU/GC 指标及有效帧覆盖。`.data` 末帧的录制帧时间不可用。渲染页展示五类已记录计数与渲染 CPU marker；缺失计数保留覆盖率，详见[渲染验收](docs/rendering-validation.md)。其他 Unity 6 版本仅提供帧头 CPU 估算。支持范围见[布局验证记录](docs/unity6-layout-research.md)。
 4. CPU / GC 页分别从慢帧或高分配帧列表定位原始帧，选择线程和深度，分页查看真实样本及 GC 字节；完整帧下拉仍保留。重置会释放当前快照和查询源。
 5. 选择已配置登录的 ACP Agent，点击“开始 AI 诊断”。当前验证了 Claude Code ACP 0.16.2；Agent 通过 MCP 查询本次录制。可点击取消，认证或协议失败会明确显示原因。
 

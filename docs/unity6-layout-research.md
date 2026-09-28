@@ -2,6 +2,8 @@
 
 更新：2026-09-28。P0 第二阶段已完成两份录制及加载高峰、末帧的无扫描生产入口对照。验收范围限定 Windows Unity 6000.3.23f1；不能外推至未对照帧或其他版本。下文分别保留当前验收与早期研究证据。
 
+新增渲染阶段：6000.3.9f1 的结构兼容及 2,000 帧五类计数已对照，见[独立渲染验收记录](rendering-validation.md)。下述两录制 CPU/GC 证据仍限定原版本。
+
 ## 多录制与 Editor 重新导出验收
 
 仓库脚本原先将 ProfilerDriver 错误指向 UnityEditorInternal.Profiling；本机 API 和已能工作的项目副本均为 UnityEditorInternal.ProfilerDriver，现已修正。脚本通过 Unity CLI 在连接中的 Editor 正常导入、编译（failed=false），再使用 RawFrameDataView 重新导出。增加了 startFrame / maxFrames 范围参数和加载、空样本、序列化遗漏检查；默认 64 帧，范围上限 64。负数起点拒绝，以及从 1,999 开始请求两帧后实际导出一帧，都已在 Editor 中验证。
@@ -33,9 +35,9 @@
 
 关键修正是 **marker 定义跨帧保留**。参考录制首帧定义 3,430 个 marker，后续帧的空定义表不能清空映射。该录制的 stats / marker 格式与现有 2022 计数布局一致，旧 `unity6_markers` 中推测的另一套格式不用于新解码路径。
 
-正式导入输出唯一 Main Thread 根样本 CPU、inclusive 热点、全部线程 GC 及最近非 GC 父样本站点。GC 的索引记录、marker 名称和通用 metadata payload 必须交叉一致。录制帧时间使用相邻帧 start_ns 差值，转换公式为 f32(interval_ns) × f32(1e-6)，与参考 Editor 值一致；末帧或时间戳倒退时缺失，聚合显示覆盖率。渲染计数继续不可用。
+正式导入输出唯一 Main Thread 根样本 CPU、inclusive 热点、全部线程 GC 及最近非 GC 父样本站点。GC 的索引记录、marker 名称和通用 metadata payload 必须交叉一致。录制帧时间使用相邻帧 start_ns 差值，转换公式为 f32(interval_ns) × f32(1e-6)，与参考 Editor 值一致；末帧或时间戳倒退时缺失，聚合显示覆盖率。渲染计数现通过 Counter metadata 读取；对照范围见上述渲染记录。
 
-原始帧头、线程 ID、样本 ID、父节点和 metadata 数量保留在解码器结果中；当前应用汇总模型仍未提供完整调用树查询，这是后续 P1 工作。
+原始帧头、线程 ID、样本 ID、父节点和 metadata 数量保留在解码器结果中；应用已提供按帧/线程的原始调用树分页查询，见[查询契约](frame-queries.md)。
 
 ### 新增验收证据
 

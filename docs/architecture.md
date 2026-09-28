@@ -34,7 +34,7 @@ MCP：rmcp 服务 → 会话专属本机认证通道 → 应用 --mcp-bridge →
 |---|---|
 | [commands](../src-tauri/src/commands/mod.rs) | 文件、分析、查询、诊断与按 sessionId 取消命令 |
 | [parser](../src-tauri/src/parser/mod.rs) | 格式分派及 ParsedProfile / Frame / Sample；不等于所有格式都能完整解析 |
-| [data](../src-tauri/src/parser/data/mod.rs) | 分块读取；6000.3.23f1 使用顺序结构解码和跨帧 marker 状态，输出 CPU / GC；其他 Unity 6 版本仅提供帧头 CPU 估算，旧启发式扫描不参与指标 |
+| [data](../src-tauri/src/parser/data/mod.rs) | 分块读取；6000.3.23f1 / 6000.3.9f1 使用顺序结构解码和跨帧 marker 状态，输出 CPU / GC / 五类渲染计数；其他 Unity 6 版本仅提供帧头 CPU 估算，旧启发式扫描不参与指标 |
 | [extractor](../src-tauri/src/extractor/mod.rs) | 聚合快照；保留全帧时间线，无固定 20–50KB 上限 |
 | [state](../src-tauri/src/state/mod.rs) | 路径、快照、详情源和会话句柄；同文件诊断互斥、释放时取消 |
 | [acp_client.rs](../src-tauri/src/acp_client.rs) | ACP v1 会话与 MCP 生命周期；手写 JSON-RPC 消息状态机，尚未验证其他协议版本 |
@@ -49,7 +49,7 @@ MCP：rmcp 服务 → 会话专属本机认证通道 → 应用 --mcp-bridge →
 - FrameTimeStats 的 quality 包含 status（available / partial / unavailable / estimated）、source、reasons、validFrames、totalFrames。CPU 热点、GC 站点、渲染事件有独立质量信息；无效帧不参与分位数。估算混入部分数据时 status 为 partial，reasons 仍说明估算。
 - meta.frameCount 是实际分析帧数，declaredFrameCount 是来源声明的录制帧数，source 标识输入；durationMs 为有效帧时间之和，并附 durationQuality。CPU 时间线保留源 frameIndex、nullable ms 与独立 frameTimeMs。
 - GC 站点 DTO 使用 totalBytes / avgBytes / maxBytes，不再复用 ms 字段。Gen 回收次数和 SRP 节省没有观测数据，返回 null。
-- V1 缺 cpuMs 不用 durationMs 替代主线程时间；V2 估算明确标记。6000.3.23f1 data CPU 来自唯一主线程根样本，GC 来自全部线程的索引记录并与通用 metadata 交叉核对；录制帧时间来自相邻帧起始纳秒差，按 Editor 的 float32 转换，末帧或时间戳倒退时不可用。data 渲染计数及 RAW/PD3U 性能指标不可用。
+- V1 缺 cpuMs 不用 durationMs 替代主线程时间；V2 估算明确标记。6000.3.23f1 / 6000.3.9f1 data CPU 来自唯一主线程根样本，GC 来自全部线程的索引记录并与通用 metadata 交叉核对；录制帧时间来自相邻帧起始纳秒差，按 Editor 的 float32 转换，末帧或时间戳倒退时不可用。data 渲染计数由 Counter marker metadata 读取，按有效帧聚合；缺失与冲突不补零。渲染 CPU marker 不代表 GPU，SRP 收益及 RAW/PD3U 性能指标不可用。详见[渲染契约与验证](rendering-validation.md)。
 - 快照之外保留逐帧查询源：data 使用字节索引与 marker 状态，dump 使用自动清理的临时文件；查询保留原始父子关系和线程，不再用全局热点冒充调用树。详见[查询契约](frame-queries.md)。MCP 服务复用查询源，经本机认证桥提供 stdio；绑定桌面诊断会话并随会话撤销。
 - dump 与结构化 data 在每帧内合并同名 CPU 摘要，以及同线程、同归因名称的 GC 站点，保留调用次数、总量和最大值。摘要行数不再等于原始样本数；原始树、marker ID、索引与父子关系仍由查询源完整提供，不截断为 top N。
 - JSON 类型化反序列化避免完整 Value 树，仍持有输入字节与解析结果；data 累积全部 Frame。UI 重置和替换输入会释放登记、快照和查询源；在途查询结束后释放最后引用。独立解析进程、桌面 IPC、结果页渲染与 DOM 对照测量见[性能记录](performance-and-release.md)，完整桌面应用预算仍待验证，不承诺固定快照大小。

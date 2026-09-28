@@ -36,7 +36,7 @@ export interface CpuMetrics {
   mainThreadMs: FrameTimeStats;
   hotspotQuality: Quality;
   topHotspots: Hotspot[];
-  frameTimeline: Array<{ frameIndex: number; ms: number | null; frameTimeMs: number | null; gcAllocBytes: number | null }>;
+  frameTimeline: Array<{ drawCalls: number | null; setPassCalls: number | null; frameIndex: number; ms: number | null; frameTimeMs: number | null; gcAllocBytes: number | null }>;
 }
 
 export interface GcMetrics {
@@ -48,6 +48,9 @@ export interface GcMetrics {
 }
 
 export interface RenderingMetrics {
+  batches: FrameTimeStats;
+  triangles: FrameTimeStats;
+  vertices: FrameTimeStats;
   drawCalls: FrameTimeStats;
   setPassCalls: FrameTimeStats;
   batchesSavedBySrpBatcher: number | null;
@@ -97,6 +100,7 @@ export interface ErrorPayload {
 }
 
 export interface FrameInfo {
+  renderCounters: Record<string, number>;
   frameIndex: number; rawFrameId: number | null; rawDuplicateId: number | null;
   startNs: string | null; source: string; cpuMs: number | null;
   frameTimeMs: number | null; gcAllocBytes: number | null; warnings: string[];
