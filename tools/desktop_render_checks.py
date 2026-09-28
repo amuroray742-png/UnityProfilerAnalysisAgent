@@ -42,7 +42,7 @@ def run_render_checks(js, request, input_path, reference_path, output, report):
         else:
             assert '—' in card, card
         counters[label] = card
-    body = js('return document.body.innerText')
+    body = js('return document.body.textContent')
     assert '渲染 CPU marker 热点' in body and '不代表 GPU 时间' in body
     assert js('return [...document.querySelectorAll(".metric-card")].find(e=>e.querySelector(".metric-label").textContent==="SRP Batcher 节省")?.querySelector(".metric-value")?.textContent') == '—'
     (output / 'rendering.png').write_bytes(base64.b64decode(request('GET', '/screenshot')))

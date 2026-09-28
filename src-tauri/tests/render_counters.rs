@@ -252,6 +252,18 @@ fn counter_metadata_is_typed_thread_independent_and_marker_ids_are_capture_state
         let stats = extractor::rendering::extract(&[first, zero, missing]);
         assert_eq!(stats.draw_calls.quality.status, "partial");
         assert_eq!(stats.draw_calls.quality.valid_frames, 2);
+        assert!(stats
+            .draw_calls
+            .quality
+            .reasons
+            .iter()
+            .all(|r| r.starts_with("Draw Calls Count:")));
+        assert!(stats
+            .batches
+            .quality
+            .reasons
+            .iter()
+            .all(|r| r.starts_with("Batches Count:")));
         assert_eq!(stats.draw_calls.p95, Some(327.0));
         assert_eq!(stats.batches.p95, None);
         let wide = decoder

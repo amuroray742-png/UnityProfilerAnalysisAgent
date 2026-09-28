@@ -31,7 +31,7 @@
 
 ## 当前生产路径
 
-[Rust 结构解码器](../src-tauri/src/parser/data/unity6_structured.rs)从帧头连续读取 stats、辅助计数区段、marker 定义、线程头、样本和 metadata。它不接收 dump 信息，不搜索名称或候选字节。仅在文件声明版本为 `6000.3.23f1` 时接入正式导入；其他 Unity 6 版本的帧头 CPU 结果标记为 estimated。
+[Rust 结构解码器](../src-tauri/src/parser/data/unity6_structured.rs)从帧头连续读取 stats、辅助计数区段、marker 定义、线程头、样本和 metadata。它不接收 dump 信息，不搜索名称或候选字节。仅在文件声明版本为 `6000.3.23f1` 或 `6000.3.9f1` 时接入正式导入；其他 Unity 6 版本的帧头 CPU 结果标记为 estimated。
 
 关键修正是 **marker 定义跨帧保留**。参考录制首帧定义 3,430 个 marker，后续帧的空定义表不能清空映射。该录制的 stats / marker 格式与现有 2022 计数布局一致，旧 `unity6_markers` 中推测的另一套格式不用于新解码路径。
 

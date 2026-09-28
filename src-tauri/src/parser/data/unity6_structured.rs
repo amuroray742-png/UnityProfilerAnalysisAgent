@@ -104,9 +104,14 @@ impl DecodedFrame {
             {
                 render_counters.insert(counter.to_owned(), value);
             } else {
-                quality
-                    .reasons
-                    .push(format!("{counter}: 未记录有效计数或多个观测值冲突"));
+                let reason = if values.is_empty() {
+                    "未记录该计数"
+                } else if values.iter().any(Option::is_none) {
+                    "计数 metadata 缺失或未识别"
+                } else {
+                    "同帧多个观测值冲突"
+                };
+                quality.reasons.push(format!("{counter}: {reason}"));
             }
         }
         let draw = render_counters
@@ -117,6 +122,16 @@ impl DecodedFrame {
             .and_then(|v| u32::try_from(*v).ok());
         quality.draw = draw.is_some();
         quality.set_pass = set_pass.is_some();
+        for name in ["Draw Calls Count", "SetPass Calls Count"] {
+            if render_counters
+                .get(name)
+                .is_some_and(|v| *v > u32::MAX as u64)
+            {
+                quality
+                    .reasons
+                    .push(format!("{name}: 超出当前聚合字段范围"));
+            }
+        }
         quality.render = true;
         let render_events = self
             .threads

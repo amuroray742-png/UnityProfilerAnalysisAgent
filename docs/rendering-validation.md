@@ -51,3 +51,11 @@ python tools/desktop-smoke.py --render-input '<录制绝对路径.data>' --rende
 ```
 
 检查五张计数卡的 P95、最大值及覆盖率，渲染 CPU 标注、SRP 不可用和重置；截图及报告保存在忽略目录 `.cache/desktop-render/`。安装包没有在本轮重新验收。
+
+## 本次验收结果
+
+最终完整 Rust 测试 91 项通过、13 项环境测试默认忽略；前端 20 项、Python 研究回归 8 项、前端构建和 Windows release 构建通过。私有渲染测试显式执行通过（约 16.16 秒）；CPU/GC 独立对照范围见上文，不能把默认忽略算作通过。
+
+最终桌面自动化 6 组检查通过，包含原有公开 fixture 的 CPU/GC、释放和真实调用树 IPC，以及私有录制的五张渲染卡、覆盖率、GPU/SRP 边界和重置；实际导入至就绪约 2.58 秒。首轮计数已正确显示，但标题的 CSS 自动大写使脚本断言失败；修正为检查 DOM 原文后通过，并将卡片原因收敛为各自指标。截图已目视复核，报告与截图位于 `.cache/desktop-render/`，不提交私有内容。
+
+最终 release EXE SHA-256：`1e45b5b71dd70a117b569faad4b4598ac1fc7d44b7b65c3cc08d294b121bc3d8`。使用该 EXE 的公开 ACP/MCP 协议回归通过（环境相关 Agent 测试仍默认忽略）。本次未向真实 Agent 提交私有录制，也不扩大先前安装包或诊断正文的验收范围。
