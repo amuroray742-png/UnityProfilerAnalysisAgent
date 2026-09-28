@@ -177,3 +177,9 @@ data B 含结果页的进程树采样峰值为工作集 837.80 MiB / 私有内�
 维护者已明确授权使用 gh 推送并补充 LICENSE。已提交 `ffb6ec7` 至 `codex/trusted-unity6-analysis`，创建[草稿 PR #1](https://github.com/amuroray742-png/UnityProfilerAnalysisAgent/pull/1)。Windows CI 已触发，尚不提前标记通过；此前“等待推送授权”的交接记录已解除。
 
 沿用包清单声明的 MIT 许可证，版权填写为 `Copyright (c) 2026 amuroray742-png`（仓库所有者账号），保留 README 的参考项目说明，并纠正 Cargo 清单的仓库 URL。私有录制、缓存、截图和完整诊断报告没有提交。MSI 管理员/原生窗口验收与正式签名发布仍保留原边界。
+
+### 首次远端 Windows CI 通过（2026-09-28）
+
+提交 `05c19dc` 的 [PR CI](https://github.com/amuroray742-png/UnityProfilerAnalysisAgent/actions/runs/36397645450) 与 push CI 均成功。PR job 从 08:29:22 到 08:44:55 UTC，执行前端回归/构建、完整 Rust、研究脚本、MSI/NSIS 构建、release 协议、NSIS 安装后协议及卸载、公开 fixture 性能冒烟，并上传未签名包。该记录覆盖一次全新远端 Windows 环境，不覆盖真实 Agent 或私有录制。
+
+后续追加 MSI per-machine 静默安装/安装后协议/卸载脚本与 CI 步骤；通过 MSI 数据库读取 ProductCode/UpgradeCode，拒绝覆盖已有安装，不请求 UAC 提权。本机只读包检查通过，实际 MSI 安装须由具备管理员权限的 runner 执行，当前不提前计为通过。具体日志将作为 CI artifact 保留。

@@ -44,6 +44,8 @@ jobs:
         run: cargo +stable build --manifest-path src-tauri/Cargo.toml --release --locked --example profile_benchmark
       - name: NSIS installation and removal
         run: ./tools/test-windows-install.ps1
+      - name: MSI machine installation and removal
+        run: ./tools/test-windows-msi.ps1
       - name: Public fixture benchmark smoke
         run: ./tools/measure-profile.ps1 -InputPath ./src-tauri/tests/fixtures/editor-dump.json -Repeats 2
       - uses: actions/upload-artifact@v7
@@ -53,4 +55,16 @@ jobs:
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
+          retention-days: 7
+      - name: Installation validation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-installation-evidence
+          path: |
+            .cache/installer-smoke/*.json
+            .cache/installer-smoke/*.log
+            .cache/msi-smoke/*.json
+            .cache/msi-smoke/*.log
+          if-no-files-found: warn
           retention-days: 7
