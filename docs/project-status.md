@@ -30,7 +30,7 @@ P0 第二阶段已接通无扫描生产路径：[二进制布局对照记录](un
 | MCP stdio 服务 | 已验证 | 真实桥进程通过握手、查询、隔离与退出；已注入 ACP 会话，范围为公开 fixture |
 | ACP / UI 取消 | 部分实现 | Windows Claude Code ACP 0.16.2 的真实查询、流式回答与取消通过；hook 会话过滤及 release 界面完成/取消/重新诊断通过 |
 | Editor 脚本编译与重新导出 | 已验证 | 正常 Editor 资源编译、第二录制 64 帧、加载区间 8 帧及末帧；范围参数与输出有效性校验；全新 batch 启动待验证 |
-| 安装包、跨平台及性能预算 | 部分实现 | 独立解析和桌面进程/渲染已测量；MSI/NSIS 已构建，NSIS 安装后界面/协议/卸载通过；MSI、远端 CI、长期预算及跨平台仍待验证，见[记录](performance-and-release.md) |
+| 安装包、跨平台及性能预算 | 部分实现 | 独立解析和桌面进程/渲染已测量；MSI/NSIS 已构建，NSIS 安装后界面/协议/卸载通过；MSI 管理员静默安装/协议/卸载及远端 CI 已通过；交互安装、长期预算及跨平台仍待验证，见[记录](performance-and-release.md) |
 
 ## P0 第一阶段变更
 
@@ -56,7 +56,7 @@ P0 第二阶段已接通无扫描生产路径：[二进制布局对照记录](un
 | npm test | 15 项通过（4 项格式化、4 项指标组件、3 项调用树组件、4 项导入/诊断生命周期） |
 | npm run build | TypeScript / Vite 构建通过 |
 
-原有 unused variable / dead code 与链接器提示仍存在。安装包构建和独立解析进程峰值已测量；原生文件选择框、全新 Unity batch 启动、MSI/安装向导及完整应用内存预算仍待验收。
+原有 unused variable / dead code 与链接器提示仍存在。安装包构建和独立解析进程峰值已测量；原生文件选择框、全新 Unity batch 启动、MSI GUI/安装向导及完整应用内存预算仍待验收。
 
 生产入口私有数据测试：
 
@@ -183,3 +183,9 @@ data B 含结果页的进程树采样峰值为工作集 837.80 MiB / 私有内�
 提交 `05c19dc` 的 [PR CI](https://github.com/amuroray742-png/UnityProfilerAnalysisAgent/actions/runs/36397645450) 与 push CI 均成功。PR job 从 08:29:22 到 08:44:55 UTC，执行前端回归/构建、完整 Rust、研究脚本、MSI/NSIS 构建、release 协议、NSIS 安装后协议及卸载、公开 fixture 性能冒烟，并上传未签名包。该记录覆盖一次全新远端 Windows 环境，不覆盖真实 Agent 或私有录制。
 
 后续追加 MSI per-machine 静默安装/安装后协议/卸载脚本与 CI 步骤；通过 MSI 数据库读取 ProductCode/UpgradeCode，拒绝覆盖已有安装，不请求 UAC 提权。本机只读包检查通过，实际 MSI 安装须由具备管理员权限的 runner 执行，当前不提前计为通过。具体日志将作为 CI artifact 保留。
+
+### MSI 管理员安装验收通过（2026-09-28）
+
+提交 `3cd15e8` 的 [push CI](https://github.com/amuroray742-png/UnityProfilerAnalysisAgent/actions/runs/36400361838) 与 [PR CI](https://github.com/amuroray742-png/UnityProfilerAnalysisAgent/actions/runs/36400633656) 均全部通过。已下载并核对 `windows-installation-evidence`：MSI 安装、安装后 8 项协议回归、卸载成功，安装目录及产品登记清除，未保留 vendor 登记。2 项真实 Agent 环境测试明确跳过，不计入这 8 项。
+
+同次 NSIS 安装/协议/卸载通过，其安装路径偏好由验收脚本清理。CI 不覆盖 GUI、原生文件选择框、交互向导或版本升级。PR #1 已由维护者合并；MSI 增量在[草稿 PR #2](https://github.com/amuroray742-png/UnityProfilerAnalysisAgent/pull/2) 中审阅。该证据解除管理员静默安装的环境阻塞，不改变正式发布与可信分析 MVP 尚未完成的结论。

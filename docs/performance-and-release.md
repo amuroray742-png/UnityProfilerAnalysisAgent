@@ -219,4 +219,17 @@ data B 十轮 DOM 事件对照完成相同的结果页保留和重置。重置�
 ./tools/test-windows-msi.ps1              # 必须已是管理员；不会请求 UAC
 ```
 
-本机 InspectOnly 通过，新增远端步骤待实际执行；失败不会被当作跳过。安装/卸载日志与结果在 `.cache/msi-smoke/`，CI 的 `windows-installation-evidence` 同时保存 NSIS 和 MSI 日志，失败时也尝试上传。
+本机 InspectOnly 通过；后续 `3cd15e8` 的远端安装步骤也已通过，详见下节。失败不会被当作跳过。安装/卸载日志与结果在 `.cache/msi-smoke/`，CI 的 `windows-installation-evidence` 同时保存 NSIS 和 MSI 日志，失败时也尝试上传。
+
+### MSI 与 NSIS 远端安装证据（2026-09-28）
+
+`3cd15e8` 的 [push 工作流](https://github.com/amuroray742-png/UnityProfilerAnalysisAgent/actions/runs/36400361838) 和 [PR 工作流](https://github.com/amuroray742-png/UnityProfilerAnalysisAgent/actions/runs/36400633656) 均成功。下载 push 运行的 `windows-installation-evidence` 后，核对结果如下：
+
+| 安装方式 | 安装 / 协议 / 卸载 | 残留边界 |
+|---|---|---|
+| MSI per-machine | 三项均为 true；8 项协议测试通过，2 项真实 Agent 测试忽略 | 安装目录和产品登记已清除，vendorRegistryRetained=false |
+| NSIS current-user | 三项均为 true；8 项协议测试通过 | 保留的安装路径偏好由脚本清理；CI GUI 字段为 null |
+
+MSI 安装包 SHA-256 为 `07D4F650ECD0D1EFAA32B5E6354CC33D1234CDEB0FE0C986D17ECF0C38422B56`，安装后 EXE 为 `CC9F1846422CB6E8DA6EE8363657919934A8B5B51CEA4866726F1180D8AB3D6F`。ProductCode 为 `{FED84D99-2DFB-4D1E-AC1E-D5EF489CF2D8}`。MSI 的 install.log、uninstall.log、protocol.log 与 result.json 已核对；本地证据下载目录为 `.cache/msi-ci-evidence/`，不提交日志原件。
+
+NSIS 安装包 SHA-256 为 `DA8C6F1B71CA73C2518A7290C1A4FEF9B1D038EA69681768B7BF341763355751`。此 CI 不证明 GUI 或版本升级；基线 CI NSIS 的本机安装后界面复验与本次静默安装分别记录。Artifact 按工作流保留 7 天，哈希及运行链接在此长期记录，不将临时 artifact 链接当成正式分发渠道。
