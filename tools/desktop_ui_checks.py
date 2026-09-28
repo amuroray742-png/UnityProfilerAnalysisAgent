@@ -89,12 +89,14 @@ def run_ui(js, request, root, output, report, real_agent=False):
     wait('return document.body.innerText.includes("2 个样本")')
     assert '8 B' in text()
     shot('worker-tree')
-    click('select[aria-label="帧"] option[value="12"]')
+    assert js('return [...document.querySelectorAll("table[aria-label=慢帧列表] tbody tr")].map(r=>r.cells[0].textContent)') == ['10', '12']
+    click('button[aria-label="查看帧 12 调用树"]')
     wait('return document.body.innerText.includes("1 个样本")')
     assert '帧 GC 0 B' in text()
     assert not js('return document.querySelector("select[aria-label=线程]").innerText.includes("Worker")')
-    assert js('return document.querySelector("section[aria-label=原始调用树] tbody tr td:last-child").textContent') == '—'
+    assert js('return document.querySelector("table[aria-label=调用树样本] tbody tr td:last-child").textContent') == '—'
     shot('frame12-zero-total')
+    report['checks'].append('slow-frame ranking jumps to original frame 12, resets Worker selection and preserves zero GC')
     button('GC')
     assert '32 B' in card('总 GC 分配') and '—' in card('Gen0 回收')
     assert 'Main Thread #0 / Update' in text() and '24 B' in text() and 'Worker #1 / Worker' in text()
@@ -113,12 +115,12 @@ def run_ui(js, request, root, output, report, real_agent=False):
     load('pagination')
     button('CPU')
     wait('return document.body.innerText.includes("211 个样本")')
-    assert js('return document.querySelectorAll("section[aria-label=原始调用树] tbody tr").length') == 200
+    assert js('return document.querySelectorAll("table[aria-label=调用树样本] tbody tr").length') == 200
     button('下一页样本')
-    wait('return document.querySelectorAll("section[aria-label=原始调用树] tbody tr").length===11')
-    assert js('return document.querySelector("section[aria-label=原始调用树] tbody td").textContent') == '200 / 0'
+    wait('return document.querySelectorAll("table[aria-label=调用树样本] tbody tr").length===11')
+    assert js('return document.querySelector("table[aria-label=调用树样本] tbody td").textContent') == '200 / 0'
     button('上一页样本')
-    wait('return document.querySelectorAll("section[aria-label=原始调用树] tbody tr").length===200')
+    wait('return document.querySelectorAll("table[aria-label=调用树样本] tbody tr").length===200')
     report['checks'].append('zero vs partial GC, invalid input recovery, 211-node forward/back pagination')
     print('UI: overview, tree controls, GC quality, error recovery and pagination passed', flush=True)
     load('normal')

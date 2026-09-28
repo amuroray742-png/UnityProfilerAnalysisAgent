@@ -227,7 +227,7 @@ export default function App() {
                 hotspots={state.snapshot.cpu.topHotspots}
                 valueColumn="ms"
               />
-              {state.upload && <FrameExplorer key={state.upload.fileId} fileId={state.upload.fileId} frames={state.snapshot.cpu.frameTimeline} />}
+              {state.upload && <FrameExplorer key={state.upload.fileId} fileId={state.upload.fileId} frames={state.snapshot.cpu.frameTimeline} quality={state.snapshot.cpu.mainThreadMs.quality} />}
             </>
           )}
 
