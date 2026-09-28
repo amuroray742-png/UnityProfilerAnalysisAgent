@@ -38,7 +38,7 @@ session/update 中的 agent_message_chunk 才作为回答正文；其他会话�
 | 工具 | 参数 | 语义 |
 |---|---|---|
 | performance_session_summary | 无 | 聚合指标、质量与 metricSemantics（分位数算法、inclusive CPU 和覆盖语义），省略逐帧时间线；不承诺固定字节大小 |
-| performance_frames | start、limit | 时间线数组偏移，limit 为 1–500，默认 200；返回原始帧号 |
+| performance_frames | start、limit | 时间线数组偏移，limit 为 1–500，默认 200；返回原始帧号、主线程/录制帧时间与 gcAllocBytes（缺失为 null） |
 | performance_frame | frame_index、start、limit | 原始帧指标及线程分页，最多 128 个线程 |
 | performance_cpu_hierarchy | frame_index、thread_index、start、limit、max_depth | 原始前序树，最多 500 个样本、64 层；默认唯一 Main Thread |
 | performance_analysis | focus | 只对 available 指标应用规则，其余返回质量与警告 |

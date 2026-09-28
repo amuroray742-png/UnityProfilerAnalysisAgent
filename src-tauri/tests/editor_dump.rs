@@ -31,6 +31,8 @@ async fn dump_import_preserves_scope_units_and_zero() {
     assert_eq!(update.total_bytes, 24);
     assert_eq!(update.call_count, 2);
     assert_eq!(s.cpu.frame_timeline[1].frame_index, 12);
+    assert_eq!(s.cpu.frame_timeline[0].gc_alloc_bytes, Some(32));
+    assert_eq!(s.cpu.frame_timeline[1].gc_alloc_bytes, Some(0));
     assert_eq!(s.cpu.frame_timeline[0].frame_time_ms, Some(16.0));
 }
 #[tokio::test]
@@ -156,6 +158,8 @@ async fn gc_missing_or_inconsistent_is_partial_not_zero() {
         let p = parse(v).await.unwrap();
         let s = extractor::extract(&p);
         assert!(!p.frames[0].quality.gc);
+        assert_eq!(s.cpu.frame_timeline[0].gc_alloc_bytes, None);
+        assert_eq!(s.cpu.frame_timeline[1].gc_alloc_bytes, Some(0));
         assert!(p.frames[0].gc_alloc_sites.is_empty());
         assert_eq!(s.gc.total_alloc_bytes, Some(0)); // second frame is a real zero
         assert_eq!(s.gc.alloc_per_frame_bytes.quality.status, "partial");
@@ -308,6 +312,9 @@ async fn real_dump_production_path() {
         Some(expected.frames.iter().map(|f| f.gc_alloc_bytes_total).sum())
     );
     assert_eq!(s.gc.alloc_per_frame_bytes.quality.valid_frames, 64);
+    for (actual, reference) in s.cpu.frame_timeline.iter().zip(&expected.frames) {
+        assert_eq!(actual.gc_alloc_bytes, Some(reference.gc_alloc_bytes_total));
+    }
     println!(
         "dump bytes={}, imported={}, declared={}, elapsed={:?}",
         p.meta.file_size_bytes,

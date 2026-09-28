@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { getFrameDetails, getCpuHierarchy } from '../lib/tauri';
 import type { CpuMetrics, FramePage, HierarchyPage } from '../types';
 
-export function FrameExplorer({ fileId, frames, quality }: { fileId: string; frames: CpuMetrics['frameTimeline']; quality: CpuMetrics['mainThreadMs']['quality'] }) {
+export function FrameExplorer({ fileId, frames, quality, mode = 'cpu' }: { fileId: string; frames: CpuMetrics['frameTimeline']; quality: CpuMetrics['mainThreadMs']['quality']; mode?: 'cpu' | 'gc' }) {
   const [frame, setFrame] = useState(frames[0]?.frameIndex ?? 0);
   const [thread, setThread] = useState<number | null>(null);
   const [depth, setDepth] = useState(8);
@@ -13,8 +13,9 @@ export function FrameExplorer({ fileId, frames, quality }: { fileId: string; fra
   const [error, setError] = useState('');
   const start = offsets[offsets.length - 1];
   const treeHeading = useRef<HTMLHeadingElement>(null);
-  const availableFrames = useMemo(() => frames.filter(f => f.ms !== null && Number.isFinite(f.ms)), [frames]);
-  const slowFrames = useMemo(() => [...availableFrames].sort((a, b) => b.ms! - a.ms! || a.frameIndex - b.frameIndex).slice(0, 20), [availableFrames]);
+  const isGc = mode === 'gc';
+  const availableFrames = useMemo(() => frames.map(f => ({ ...f, value: mode === 'gc' ? f.gcAllocBytes : f.ms })).filter(f => f.value !== null && Number.isFinite(f.value)), [frames, mode]);
+  const slowFrames = useMemo(() => [...availableFrames].sort((a, b) => b.value! - a.value! || a.frameIndex - b.frameIndex).slice(0, 20), [availableFrames]);
   function selectFrame(index: number) {
     setFrame(index); setThread(null); setThreadStart(0); setOffsets([0]);
   }
@@ -33,15 +34,15 @@ export function FrameExplorer({ fileId, frames, quality }: { fileId: string; fra
     return () => { active = false; };
   }, [fileId, frame, thread, start, depth]);
   return <section className="section" aria-label="原始调用树">
-    <h3>慢帧定位</h3>
-    <p>按主线程耗时降序显示最多 20 帧，可查看 {availableFrames.length}/{frames.length} 帧。录制帧时间单独展示，不用于主线程排序。</p>
-    {quality.status === 'estimated' && <p>主线程时间为估算值，不能据此确定 CPU 瓶颈。</p>}
-    {quality.status === 'partial' && <p>仅对有主线程时间的帧排序，缺失帧不按零值处理。</p>}
-    {slowFrames.length === 0 ? <p>没有可用于慢帧排序的主线程时间。</p> : <div style={{ overflowX: 'auto' }}>
-      <table className="hotspot-table" aria-label="慢帧列表">
-        <thead><tr><th>原始帧号</th><th>主线程 ms</th><th>录制帧时间 ms</th><th>调用树</th></tr></thead>
+    <h3>{isGc ? '高分配帧定位' : '慢帧定位'}</h3>
+    <p>按{isGc ? 'GC 分配字节' : '主线程耗时'}降序显示最多 20 帧，可查看 {availableFrames.length}/{frames.length} 帧。{isGc ? 'GC 合计覆盖全部已导出线程；进入调用树后可切换线程核对分配。' : '录制帧时间单独展示，不用于主线程排序。'}</p>
+    {quality.status === 'estimated' && <p>{isGc ? 'GC 分配为估算值，不能据此确定分配问题。' : '主线程时间为估算值，不能据此确定 CPU 瓶颈。'}</p>}
+    {quality.status === 'partial' && <p>仅对有{isGc ? '有效 GC 分配' : '主线程时间'}的帧排序，缺失帧不按零值处理。</p>}
+    {slowFrames.length === 0 ? <p>{isGc ? '没有可用于排序的有效 GC 分配数据。' : '没有可用于慢帧排序的主线程时间。'}</p> : <div style={{ overflowX: 'auto' }}>
+      <table className="hotspot-table" aria-label={isGc ? '高分配帧列表' : '慢帧列表'}>
+        <thead><tr><th>原始帧号</th><th>{isGc ? 'GC 分配字节' : '主线程 ms'}</th><th>录制帧时间 ms</th><th>调用树</th></tr></thead>
         <tbody>{slowFrames.map(f => <tr key={f.frameIndex}>
-          <td>{f.frameIndex}</td><td>{f.ms!.toFixed(4)}</td>
+          <td>{f.frameIndex}</td><td>{isGc ? `${f.value} B` : f.value!.toFixed(4)}</td>
           <td>{f.frameTimeMs === null ? '—' : f.frameTimeMs.toFixed(4)}</td>
           <td><button onClick={() => { selectFrame(f.frameIndex); treeHeading.current?.scrollIntoView?.({ block: 'start' }); }} aria-label={`查看帧 ${f.frameIndex} 调用树`}>查看调用树</button></td>
         </tr>)}</tbody>

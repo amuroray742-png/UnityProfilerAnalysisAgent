@@ -267,6 +267,7 @@ export default function App() {
                 quality={state.snapshot.gc.siteQuality}
                 valueColumn="bytes"
               />
+              {state.upload && <FrameExplorer key={`gc-${state.upload.fileId}`} fileId={state.upload.fileId} frames={state.snapshot.cpu.frameTimeline} quality={state.snapshot.gc.allocPerFrameBytes.quality} mode="gc" />}
             </>
           )}
 

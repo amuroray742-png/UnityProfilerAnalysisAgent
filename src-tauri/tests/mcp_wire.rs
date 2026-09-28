@@ -114,6 +114,12 @@ async fn shipped_stdio_binary_serves_real_tree_and_validates_arguments() {
     assert!(summary["result"]["structuredContent"]["cpu"]
         .get("frameTimeline")
         .is_none());
+    let frames = client.call("performance_frames", json!({"start":0,"limit":2})).await;
+    let frames = &frames["result"]["structuredContent"]["frames"];
+    assert_eq!(frames[0]["frameIndex"], 10);
+    assert_eq!(frames[0]["gcAllocBytes"], 32);
+    assert_eq!(frames[1]["frameIndex"], 12);
+    assert_eq!(frames[1]["gcAllocBytes"], 0);
     // Zero is retained in the population: rounded-index p50 of [0,32] is 32,
     // not an average. The tool must explain this alongside the actual metric.
     let summary_data = &summary["result"]["structuredContent"];

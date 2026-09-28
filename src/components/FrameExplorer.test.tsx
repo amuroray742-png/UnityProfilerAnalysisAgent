@@ -5,7 +5,7 @@ import { getCpuHierarchy, getFrameDetails } from '../lib/tauri';
 import type { HierarchyPage, Quality } from '../types';
 vi.mock('../lib/tauri', () => ({ getCpuHierarchy: vi.fn(), getFrameDetails: vi.fn() }));
 const quality: Quality = { status: 'available', source: 'fixture', reasons: [], validFrames: 2, totalFrames: 2 };
-const frames = [{ frameIndex: 10, ms: 1, frameTimeMs: 2 }, { frameIndex: 12, ms: 2, frameTimeMs: null }];
+const frames = [{ frameIndex: 10, ms: 1, frameTimeMs: 2, gcAllocBytes: 0 }, { frameIndex: 12, ms: 2, frameTimeMs: null, gcAllocBytes: 0 }];
 const page = (index: number): HierarchyPage => ({
   info: { frameIndex: index, rawFrameId: null, rawDuplicateId: null, startNs: null, source: 'fixture', cpuMs: 1, frameTimeMs: 2, gcAllocBytes: 0, warnings: [] },
   thread: { threadIndex: 17, threadId: '18446744073709551615', name: 'Main Thread', group: null, sampleCount: 3 },
@@ -67,10 +67,10 @@ it('ignores an old frame response and clears old rows on unavailable input', asy
 
 it('ranks CPU independently of recorded frame time, excludes missing values and keeps zero', async () => {
   render(<FrameExplorer fileId="a" quality={{ ...quality, status: 'partial', validFrames: 3, totalFrames: 4 }} frames={[
-    { frameIndex: 10, ms: 1, frameTimeMs: 90 },
-    { frameIndex: 12, ms: 20, frameTimeMs: null },
-    { frameIndex: 30, ms: null, frameTimeMs: 100 },
-    { frameIndex: 44, ms: 0, frameTimeMs: 0 },
+    { frameIndex: 10, ms: 1, frameTimeMs: 90, gcAllocBytes: 0 },
+    { frameIndex: 12, ms: 20, frameTimeMs: null, gcAllocBytes: 0 },
+    { frameIndex: 30, ms: null, frameTimeMs: 100, gcAllocBytes: 0 },
+    { frameIndex: 44, ms: 0, frameTimeMs: 0, gcAllocBytes: 0 },
   ]} />);
   await screen.findByText('Frame 10');
   const rows = within(screen.getByRole('table', { name: '慢帧列表' })).getAllByRole('row').slice(1);
@@ -89,7 +89,7 @@ it('ranks CPU independently of recorded frame time, excludes missing values and 
   expect(getCpuHierarchy).toHaveBeenLastCalledWith('a', 12, null, 0, 200, 8);
 });
 it('limits ranking to 20 rows and explicitly labels estimated CPU', async () => {
-  render(<FrameExplorer fileId="a" quality={{ ...quality, status: 'estimated' }} frames={Array.from({ length: 25 }, (_, i) => ({ frameIndex: i * 2, ms: i, frameTimeMs: null }))} />);
+  render(<FrameExplorer fileId="a" quality={{ ...quality, status: 'estimated' }} frames={Array.from({ length: 25 }, (_, i) => ({ frameIndex: i * 2, ms: i, frameTimeMs: null, gcAllocBytes: 0 }))} />);
   await screen.findByText('Frame 0');
   expect(screen.getByText(/主线程时间为估算值/)).toBeInTheDocument();
   expect(within(screen.getByRole('table', { name: '慢帧列表' })).getAllByRole('row')).toHaveLength(21);
@@ -98,8 +98,26 @@ it('limits ranking to 20 rows and explicitly labels estimated CPU', async () => 
   expect(screen.getByLabelText('帧').querySelectorAll('option')).toHaveLength(25);
 });
 it('does not invent slow frames when CPU is unavailable', async () => {
-  render(<FrameExplorer fileId="a" quality={{ ...quality, status: 'unavailable', validFrames: 0 }} frames={[{ frameIndex: 10, ms: null, frameTimeMs: 99 }]} />);
+  render(<FrameExplorer fileId="a" quality={{ ...quality, status: 'unavailable', validFrames: 0 }} frames={[{ frameIndex: 10, ms: null, frameTimeMs: 99, gcAllocBytes: 0 }]} />);
   await screen.findByText('Frame 10');
   expect(screen.getByText('没有可用于慢帧排序的主线程时间。')).toBeInTheDocument();
   expect(screen.queryByRole('table', { name: '慢帧列表' })).not.toBeInTheDocument();
+});
+
+it('ranks GC across all threads independently of CPU and drills into the original frame', async () => {
+  render(<FrameExplorer fileId="a" mode="gc" quality={{ ...quality, status: 'partial', validFrames: 2, totalFrames: 3 }} frames={[
+    { frameIndex: 10, ms: 100, frameTimeMs: 120, gcAllocBytes: 0 },
+    { frameIndex: 12, ms: null, frameTimeMs: null, gcAllocBytes: 4096 },
+    { frameIndex: 30, ms: 90, frameTimeMs: 110, gcAllocBytes: null },
+  ]} />);
+  await screen.findByText('Frame 10');
+  const rows = within(screen.getByRole('table', { name: '高分配帧列表' })).getAllByRole('row').slice(1);
+  expect(rows.map(row => within(row).getAllByRole('cell')[0].textContent)).toEqual(['12', '10']);
+  expect(within(rows[0]).getAllByRole('cell')[1]).toHaveTextContent('4096 B');
+  expect(within(rows[1]).getAllByRole('cell')[1]).toHaveTextContent('0 B');
+  expect(screen.getByText(/全部已导出线程/)).toBeInTheDocument();
+  expect(screen.getByText(/有效 GC 分配.*缺失帧不按零值处理/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '查看帧 12 调用树' }));
+  await screen.findByText('Frame 12');
+  expect(getCpuHierarchy).toHaveBeenLastCalledWith('a', 12, null, 0, 200, 8);
 });
