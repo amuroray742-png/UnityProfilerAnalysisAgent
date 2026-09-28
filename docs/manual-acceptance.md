@@ -6,11 +6,24 @@
 
 维护者在本次会话提供 normal.json 导入后的应用截图，并确认取消选择时“无报错”。截图显示分析 2 帧 / 录制声明 20 帧、主线程 P95 12.00 ms、GC 每帧 P95 32 B，以及不可用的 Draw Call。由此记录“取消无报错、随后选择公开 fixture 并正常导入”人工验收通过，不再列为阻塞项。
 
-证据来源为维护者截图和文字确认，不是 Windows 控制工具自动验收。截图未提供程序哈希，结论仅覆盖本次本机运行，不外推所有安装包。交互安装向导、快捷方式、MSI GUI 与版本升级仍未验收。
+证据来源为维护者截图和文字确认，不是 Windows 控制工具自动验收。截图未提供程序哈希，结论仅覆盖本次本机运行，不外推所有安装包。交互安装向导、快捷方式及 MSI GUI 已在后续人工反馈中通过，见下节；版本升级未验收。
+
+## 安装包人工验收（2026-09-28）
+
+维护者按照本会话提供的本地安装包操作步骤，明确反馈以下结果：
+
+| 安装包 | 交互安装 | 界面启动 | 快捷方式 | 卸载 |
+|---|---|---|---|---|
+| EXE（NSIS） | 通过 | 通过 | 通过 | 通过 |
+| MSI | 通过 | 通过 | 通过 | 通过 |
+
+步骤指定 `src-tauri/target/release/bundle/nsis/Unity Profiler Analysis Agent_0.1.0_x64-setup.exe` 和 `src-tauri/target/release/bundle/msi/Unity Profiler Analysis Agent_0.1.0_x64_en-US.msi`，依次安装和卸载，检查开始菜单及所创建的桌面快捷方式。结果来源为维护者文字确认，未附安装包哈希或独立安装日志；不将它归为 CI 或工具自动验收，不外推其他安装包、版本升级或平台。
+
+本次反馈解除交互安装、快捷方式与 MSI 界面启动的人工验收阻塞。原生文件选择也已单独通过。正式发布身份与签名安排、版本升级和长期性能预算仍保留独立边界。
 
 ## 准备
 
-在仓库根目录运行 `python tools/prepare-manual-fixtures.py`，生成 `.cache/manual-fixtures/` 下的 5 个 JSON。它们全部来自公开人工 fixture，不包含私有录制。双击 `src-tauri/target/release/unity-profiler-analysis-agent.exe` 启动应用。需要核对安装后行为时，使用 `src-tauri/target/release/bundle/nsis/` 中的安装包；当前用户模式静默安装和卸载已经通过，交互向导与快捷方式尚未测试。
+在仓库根目录运行 `python tools/prepare-manual-fixtures.py`，生成 `.cache/manual-fixtures/` 下的 5 个 JSON。它们全部来自公开人工 fixture，不包含私有录制。双击 `src-tauri/target/release/unity-profiler-analysis-agent.exe` 启动应用。需要核对安装后行为时，使用 `src-tauri/target/release/bundle/nsis/` 中的安装包；当前用户模式静默安装和卸载已经通过，交互向导与快捷方式已由维护者人工验收通过。
 
 ## 界面检查
 
@@ -42,8 +55,8 @@
 
 ## 安装与发布门槛
 
-- NSIS 向导：安装路径选择、开始菜单/桌面快捷方式、启动和卸载；确认默认保留安装路径偏好，是否删除应用数据由用户选择。
-- MSI：perMachine 静默安装、安装后 8 项协议回归、卸载及残留检查已在管理员 CI runner 通过；交互向导、GUI 和版本升级仍未覆盖。
+- NSIS 向导：安装、启动、快捷方式和卸载已由维护者确认通过；安装路径偏好残留由前述脚本记录，人工确认不扩展为彻底清除所有应用数据。
+- MSI：perMachine 静默安装、安装后 8 项协议回归、卸载及残留检查已在管理员 CI runner 通过；交互向导、GUI、快捷方式和卸载另有维护者人工确认；版本升级仍未覆盖。
 - 远端 CI：PR #1 已合并；提交 `3cd15e8` 的 [Windows CI](https://github.com/amuroray742-png/UnityProfilerAnalysisAgent/actions/runs/36400361838) 全部通过，MSI 验收增量见[草稿 PR #2](https://github.com/amuroray742-png/UnityProfilerAnalysisAgent/pull/2)。安装包本地生成不等于发布版本。
 - 发布身份：确认 `com.ray.unity-profiler-analysis-agent`、维护者名称、MIT 许可证版权归属与是否签名；已按维护者授权补充 MIT LICENSE，版权账号为 amuroray742-png。
 - 完整应用内存与并发查询预算、更多录制/版本证据仍需扩充，独立解析进程的峰值不等于桌面总占用。
