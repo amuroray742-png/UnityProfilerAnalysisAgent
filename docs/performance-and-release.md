@@ -207,3 +207,29 @@ data B 十轮 DOM 事件对照完成相同的结果页保留和重置。重置�
 本次进程树采样峰值工作集/私有内存为 761.93/587.14 MiB；第十轮重置后的私有内存约 397.16 MiB，自然空闲后 381.32 MiB、诊断 GC 后 351.77 MiB，启动基线 287.22 MiB。进程内存仍未完全回到基线，不将诊断 GC 当成正常释放策略，也不将一次十轮运行视为长期无泄漏或严格容量保证。
 
 报告及采样为 `.cache/desktop-memory/heap-dom-control-10-result.json` / `heap-dom-control-10-samples.json`。应用源代码和安装包未改；本次交付是可复现的测量对照与归因证据。实际原生点击、Agent 进程占用、长期运行及更多录制仍各有独立验证边界。
+
+### 远端 CI 与 MSI 后续验收
+
+`05c19dc` 的[Windows PR 工作流](https://github.com/amuroray742-png/UnityProfilerAnalysisAgent/actions/runs/36397645450)全部成功，并生成 `windows-unsigned-validation`（4,117,992 字节，包含未签名 MSI/NSIS）。这项记录更新了上文历史“远端尚未执行”的状态；新 runner 上已完成 NSIS 静默安装、安装后协议及卸载。
+
+新增[MSI 回归脚本](../tools/test-windows-msi.ps1)，通过 Windows Installer 数据库只读取得产品标识，检查无已有相关产品/目录/登记后，在已具备管理员权限的环境中执行 per-machine 安装、确认 HKLM 安装路径、对安装后的 EXE 运行 8 项协议回归，再卸载并验证目录及登记清除。不覆盖版本升级、交互向导或 GUI。命令依据 [Microsoft msiexec 文档](https://learn.microsoft.com/windows-server/administration/windows-commands/msiexec)。
+
+```powershell
+./tools/test-windows-msi.ps1 -InspectOnly # 无需管理员，仅核对包信息
+./tools/test-windows-msi.ps1              # 必须已是管理员；不会请求 UAC
+```
+
+本机 InspectOnly 通过；后续 `3cd15e8` 的远端安装步骤也已通过，详见下节。失败不会被当作跳过。安装/卸载日志与结果在 `.cache/msi-smoke/`，CI 的 `windows-installation-evidence` 同时保存 NSIS 和 MSI 日志，失败时也尝试上传。
+
+### MSI 与 NSIS 远端安装证据（2026-09-28）
+
+`3cd15e8` 的 [push 工作流](https://github.com/amuroray742-png/UnityProfilerAnalysisAgent/actions/runs/36400361838) 和 [PR 工作流](https://github.com/amuroray742-png/UnityProfilerAnalysisAgent/actions/runs/36400633656) 均成功。下载 push 运行的 `windows-installation-evidence` 后，核对结果如下：
+
+| 安装方式 | 安装 / 协议 / 卸载 | 残留边界 |
+|---|---|---|
+| MSI per-machine | 三项均为 true；8 项协议测试通过，2 项真实 Agent 测试忽略 | 安装目录和产品登记已清除，vendorRegistryRetained=false |
+| NSIS current-user | 三项均为 true；8 项协议测试通过 | 保留的安装路径偏好由脚本清理；CI GUI 字段为 null |
+
+MSI 安装包 SHA-256 为 `07D4F650ECD0D1EFAA32B5E6354CC33D1234CDEB0FE0C986D17ECF0C38422B56`，安装后 EXE 为 `CC9F1846422CB6E8DA6EE8363657919934A8B5B51CEA4866726F1180D8AB3D6F`。ProductCode 为 `{FED84D99-2DFB-4D1E-AC1E-D5EF489CF2D8}`。MSI 的 install.log、uninstall.log、protocol.log 与 result.json 已核对；本地证据下载目录为 `.cache/msi-ci-evidence/`，不提交日志原件。
+
+NSIS 安装包 SHA-256 为 `DA8C6F1B71CA73C2518A7290C1A4FEF9B1D038EA69681768B7BF341763355751`。此 CI 不证明 GUI 或版本升级；基线 CI NSIS 的本机安装后界面复验与本次静默安装分别记录。Artifact 按工作流保留 7 天，哈希及运行链接在此长期记录，不将临时 artifact 链接当成正式分发渠道。

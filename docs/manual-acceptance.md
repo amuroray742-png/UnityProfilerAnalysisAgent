@@ -37,8 +37,8 @@
 ## 安装与发布门槛
 
 - NSIS 向导：安装路径选择、开始菜单/桌面快捷方式、启动和卸载；确认默认保留安装路径偏好，是否删除应用数据由用户选择。
-- MSI：生成包是 perMachine，需要管理员测试环境；安装、启动、升级/卸载与残留需单独记录。当前会话没有管理员权限。
-- 远端 CI：维护者已授权公开推送，审核分支与[草稿 PR #1](https://github.com/amuroray742-png/UnityProfilerAnalysisAgent/pull/1)已建立，Windows CI 已触发，结果查看 PR 检查。安装包本地生成不等于发布版本。
+- MSI：perMachine 静默安装、安装后 8 项协议回归、卸载及残留检查已在管理员 CI runner 通过；交互向导、GUI 和版本升级仍未覆盖。
+- 远端 CI：PR #1 已合并；提交 `3cd15e8` 的 [Windows CI](https://github.com/amuroray742-png/UnityProfilerAnalysisAgent/actions/runs/36400361838) 全部通过，MSI 验收增量见[草稿 PR #2](https://github.com/amuroray742-png/UnityProfilerAnalysisAgent/pull/2)。安装包本地生成不等于发布版本。
 - 发布身份：确认 `com.ray.unity-profiler-analysis-agent`、维护者名称、MIT 许可证版权归属与是否签名；已按维护者授权补充 MIT LICENSE，版权账号为 amuroray742-png。
 - 完整应用内存与并发查询预算、更多录制/版本证据仍需扩充，独立解析进程的峰值不等于桌面总占用。
 
