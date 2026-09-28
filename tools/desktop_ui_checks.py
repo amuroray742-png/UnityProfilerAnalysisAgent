@@ -3,7 +3,7 @@ import base64
 import time
 
 
-def run_ui(js, request, root, output, report, real_agent=False):
+def run_ui(js, request, root, output, report, real_agent=False, agent_id='claude-code'):
     for name in ('normal', 'zero-gc', 'partial-gc', 'invalid-tree', 'pagination'):
         if not (root / '.cache/manual-fixtures' / (name + '.json')).is_file():
             raise FileNotFoundError('Run python tools/prepare-manual-fixtures.py first')
@@ -142,8 +142,8 @@ def run_ui(js, request, root, output, report, real_agent=False):
     load('normal')
     shot('normal-reimported')
     if real_agent:
-        wait('return !!document.querySelector(".agent-selector option[value=claude-code]:not(:disabled)")')
-        click('.agent-selector option[value="claude-code"]')
+        wait(f'return !!document.querySelector(".agent-selector option[value={agent_id}]:not(:disabled)")')
+        click(f'.agent-selector option[value="{agent_id}"]')
         button('开始 AI 诊断')
         print('UI: waiting for first real Agent diagnosis', flush=True)
         wait('return document.body.innerText.includes("诊断完成") || !!document.querySelector(".error-banner")', 180)
@@ -156,8 +156,11 @@ def run_ui(js, request, root, output, report, real_agent=False):
         report['checks'].append('real Agent UI completion with MCP calls and end_turn')
         print('UI: first real Agent diagnosis completed with MCP calls', flush=True)
         button('概览')
+        wait('return document.querySelector(".tab.active")?.textContent==="概览"')
         button('开始 AI 诊断')
+        wait('return [...document.querySelectorAll("button")].some(b=>b.textContent.trim()==="取消")')
         button('Agent 日志')
+        wait('return document.querySelector(".tab.active")?.textContent==="Agent 日志"')
         wait('return document.body.innerText.includes("[mcp → ") || !!document.querySelector(".error-banner")', 90)
         assert js('return !document.querySelector(".error-banner")')
         button('取消')

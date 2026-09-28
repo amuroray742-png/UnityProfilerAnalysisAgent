@@ -25,13 +25,14 @@ def main():
     parser.add_argument('--driver', type=Path, default=root / '.cache/webdriver/bin/tauri-driver.exe')
     parser.add_argument('--native-driver', type=Path, default=root / '.cache/webdriver/edge/msedgedriver.exe')
     parser.add_argument('--ui', action='store_true', help='Exercise rendered UI with only the native picker response substituted')
-    parser.add_argument('--real-agent', action='store_true', help='Also send the public fixture to the configured Claude Code ACP and test UI cancellation')
+    parser.add_argument('--real-agent', action='store_true', help='Also send the public fixture to the selected ACP Agent and test UI cancellation')
     parser.add_argument('--measure-input', type=Path, help='Measure actual desktop processes via IPC on a local capture; never calls an Agent')
     parser.add_argument('--measure-rendered', action='store_true', help='Measure actual result pages and reset with substituted native picker response')
     parser.add_argument('--measure-repeats', type=int, default=3, help='Measurement repetitions, 1..30')
     parser.add_argument('--measure-heap', action='store_true', help='Rendered mode: inspect DOM/heap, idle 30s, then diagnostically collect GC')
     parser.add_argument('--measure-dom-control', action='store_true', help='Heap investigation control: DOM events instead of WebDriver element handles; not UI acceptance')
     parser.add_argument('--measure-handle-control', action='store_true', help='DOM-event control plus WebDriver element lookup, without WebDriver click')
+    parser.add_argument('--agent-id', choices=['claude-code', 'codex', 'gemini'], default='claude-code', help='Agent preset for explicit --real-agent validation')
     args = parser.parse_args()
     if args.measure_handle_control and not args.measure_dom_control:
         parser.error('--measure-handle-control requires --measure-dom-control')
@@ -139,7 +140,8 @@ def main():
                 from desktop_ui_checks import run_ui
                 report['scope'] = 'Release rendered UI and real backend; only native picker response substituted; excludes native picker and MSI'
                 report['realAgentRequested'] = args.real_agent
-                run_ui(js, lambda method, path, body=None: request(method, f'/session/{session}' + path, body), root, output, report, args.real_agent)
+                report['agentId'] = args.agent_id if args.real_agent else None
+                run_ui(js, lambda method, path, body=None: request(method, f'/session/{session}' + path, body), root, output, report, args.real_agent, args.agent_id)
             if args.measure_input:
                 from desktop_memory import measure
                 report['scope'] = 'Actual Tauri/WebView processes, real IPC import/query/release; excludes results rendering, Agent and native picker'
