@@ -13,7 +13,7 @@
 |---|---|---|---|
 | claude-code | claude-code-acp | 无 | 0.16.2，Windows，真实完成与取消 |
 | gemini | gemini | --experimental-acp | 预设保留，未验证 |
-| codex | codex-acp | 无 | 预设保留，未验证 |
+| codex | codex-acp | 无 | @agentclientprotocol/codex-acp 1.13.1，Windows，公开 fixture 的 MCP 查询与完成已验证；见文末 |
 
 ## ACP 会话与资源
 
@@ -71,3 +71,20 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked --offline --test acp_st
 ## 诊断筛查与帧证据
 
 `performance_analysis` 的 CPU/GC issues 区分 P95 超限与孤立峰值，附 `unit`、`affectedFrames`、`validFrames`、最多 5 项 `evidenceFrames` 和 `thresholdPolicy`。帧证据用原始帧号，需继续查询原始线程/样本解释原因。默认阈值仅用于筛查，不等于项目预算或已确认瓶颈；issues 为空不证明无性能问题。部分、估算或缺失的指标不触发确定性诊断。
+
+## Codex 适配器安装与检测
+
+界面中的 Codex 使用 `codex-acp` 命令，不是 `codex` 命令。仅安装 Codex CLI 或 Codex 桌面应用不会自动安装此适配器；“未检测到 ACP 适配器”表示当前应用进程的 PATH 中没有找到该命令，不代表 Codex CLI 未安装。
+
+按[适配器维护仓库](https://github.com/agentclientprotocol/codex-acp)说明安装：
+
+```powershell
+npm install -g @agentclientprotocol/codex-acp
+codex-acp --version
+```
+
+旧 `@zed-industries/codex-acp` 项目已迁移，新安装使用上述包。适配器包含兼容的 Codex 依赖；本项目不替换用户原有 `codex.exe`，不修改用户认证或默认模型配置。安装后重启分析应用使其重新检测命令；若仍不可用，确认 npm 全局命令目录在启动应用时的 PATH 中。命令存在不等于已登录或协议一定兼容，实际诊断错误会在界面显示。
+
+显式桌面验证可运行 `python tools/desktop-smoke.py --ui --real-agent --agent-id codex`，仅发送公开合成 fixture。默认仍使用 Claude Code；该参数不改变应用默认 Agent。
+
+2026-09-28 本机验证：安装 `@agentclientprotocol/codex-acp 1.13.1` 后，公开 fixture 的实际 ACP/MCP 完成测试通过，65.42 秒、13 次 MCP 调用、end_turn。前端 19 项测试与构建通过，release 构建通过。指定 `--agent-id codex` 的桌面 12 项检查通过，包含选择 Codex、完成、MCP 活动后取消、无迟到正文及重新诊断；仅原生文件选择返回值替代。EXE SHA-256 为 `8d32455ce8d172d5be6156df52c1c0f30fb4427710bcd34a337e530ba5f1673f`，日志在忽略目录 `.cache/codex-desktop-validation.log`。首轮桌面再次启动未确认触发而超时，给测试补充页签与诊断启动状态等待后复验通过；未更改应用会话行为。不将协议完成等同于任意模型正文准确性。
