@@ -171,3 +171,9 @@ data B 含结果页的进程树采样峰值为工作集 837.80 MiB / 私有内�
 保持 DOM 事件流程不变，只增加 WebDriver 元素查找、不执行 WebDriver click，三轮后诊断 GC 仍保留 49,791 个 DOM 节点；不查找时为 89。随后将无句柄对照扩大到十轮，自然空闲后仍为 89，诊断 GC 后 JS 堆约 2.68 MiB。这支持早先 DOM 累积由 WebDriver 元素注册路径干扰测量，不据此对应用进行泄漏“修复”。
 
 无句柄十轮的进程树峰值工作集/私有内存约 761.93/587.14 MiB，进程私有内存未完全回到启动基线；仍不能承诺严格上限或长期无泄漏。真实控件操作验收与无句柄资源对照分别保留，报告和方法见[性能记录](performance-and-release.md#webdriver-元素句柄对照2026-09-28)。
+
+### 公开审核分支与许可证（2026-09-28）
+
+维护者已明确授权使用 gh 推送并补充 LICENSE。已提交 `ffb6ec7` 至 `codex/trusted-unity6-analysis`，创建[草稿 PR #1](https://github.com/amuroray742-png/UnityProfilerAnalysisAgent/pull/1)。Windows CI 已触发，尚不提前标记通过；此前“等待推送授权”的交接记录已解除。
+
+沿用包清单声明的 MIT 许可证，版权填写为 `Copyright (c) 2026 amuroray742-png`（仓库所有者账号），保留 README 的参考项目说明，并纠正 Cargo 清单的仓库 URL。私有录制、缓存、截图和完整诊断报告没有提交。MSI 管理员/原生窗口验收与正式签名发布仍保留原边界。
