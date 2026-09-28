@@ -57,7 +57,7 @@ export default function App() {
         <div>
           <h1>Unity Profiler Analysis Agent</h1>
           <div className="subtitle">
-            自动分析 Unity Profiler 数据，通过 ACP 接入 Claude Code / Gemini CLI
+            自动分析 Unity Profiler 数据，通过 ACP 接入 Claude Code / Codex / Gemini
           </div>
         </div>
         <div className="agent-selector">
@@ -68,8 +68,8 @@ export default function App() {
               disabled={isDiagnosing || state.agents.every((a) => !a.available)}
             >
               {state.agents.map((agent) => (
-                <option key={agent.id} value={agent.id} disabled={!agent.available}>
-                  {agent.label} {agent.available ? '' : '(未安装)'}
+                <option key={agent.id} value={agent.id} disabled={!agent.available} title={`检测命令：${agent.command}`}>
+                  {agent.label} {agent.available ? '' : agent.command.endsWith('-acp') ? '(未检测到 ACP 适配器)' : '(未检测到命令)'}
                 </option>
               ))}
             </select>
@@ -79,14 +79,14 @@ export default function App() {
               className="btn btn-primary"
               onClick={startDiagnose}
               disabled={!selectedAgentAvailable}
-              title={selectedAgentAvailable ? '' : '请先在 Agent 下拉里选择一个已安装的 Agent'}
+              title={selectedAgentAvailable ? '' : '请先选择已检测到的 ACP Agent；Codex 需要 codex-acp 适配器'}
             >
               开始 AI 诊断
             </button>
           )}
           {showResults && !isDiagnosing && !hasAvailableAgent && (
             <span className="hint-text" style={{ color: '#d97706', fontSize: 13 }}>
-              未检测到可用 Agent（Claude Code / Gemini CLI / Codex CLI），请先安装
+              未检测到 ACP Agent 命令。Codex 需安装 codex-acp 适配器，仅安装 Codex CLI 不够；安装后重启应用。
             </span>
           )}
           {isDiagnosing && (

@@ -253,3 +253,7 @@ Agent 提示要求调用 performance_analysis，并结合证据帧的原始样�
 显式真实 Codex ACP 尖峰样本测试通过：118.48 秒、10 次 MCP 查询，包含 CPU/GC 热点、普通帧 100、尖峰帧 160 及两个线程原始树。正文定位 40 ms CPU 和 8 MiB 分配，按主线程 8,388,600 B + Worker 8 B 对账，并给出检查分配调用栈、条件式临时缓冲复用、补充业务阶段 marker 和同场景 A/B 验证建议。将未确认原因明确标为假设，未宣称已发现具体源码问题。仅发送公开合成 fixture；日志位于忽略目录 .cache/actionable-real-agent.log。此事实复核不保证任意输入或模型回答质量。
 
 新版 release 构建、发布模式 8 项协议回归及 10 项桌面检查通过（本次桌面检查未调用 Agent，真实 Codex 内容证据为上述独立测试）。EXE SHA-256：9c8f6504ca93f146575740d5077a2ffc4b8610b41f6ac13fbce556a6542efe1b。首次构建因运行中的旧窗口锁定 EXE 失败，正常关闭后重建成功。
+
+### Codex 检测与接入修复（2026-09-28）
+
+本机已安装 codex.exe，但项目实际检测 codex-acp；旧“Codex CLI（未安装）”把适配器缺失误述为 CLI 未安装。界面改为 Codex (ACP)，按命令类型显示“未检测到 ACP 适配器”或“未检测到命令”，提供检测命令提示。安装当前维护包 @agentclientprotocol/codex-acp 1.13.1 后，公开 fixture 的真实协议完成与 release 桌面完成/取消/重新诊断通过。详细证据与安装方式见[集成文档](acp-mcp-integration.md#codex-适配器安装与检测)。本轮不改动原有 Codex CLI、认证、模型配置或性能数据解析。
