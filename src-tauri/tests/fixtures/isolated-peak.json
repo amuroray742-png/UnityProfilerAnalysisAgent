@@ -1,0 +1,621 @@
+{
+  "input_file": "synthetic-isolated-peak.data",
+  "unity_version": "6000.3.23f1",
+  "frame_count": 21,
+  "frames": [
+    {
+      "frame_index": 100,
+      "frame_time_ms": 2,
+      "sample_count_total": 1,
+      "gc_alloc_bytes_total": 0,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 0,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 1,
+              "start_time_ms": 0,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 103,
+      "frame_time_ms": 2,
+      "sample_count_total": 1,
+      "gc_alloc_bytes_total": 0,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 0,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 1,
+              "start_time_ms": 0,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 106,
+      "frame_time_ms": 2,
+      "sample_count_total": 1,
+      "gc_alloc_bytes_total": 0,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 0,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 1,
+              "start_time_ms": 0,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 109,
+      "frame_time_ms": 2,
+      "sample_count_total": 1,
+      "gc_alloc_bytes_total": 0,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 0,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 1,
+              "start_time_ms": 0,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 112,
+      "frame_time_ms": 2,
+      "sample_count_total": 1,
+      "gc_alloc_bytes_total": 0,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 0,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 1,
+              "start_time_ms": 0,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 115,
+      "frame_time_ms": 2,
+      "sample_count_total": 1,
+      "gc_alloc_bytes_total": 0,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 0,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 1,
+              "start_time_ms": 0,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 118,
+      "frame_time_ms": 2,
+      "sample_count_total": 1,
+      "gc_alloc_bytes_total": 0,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 0,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 1,
+              "start_time_ms": 0,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 121,
+      "frame_time_ms": 2,
+      "sample_count_total": 1,
+      "gc_alloc_bytes_total": 0,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 0,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 1,
+              "start_time_ms": 0,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 124,
+      "frame_time_ms": 2,
+      "sample_count_total": 1,
+      "gc_alloc_bytes_total": 0,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 0,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 1,
+              "start_time_ms": 0,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 127,
+      "frame_time_ms": 2,
+      "sample_count_total": 1,
+      "gc_alloc_bytes_total": 0,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 0,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 1,
+              "start_time_ms": 0,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 130,
+      "frame_time_ms": 2,
+      "sample_count_total": 1,
+      "gc_alloc_bytes_total": 0,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 0,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 1,
+              "start_time_ms": 0,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 133,
+      "frame_time_ms": 2,
+      "sample_count_total": 1,
+      "gc_alloc_bytes_total": 0,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 0,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 1,
+              "start_time_ms": 0,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 136,
+      "frame_time_ms": 2,
+      "sample_count_total": 1,
+      "gc_alloc_bytes_total": 0,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 0,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 1,
+              "start_time_ms": 0,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 139,
+      "frame_time_ms": 2,
+      "sample_count_total": 1,
+      "gc_alloc_bytes_total": 0,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 0,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 1,
+              "start_time_ms": 0,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 142,
+      "frame_time_ms": 2,
+      "sample_count_total": 1,
+      "gc_alloc_bytes_total": 0,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 0,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 1,
+              "start_time_ms": 0,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 145,
+      "frame_time_ms": 2,
+      "sample_count_total": 1,
+      "gc_alloc_bytes_total": 0,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 0,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 1,
+              "start_time_ms": 0,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 148,
+      "frame_time_ms": 2,
+      "sample_count_total": 1,
+      "gc_alloc_bytes_total": 0,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 0,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 1,
+              "start_time_ms": 0,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 151,
+      "frame_time_ms": 2,
+      "sample_count_total": 1,
+      "gc_alloc_bytes_total": 0,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 0,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 1,
+              "start_time_ms": 0,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 154,
+      "frame_time_ms": 2,
+      "sample_count_total": 1,
+      "gc_alloc_bytes_total": 0,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 0,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 1,
+              "start_time_ms": 0,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 157,
+      "frame_time_ms": 2,
+      "sample_count_total": 1,
+      "gc_alloc_bytes_total": 0,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 0,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 1,
+              "start_time_ms": 0,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "frame_index": 160,
+      "frame_time_ms": 50,
+      "sample_count_total": 7,
+      "gc_alloc_bytes_total": 8388608,
+      "threads": [
+        {
+          "thread_index": 0,
+          "thread_id": 1000,
+          "thread_name": "Main Thread",
+          "gc_alloc_total_bytes": 8388600,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Main Thread",
+              "time_ms": 40,
+              "start_time_ms": 0,
+              "children_count": 1,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            },
+            {
+              "sample_index": 1,
+              "marker_id": 113,
+              "marker_name": "Update",
+              "time_ms": 30,
+              "start_time_ms": 1,
+              "children_count": 2,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            },
+            {
+              "sample_index": 2,
+              "marker_id": 126,
+              "marker_name": "GC.Alloc",
+              "time_ms": 2,
+              "start_time_ms": 2,
+              "children_count": 1,
+              "metadata_count": 1,
+              "gc_alloc_bytes": 8388596
+            },
+            {
+              "sample_index": 3,
+              "marker_id": 139,
+              "marker_name": "GC.Alloc",
+              "time_ms": 0.5,
+              "start_time_ms": 2.5,
+              "children_count": 0,
+              "metadata_count": 1,
+              "gc_alloc_bytes": 4
+            },
+            {
+              "sample_index": 4,
+              "marker_id": 152,
+              "marker_name": "Work",
+              "time_ms": 1,
+              "start_time_ms": 4,
+              "children_count": 0,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            }
+          ]
+        },
+        {
+          "thread_index": 1,
+          "thread_id": 1001,
+          "thread_name": "Worker",
+          "gc_alloc_total_bytes": 8,
+          "samples": [
+            {
+              "sample_index": 0,
+              "marker_id": 100,
+              "marker_name": "Worker",
+              "time_ms": 12,
+              "start_time_ms": 0,
+              "children_count": 1,
+              "metadata_count": 0,
+              "gc_alloc_bytes": 0
+            },
+            {
+              "sample_index": 1,
+              "marker_id": 113,
+              "marker_name": "GC.Alloc",
+              "time_ms": 1,
+              "start_time_ms": 1,
+              "children_count": 0,
+              "metadata_count": 1,
+              "gc_alloc_bytes": 8
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -13,7 +13,17 @@ async fn launch(
     acp_client::client::SessionHandle,
     mpsc::UnboundedReceiver<DiagnoseEvent>,
 ) {
-    let bytes = bytes::Bytes::from_static(include_bytes!("fixtures/editor-dump.json"));
+    launch_public_input(command, args, include_bytes!("fixtures/editor-dump.json")).await
+}
+async fn launch_public_input(
+    command: String,
+    args: Vec<String>,
+    input: &'static [u8],
+) -> (
+    acp_client::client::SessionHandle,
+    mpsc::UnboundedReceiver<DiagnoseEvent>,
+) {
+    let bytes = bytes::Bytes::from_static(input);
     let p = parser::json::parse(&bytes, "fixture.json", bytes.len() as u64)
         .await
         .unwrap();
@@ -272,6 +282,38 @@ async fn real_agent_queries_profiler_over_mcp() {
         }
         println!("answer_chars={}, terminal={terminal:?}",text.len());
         assert!(queried,"Agent never queried MCP");
+        assert!(!text.is_empty());
+        assert!(matches!(terminal,Some(DiagnoseEvent::Finished{stop_reason,..}) if stop_reason=="end_turn"));
+    }).await;
+    handle.cancel().await;
+    result.expect("real Agent timed out");
+}
+
+#[tokio::test]
+#[ignore = "requires UPAA_REAL_AGENT; sends only the public isolated-peak fixture; inspect printed answer separately"]
+async fn real_agent_investigates_isolated_cpu_and_gc_peak() {
+    let command = std::env::var("UPAA_REAL_AGENT").expect("set UPAA_REAL_AGENT");
+    let (handle, mut rx) = launch_public_input(command, vec![], include_bytes!("fixtures/isolated-peak.json")).await;
+    let result = tokio::time::timeout(Duration::from_secs(330), async {
+        let mut analysis = false;
+        let mut peak_tree = false;
+        let mut text = String::new();
+        let mut terminal = None;
+        while let Some(event) = rx.recv().await {
+            match event {
+                DiagnoseEvent::McpCall { tool, args } => {
+                    println!("MCP {tool} {args}");
+                    analysis |= tool == "performance_analysis";
+                    peak_tree |= tool == "performance_cpu_hierarchy" && args["frame_index"] == 160;
+                }
+                DiagnoseEvent::Chunk { text: chunk } => text.push_str(&chunk),
+                event if event.terminal() => terminal = Some(event),
+                _ => {}
+            }
+        }
+        println!("PUBLIC_FIXTURE_ANSWER_BEGIN\n{text}\nPUBLIC_FIXTURE_ANSWER_END");
+        assert!(analysis, "Agent must query heuristic screening");
+        assert!(peak_tree, "Agent must inspect the original peak frame, not only summary numbers");
         assert!(!text.is_empty());
         assert!(matches!(terminal,Some(DiagnoseEvent::Finished{stop_reason,..}) if stop_reason=="end_turn"));
     }).await;

@@ -464,3 +464,16 @@ async fn analysis_evidence_is_bounded_sorted_and_focus_specific() {
     assert_eq!(issues[0]["evidenceFrames"][0]["frameIndex"], 240);
     assert_eq!(run_analysis(&store, "gc").await.unwrap()["issues"], json!([]));
 }
+
+#[tokio::test]
+async fn public_isolated_peak_fixture_reconciles_metrics_and_original_threads() {
+    let p = parse(serde_json::from_str(include_str!("fixtures/isolated-peak.json")).unwrap()).await.unwrap();
+    let s = extractor::extract(&p);
+    assert_eq!(p.frames.len(), 21);
+    assert_eq!(s.cpu.main_thread_ms.p95, Some(1.0));
+    assert_eq!(s.cpu.main_thread_ms.max, Some(40.0));
+    assert_eq!(s.gc.alloc_per_frame_bytes.p95, Some(0.0));
+    assert_eq!(s.gc.total_alloc_bytes, Some(8388608));
+    let peak = p.details.as_ref().unwrap().load(160).unwrap();
+    assert_eq!(peak.threads.iter().flat_map(|t| &t.samples).filter_map(|s| s.gc_alloc_bytes).sum::<u64>(), 8388608);
+}

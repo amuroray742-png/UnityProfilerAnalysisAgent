@@ -35,11 +35,13 @@ pub async fn run_session_summary(store: &MetricsStore) -> Result<Value, McpToolE
             "population": "仅该指标的有效帧；真实零值参与排序，缺失值不参与",
             "method": "按升序排序，取零起始索引 round((n-1)*q)，半整数向上取整，不插值",
             "smallSampleExample": {"values": [0,32], "p50":32,"p95":32,"p99":32,"max":32},
+            "frequency": "p99=max 或其他分位数相等不能推出只有一帧尖峰；异常帧数量必须依据逐帧值或 affectedFrames，不由分位数相等关系推断",
             "interpretation": "p50 不是平均值；偶数样本不取中间两数的平均，不能仅凭 p50 与部分帧数值不同判定数据矛盾"
         },
         "cpu": {
             "sampleTime": "inclusive：包含子样本；可信 dump/data 主路径的帧 CPU 取唯一主线程根样本，其他 JSON 显式值或估算必须结合 source 和 quality 解读",
             "exclusiveTime": "未提供已验证的 self/exclusive CPU 耗时；不能把父子样本相加或用热点列表相减来推断剩余、未解释或未采样 CPU 时间",
+            "frameTimeDifference": "录制帧时间与主线程根样本耗时是不同观测口径；相减不能证明差额属于未采样 CPU、GPU、等待或任何具体工作。需要独立线程、时间区间和相关计数证据，不要给差额归因",
             "coverage": "调用树无分页/深度截断仅代表已导出样本读取完整，不证明所有运行工作都被 instrumentation 覆盖"
         },
         "gc": "每个 GC.Alloc 样本的字节独立计入（含嵌套分配）；按线程和最近非 GC.Alloc 父样本归因，和已校验的帧总量核对"
