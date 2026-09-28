@@ -2,7 +2,7 @@
 
 面向 Unity Profiler 离线录制的本地桌面分析原型，使用 Tauri 2、React / TypeScript 和 Rust。首要目标是 **Windows 上的 Unity 6000.3 可信分析**，通过 ACP Agent 与 MCP 数据查询辅助诊断。
 
-当前已实现 Editor dump 的 CPU/GC 导入链路，以及 Unity 6000.3.23f1 `.data` 的无扫描结构解析。两份录制的 137 个参考帧已通过样本、CPU/GC 和站点归因对照，包含加载高峰和末帧。现已增加原始单帧调用树与分页查询。Windows Claude Code ACP 的 MCP 查询、流式回答和取消闭环已通过公开 fixture 验证。release 桌面主流程、NSIS 安装后界面/协议/卸载已在限定范围通过。可信分析 MVP 尚未完成：MSI 管理员静默安装/协议/卸载及远端 Windows CI 已通过；原生文件选择已由维护者本机人工验收；交互安装与长期性能预算仍待验收。缺失指标显示“—”，有效零值仍显示为零。
+当前已实现 Editor dump 的 CPU/GC 导入链路，以及 Unity 6000.3.23f1 `.data` 的无扫描结构解析。两份录制的 137 个参考帧已通过样本、CPU/GC 和站点归因对照，包含加载高峰和末帧。现已增加原始单帧调用树与分页查询。Windows Claude Code ACP 的 MCP 查询、流式回答和取消闭环已通过公开 fixture 验证。release 桌面主流程、NSIS 安装后界面/协议/卸载已在限定范围通过。可信分析 MVP 尚未完成：MSI 管理员静默安装/协议/卸载及远端 Windows CI 已通过；原生文件选择已由维护者本机人工验收；EXE/MSI 交互安装、启动、快捷方式与卸载已由维护者确认通过；版本升级及长期性能预算仍待验收。缺失指标显示“—”，有效零值仍显示为零。
 
 ## 文档导航
 
@@ -53,7 +53,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 npm run tauri:build
 ```
 
-`npm run build` 只验证前端；`tauri:build` 已在本机生成 MSI / NSIS 包；NSIS 当前用户安装、安装后界面/协议和卸载已通过；MSI 管理员静默安装/协议/卸载也已在 CI 通过；交互安装向导和 MSI GUI 仍待验收，原生文件选择已由维护者本机人工确认，见[发布记录](docs/performance-and-release.md)。Rust 依赖已缓存时可追加 `--offline`。默认 Rust 测试会跳过依赖私有文件或进程环境的集成测试，详见验证台账。
+`npm run build` 只验证前端；`tauri:build` 已在本机生成 MSI / NSIS 包；NSIS 当前用户安装、安装后界面/协议和卸载已通过；MSI 管理员静默安装/协议/卸载也已在 CI 通过；交互安装向导、快捷方式、MSI GUI 和原生文件选择已由维护者本机人工确认，见[发布记录](docs/performance-and-release.md)。Rust 依赖已缓存时可追加 `--offline`。默认 Rust 测试会跳过依赖私有文件或进程环境的集成测试，详见验证台账。
 
 ## 当前使用流程
 
