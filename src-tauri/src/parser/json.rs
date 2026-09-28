@@ -26,7 +26,7 @@
 use bytes::Bytes;
 use serde::Deserialize;
 
-use super::{Frame, ParsedProfile, ParseError, ProfileMeta, Sample};
+use super::{Frame, ParseError, ParsedProfile, ProfileMeta, Sample};
 
 /// Unity Profiler JSON 导出的根结构（宽松 schema）。
 /// 实际 Unity 输出字段远多于这些，本结构只取关心的部分。
@@ -37,14 +37,12 @@ enum JsonRoot {
     V1 {
         #[serde(default)]
         meta: JsonMeta,
-        #[serde(default)]
         frames: Vec<JsonFrame>,
     },
     /// 形式 2：`{ "header": {...}, "samples": [...] }`
     V2 {
         #[serde(default)]
         header: JsonMeta,
-        #[serde(default)]
         samples: Vec<JsonSample>,
     },
     /// 兜底：直接是个数组（每元素是一个 frame）
@@ -66,7 +64,12 @@ struct JsonMeta {
     unity_version: Option<String>,
     #[serde(default, alias = "frameCount", alias = "frame_count")]
     frame_count: Option<usize>,
-    #[serde(default, alias = "durationMs", alias = "duration_ms", alias = "duration")]
+    #[serde(
+        default,
+        alias = "durationMs",
+        alias = "duration_ms",
+        alias = "duration"
+    )]
     duration_ms: Option<f64>,
     #[serde(default, alias = "totalTime", alias = "total_time_ms")]
     total_time_ms: Option<f64>,
@@ -83,7 +86,12 @@ struct JsonFrame {
     duration_ms: Option<f64>,
     #[serde(default, alias = "cpuMs", alias = "cpu_ms")]
     cpu_ms: Option<f64>,
-    #[serde(default, alias = "gcAlloc", alias = "gc_alloc_bytes", alias = "gcAllocBytes")]
+    #[serde(
+        default,
+        alias = "gcAlloc",
+        alias = "gc_alloc_bytes",
+        alias = "gcAllocBytes"
+    )]
     gc_alloc_bytes: Option<u64>,
     #[serde(default, alias = "drawCalls", alias = "draw_calls")]
     draw_calls: Option<u32>,
@@ -105,7 +113,13 @@ struct JsonFrame {
 struct JsonSample {
     #[serde(default, alias = "name", alias = "functionName", alias = "markerName")]
     name: Option<String>,
-    #[serde(default, alias = "durationMs", alias = "duration_ms", alias = "ms", alias = "totalMs")]
+    #[serde(
+        default,
+        alias = "durationMs",
+        alias = "duration_ms",
+        alias = "ms",
+        alias = "totalMs"
+    )]
     total_ms: Option<f64>,
     #[serde(default, alias = "callCount", alias = "call_count")]
     call_count: Option<u64>,
@@ -118,6 +132,10 @@ struct JsonSample {
     /// Unity 6 新增：marker metadata（GC.Alloc 用 Int64 表示分配字节数）
     #[serde(default, alias = "meta", alias = "metadata", alias = "payload")]
     metadata: Option<serde_json::Value>,
+    #[serde(default)]
+    total_bytes: Option<u64>,
+    #[serde(default)]
+    max_bytes: Option<u64>,
 }
 
 #[allow(dead_code)] // 公开 API：未来 extractor 会按 marker 类别给 Agent 出建议
@@ -125,17 +143,33 @@ fn sample_category(name: &str) -> &'static str {
     // 归类 Unity 6 marker 到诊断类别，方便 Agent 按类别给出建议
     match name {
         "GC.Alloc" | "GC.Collect" | "GC.Alloc.Sample" | "UnsafeUtility.Malloc" => "Memory",
-        "PlayerLoop" | "BehaviourUpdate" | "Update.ScriptRunBehaviourUpdate"
-            | "FixedBehaviourUpdate" | "PreLateUpdate.ScriptRunBehaviourLateUpdate"
-            | "CoroutinesDelayedCalls" => "Scripting",
-        "Camera.Render" | "Render.Mesh" | "Render.OpaqueGeometry" | "Render.TransparentGeometry"
-            | "Render.UI" => "Rendering",
-        "Gfx.WaitForPresentOnGfxThread" | "Gfx.WaitForRenderThread" | "Gfx.PresentFrame"
-            | "Gfx.WaitForCommands" | "Gfx.ProcessCommands" | "WaitForTargetFPS" => "GfxWait",
-        "RenderGraph.Execute" | "RenderGraph.Compile" | "RenderGraph.Prepare"
-            | "RenderGraph.Dispatch" | "RenderGraph.Reset" => "RenderGraph",
-        "Physics.FetchResults" | "Physics.Processing" | "Physics.Simulate"
-            | "Physics.UpdateBodies" | "Physics.SimulateCloth" => "Physics",
+        "PlayerLoop"
+        | "BehaviourUpdate"
+        | "Update.ScriptRunBehaviourUpdate"
+        | "FixedBehaviourUpdate"
+        | "PreLateUpdate.ScriptRunBehaviourLateUpdate"
+        | "CoroutinesDelayedCalls" => "Scripting",
+        "Camera.Render"
+        | "Render.Mesh"
+        | "Render.OpaqueGeometry"
+        | "Render.TransparentGeometry"
+        | "Render.UI" => "Rendering",
+        "Gfx.WaitForPresentOnGfxThread"
+        | "Gfx.WaitForRenderThread"
+        | "Gfx.PresentFrame"
+        | "Gfx.WaitForCommands"
+        | "Gfx.ProcessCommands"
+        | "WaitForTargetFPS" => "GfxWait",
+        "RenderGraph.Execute"
+        | "RenderGraph.Compile"
+        | "RenderGraph.Prepare"
+        | "RenderGraph.Dispatch"
+        | "RenderGraph.Reset" => "RenderGraph",
+        "Physics.FetchResults"
+        | "Physics.Processing"
+        | "Physics.Simulate"
+        | "Physics.UpdateBodies"
+        | "Physics.SimulateCloth" => "Physics",
         "JobHandle.Complete" | "Semaphore.WaitForSignal" | "WaitForJobGroupID" => "Jobs",
         "EditorLoop" | "Profiler.CollectEditorStats" | "Profiler.CollectGlobalStats" => "Editor",
         _ => "Other",
@@ -147,6 +181,9 @@ pub async fn parse(
     file_name: &str,
     file_size_bytes: u64,
 ) -> Result<ParsedProfile, ParseError> {
+    if super::dump::is_dump(bytes)? {
+        return super::dump::parse(bytes, file_name, file_size_bytes);
+    }
     let root: JsonRoot = serde_json::from_slice(bytes)?;
     let mut warnings = Vec::new();
 
@@ -163,6 +200,20 @@ pub async fn parse(
         }
     };
 
+    for f in &profile.frames {
+        if f.cpu_ms < 0.0
+            || f.duration_ms < 0.0
+            || f.main_thread_samples
+                .iter()
+                .chain(&f.render_events)
+                .any(|s| s.total_ms < 0.0 || s.max_ms < 0.0)
+        {
+            return Err(ParseError::Other(format!(
+                "frame {}: 时间字段不能为负值",
+                f.index
+            )));
+        }
+    }
     if let Some(dur) = estimate_duration_from_frames(&profile.frames) {
         profile.meta.duration_ms = dur;
     }
@@ -189,6 +240,7 @@ fn build_from_frames_v1(
         .collect();
 
     ParsedProfile {
+        details: None,
         meta: ProfileMeta {
             file_name: file_name.to_string(),
             format: super::ProfilerFormat::Json,
@@ -214,18 +266,33 @@ fn build_from_samples_v2(
     warnings.push("JSON 格式为扁平 sample 数组，按单帧聚合（精度有限）".to_string());
 
     let frame = Frame {
+        quality: super::FrameQuality {
+            duration: header.duration_ms.or(header.total_time_ms).is_some(),
+            cpu: !samples.is_empty() && samples.iter().all(|s| s.total_ms.is_some()),
+            samples: !samples.is_empty() && samples.iter().all(|s| s.total_ms.is_some()),
+            estimated: true,
+            ..super::FrameQuality::missing("json-v2")
+        },
         index: 0,
-        duration_ms: 0.0,
-        cpu_ms: samples.iter().filter_map(|s| s.total_ms).sum::<f64>().max(0.0),
+        duration_ms: header.duration_ms.or(header.total_time_ms).unwrap_or(0.0),
+        cpu_ms: samples
+            .iter()
+            .filter_map(|s| s.total_ms)
+            .sum::<f64>()
+            .max(0.0),
         gc_alloc_bytes: 0,
         draw_calls: 0,
         set_pass_calls: 0,
-        main_thread_samples: samples.iter().map(|s| convert_sample(s, "sample")).collect(),
+        main_thread_samples: samples
+            .iter()
+            .map(|s| convert_sample(s, "sample"))
+            .collect(),
         gc_alloc_sites: vec![],
         render_events: vec![],
     };
 
     ParsedProfile {
+        details: None,
         meta: ProfileMeta {
             file_name: file_name.to_string(),
             format: super::ProfilerFormat::Json,
@@ -242,10 +309,16 @@ fn build_from_samples_v2(
 
 fn convert_frame(index: usize, jf: JsonFrame, _warnings: &mut Vec<String>) -> Frame {
     let idx = jf.index.or(jf.frame_index).unwrap_or(index);
-    let main = if jf.main_thread_samples.is_empty() {
-        jf.samples.iter().map(|s| convert_sample(s, "sample")).collect()
+    let main: Vec<Sample> = if jf.main_thread_samples.is_empty() {
+        jf.samples
+            .iter()
+            .map(|s| convert_sample(s, "sample"))
+            .collect()
     } else {
-        jf.main_thread_samples.iter().map(|s| convert_sample(s, "sample")).collect()
+        jf.main_thread_samples
+            .iter()
+            .map(|s| convert_sample(s, "sample"))
+            .collect()
     };
 
     if jf.main_thread_samples.is_empty() && !jf.samples.is_empty() {
@@ -253,27 +326,69 @@ fn convert_frame(index: usize, jf: JsonFrame, _warnings: &mut Vec<String>) -> Fr
     }
 
     Frame {
+        quality: super::FrameQuality {
+            duration: jf.duration_ms.is_some(),
+            cpu: jf.cpu_ms.is_some(),
+            gc: jf.gc_alloc_bytes.is_some(),
+            draw: jf.draw_calls.is_some(),
+            set_pass: jf.set_pass_calls.is_some(),
+            samples: !main.is_empty()
+                && (if jf.main_thread_samples.is_empty() {
+                    &jf.samples
+                } else {
+                    &jf.main_thread_samples
+                })
+                .iter()
+                .all(|s| s.total_ms.is_some()),
+            sites: !jf.gc_alloc_sites.is_empty()
+                && jf.gc_alloc_sites.iter().all(|s| {
+                    s.total_bytes.is_some()
+                        || s.total_ms.is_some_and(|v| v >= 0.0)
+                        || extract_alloc_bytes(s.metadata.as_ref()).is_some_and(|v| v >= 0.0)
+                }),
+            render: !jf.render_events.is_empty()
+                && jf.render_events.iter().all(|s| s.total_ms.is_some()),
+            ..super::FrameQuality::missing("json-v1")
+        },
         index: idx,
         duration_ms: jf.duration_ms.unwrap_or(0.0),
-        cpu_ms: jf.cpu_ms.unwrap_or_else(|| jf.duration_ms.unwrap_or(0.0)),
+        cpu_ms: jf.cpu_ms.unwrap_or(0.0),
         gc_alloc_bytes: jf.gc_alloc_bytes.unwrap_or(0),
         draw_calls: jf.draw_calls.unwrap_or(0),
         set_pass_calls: jf.set_pass_calls.unwrap_or(0),
         main_thread_samples: main,
-        gc_alloc_sites: jf.gc_alloc_sites.iter().map(|s| convert_sample(s, "alloc")).collect(),
-        render_events: jf.render_events.iter().map(|s| convert_sample(s, "render")).collect(),
+        gc_alloc_sites: jf
+            .gc_alloc_sites
+            .iter()
+            .map(|s| {
+                let bytes = s.total_bytes.unwrap_or_else(|| {
+                    extract_alloc_bytes(s.metadata.as_ref())
+                        .or(s.total_ms)
+                        .unwrap_or(0.0) as u64
+                });
+                super::AllocSite {
+                    name: s.name.clone().unwrap_or_else(|| "未归因".into()),
+                    thread: "未提供".into(),
+                    total_bytes: bytes,
+                    max_bytes: s
+                        .max_bytes
+                        .or_else(|| s.max_ms.map(|v| v as u64))
+                        .unwrap_or(bytes),
+                    call_count: s.call_count.unwrap_or(1),
+                }
+            })
+            .collect(),
+        render_events: jf
+            .render_events
+            .iter()
+            .map(|s| convert_sample(s, "render"))
+            .collect(),
     }
 }
 
 fn convert_sample(js: &JsonSample, fallback_name: &str) -> Sample {
-    // Unity 6 的 GC.Alloc marker 在 metadata 里携带分配字节数（Int64）。
-    // 这里把字节数放到 total_ms 字段里（字段复用：allocSites 路径下含义是字节）。
-    let total = if js.name.as_deref() == Some("GC.Alloc") {
-        // 优先用 metadata 里的字节数，没有再退回到 total_ms
-        extract_alloc_bytes(js.metadata.as_ref()).unwrap_or_else(|| js.total_ms.unwrap_or(0.0))
-    } else {
-        js.total_ms.unwrap_or(0.0)
-    };
+    // CPU / rendering 样本始终使用耗时单位；字节只在 AllocSite 转换中读取。
+    let total = js.total_ms.unwrap_or(0.0);
 
     Sample {
         name: js.name.clone().unwrap_or_else(|| fallback_name.to_string()),
@@ -371,7 +486,9 @@ mod tests {
     async fn warns_on_empty() {
         let json = r#"{ "meta": {}, "frames": [] }"#;
         let bytes = Bytes::from(json);
-        let profile = parse(&bytes, "empty.json", json.len() as u64).await.unwrap();
+        let profile = parse(&bytes, "empty.json", json.len() as u64)
+            .await
+            .unwrap();
         assert!(profile.warnings.iter().any(|w| w.contains("未解析到")));
     }
 
@@ -401,17 +518,19 @@ mod tests {
             ]
         }"#;
         let bytes = Bytes::from(json);
-        let profile = parse(&bytes, "unity6.json", json.len() as u64).await.unwrap();
+        let profile = parse(&bytes, "unity6.json", json.len() as u64)
+            .await
+            .unwrap();
         assert_eq!(profile.meta.unity_version.as_deref(), Some("6000.3.0f1"));
         assert_eq!(profile.frames.len(), 1);
 
-        // GC.Alloc 字节数应被 metadata 中的 Int64 替换
+        // CPU 样本耗时不应被 GC 字节 metadata 覆盖
         let gc_alloc = profile.frames[0]
             .main_thread_samples
             .iter()
             .find(|s| s.name == "GC.Alloc")
             .unwrap();
-        assert_eq!(gc_alloc.total_ms as u64, 4096);
+        assert_eq!(gc_alloc.total_ms, 0.0);
 
         // RenderGraph markers 应被识别
         let rg = profile.frames[0]
@@ -433,4 +552,13 @@ mod tests {
         assert_eq!(sample_category("JobHandle.Complete"), "Jobs");
         assert_eq!(sample_category("SomeRandom.Marker"), "Other");
     }
+}
+/// File IO and decoding run on the caller's blocking worker.
+pub fn parse_path(path: &std::path::Path) -> Result<ParsedProfile, ParseError> {
+    let bytes = Bytes::from(std::fs::read(path)?);
+    let name = path
+        .file_name()
+        .and_then(|v| v.to_str())
+        .unwrap_or("unknown.json");
+    futures::executor::block_on(parse(&bytes, name, bytes.len() as u64))
 }

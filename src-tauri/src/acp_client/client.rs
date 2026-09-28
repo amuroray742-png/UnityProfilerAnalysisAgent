@@ -1,63 +1,116 @@
-//! ACP Agent 子进程管理
-//!
-//! 极简 stdio 协议（不依赖 agent-client-protocol SDK）：
-//! - prompt 通过 stdin 写入，EOF 由 tokio::process::Child 的 drop 触发
-//! - stdout 按行切 chunk 推到前端
-//! - stderr 推到 [error] 事件
-//! - 子进程退出时 emit Finished
+//! Process ownership and cooperative cancellation.
+use super::{
+    agents::{resolve_command, AgentPreset},
+    AcpError,
+};
+use std::{process::Stdio, sync::Arc};
+use tokio::{
+    process::{Child, Command},
+    sync::watch,
+};
 
-use std::process::Stdio;
-use std::sync::Arc;
-
-use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
-
-use super::agents::{resolve_command, AgentPreset};
-use super::AcpError;
-
-/// 会话句柄：内部 Arc<Mutex<Option<JoinHandle>>>，Clone 之后多个 owner 都能 cancel
-///
-/// cancel() = abort supervisor。supervisor 在 future drop 时会带着
-/// `kill_on_drop=true` 的 Child 一起 drop，进程被强杀。
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SessionHandle {
-    inner: Arc<Mutex<Option<JoinHandle<()>>>>,
+    inner: Arc<Control>,
 }
-
+#[derive(Debug)]
+struct Control {
+    cancel: watch::Sender<bool>,
+    done: watch::Receiver<bool>,
+}
 impl SessionHandle {
-    pub fn new(supervisor: JoinHandle<()>) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(Some(supervisor))),
-        }
+    pub fn channel() -> (Self, watch::Receiver<bool>, watch::Sender<bool>) {
+        let (cancel, rx) = watch::channel(false);
+        let (done, finished) = watch::channel(false);
+        (
+            Self {
+                inner: Arc::new(Control {
+                    cancel,
+                    done: finished,
+                }),
+            },
+            rx,
+            done,
+        )
     }
-
-    /// abort supervisor task（kill_on_drop 会级联杀掉 child 进程）。
-    /// 多次 cancel 安全：第一次会 abort，后续 no-op。
     pub async fn cancel(&self) {
-        if let Some(h) = self.inner.lock().await.take() {
-            h.abort();
+        self.inner.cancel.send_replace(true);
+        self.wait().await;
+    }
+    pub async fn wait(&self) {
+        let mut done = self.inner.done.clone();
+        while !*done.borrow_and_update() {
+            if done.changed().await.is_err() {
+                break;
+            }
         }
     }
 }
+impl Drop for Control {
+    fn drop(&mut self) {
+        self.cancel.send_replace(true);
+    }
+}
 
-/// spawn Agent 子进程
-///
-/// 通过 `resolve_command` 处理 .ps1 / .cmd / .bat 等 Windows shim 脚本：
-/// - `.ps1` → `powershell -NoProfile -ExecutionPolicy Bypass -File <path> <args>`
-/// - `.cmd` / `.bat` → `cmd /C <path> <args>`
-/// - 其他 → 直接 spawn
-pub async fn spawn_agent(preset: &AgentPreset) -> Result<Child, AcpError> {
+pub async fn spawn_agent(preset: &AgentPreset, cwd: &std::path::Path) -> Result<Child, AcpError> {
     let (program, args) = resolve_command(&preset.command, &preset.args)
         .ok_or_else(|| AcpError::AgentNotInstalled(preset.command.clone()))?;
-
-    let mut cmd = Command::new(&program);
-    cmd.args(&args)
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    Ok(cmd.spawn()?)
+}
 
-    let child = cmd.spawn()?;
-    Ok(child)
+/// Windows job membership makes adapter descendants part of the same lifetime.
+#[cfg(windows)]
+pub struct ProcessTree(windows_sys::Win32::Foundation::HANDLE);
+#[cfg(windows)]
+unsafe impl Send for ProcessTree {}
+#[cfg(windows)]
+impl ProcessTree {
+    pub fn attach(child: &Child) -> std::io::Result<Self> {
+        use windows_sys::Win32::{Foundation::CloseHandle, System::JobObjects::*};
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                return Err(std::io::Error::last_os_error());
+            }
+            let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let ok = SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &limits as *const _ as _,
+                std::mem::size_of_val(&limits) as u32,
+            );
+            if ok == 0 || AssignProcessToJobObject(job, child.raw_handle().unwrap() as _) == 0 {
+                let error = std::io::Error::last_os_error();
+                CloseHandle(job);
+                return Err(error);
+            }
+            Ok(Self(job))
+        }
+    }
+}
+#[cfg(windows)]
+impl Drop for ProcessTree {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+#[cfg(not(windows))]
+pub struct ProcessTree;
+#[cfg(not(windows))]
+impl ProcessTree {
+    pub fn attach(_: &Child) -> std::io::Result<Self> {
+        Ok(Self)
+    }
 }

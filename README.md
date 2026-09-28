@@ -1,152 +1,93 @@
 # Unity Profiler Analysis Agent
 
-> 通过 **ACP Client + MCP Server** 接入 Claude Code / Gemini CLI 等 Agent，自动诊断 Unity 游戏性能瓶颈。
->
-> 架构参考 [`librashuai/UnityPerfAgent`](https://github.com/librashuai/UnityPerfAgent)。
->
-> **目标 Unity 版本：Unity 6000.3**（Unity 6 系列）；也兼容 Unity 2022 LTS 导出。
+面向 Unity Profiler 离线录制的本地桌面分析原型，使用 Tauri 2、React / TypeScript 和 Rust。首要目标是 **Windows 上的 Unity 6000.3 可信分析**，通过 ACP Agent 与 MCP 数据查询辅助诊断。
 
-## 是什么
+当前已实现 Editor dump 的 CPU/GC 导入链路，以及 Unity 6000.3.23f1 `.data` 的无扫描结构解析。两份录制的 137 个参考帧已通过样本、CPU/GC 和站点归因对照，包含加载高峰和末帧。现已增加原始单帧调用树与分页查询。Windows Claude Code ACP 的 MCP 查询、流式回答和取消闭环已通过公开 fixture 验证。release 桌面主流程、NSIS 安装后界面/协议/卸载已在限定范围通过。可信分析 MVP 尚未完成：原生文件选择、MSI、远端 CI 和长期性能预算仍待验收。缺失指标显示“—”，有效零值仍显示为零。
 
-一个本地桌面工具（Tauri 2 + React + Rust）：
+## 文档导航
 
-1. **拖入** Unity Profiler 文件（`.pd3u` / `.data` / `.json` / `.raw`）
-2. **解析** 出 CPU / GC / 渲染核心指标
-3. **AI 诊断**：App 作为 ACP Client 启动 Claude Code / Gemini CLI 等 ACP 兼容 Agent，Agent 通过内置 MCP Server 按需查询 Profiler 数据，给出诊断与可执行建议
-4. 浏览器内**流式**渲染诊断文本 + Agent Log 抽屉
+- [项目状态、验证证据与路线图](docs/project-status.md)：完成判断的唯一详细台账。
+- [架构与数据契约](docs/architecture.md)：现有数据流、目标数据流及实现边界。
+- [原始帧与调用树查询](docs/frame-queries.md)：线程选择、分页、数据来源和临时存储生命周期。
+- [Windows 性能与发布验收](docs/performance-and-release.md)：release 测量方法、基线与安装验收边界。
+- [Windows 桌面验收](docs/manual-acceptance.md)：已验证的结果页/诊断流程与剩余原生窗口、安装检查。
+- [本地交付与发布门槛](docs/release-readiness.md)：本轮交付范围、检查结果及需要维护者决定的事项。
+- [ACP / MCP 集成状态](docs/acp-mcp-integration.md)：协议缺口和后续验收条件。
+- [Unity 导出与对照操作](docs/unity-scripts/ExtractProfilerDump.README.md)：研究用 dump 与应用 JSON 的区别。
 
-## 特性
+## 当前能力
 
-- ✅ 4 种 Profiler 格式：JSON（主）、PD3U（PlayerConnection 流）、`.data`（Unity 2022+ / Unity 6）、`.raw`（尽力）
-- ✅ **`.data` 真实端到端解析**（流式，GB 级不 OOM）
-  - **Unity 2022.3**：完整 port `librashuai/UnityPerfAgent` 的 `internal/capture/capture.go`：block header、frame header、Stats block、AllProfilerStats、marker 表、主线程采样树、GC.Alloc metadata strict-match、34-record Memory counter signature scan + 9 个 invariant
-  - **Unity 6000.3**：block iteration + frame header + memory counter 扫描 + marker 表新格式（实测验证 Unity 6000.3.23f1 文件）
-  - 已知 Unity 6 限制：Stats / 主线程采样树 / GC.Alloc metadata 布局待进一步逆向
-- ✅ 3 个分析维度：CPU 帧时间、GC 分配、Draw Call / SetPass
-- ✅ AI 推理交给用户配置的 ACP 兼容 Agent（Claude Code / Gemini CLI / Codex CLI 等）
-- ✅ 通过 MCP Server 让 Agent 按需查询数据，多轮交互
-- ✅ 单文件二进制，~5–10MB，Windows / macOS / Linux
+状态定义及完整证据见[项目状态](docs/project-status.md#状态口径)。下表为台账的入口摘要，不代表所有版本和输入均已验证。
 
-## 架构
+| 能力 | 状态 | 边界 |
+|---|---|---|
+| 文件选择、解析进度、指标和诊断输出界面 | 部分实现 | release 结果页、树控件和诊断按钮已回归；原生文件选择返回值由测试替代，原生窗口本身未验证 |
+| Editor dump JSON 导入 | 已验证 | 64 帧参考 dump 与合成样本；CPU/GC 范围与有效帧数明确 |
+| 项目约定 JSON 解析与指标聚合 | 部分实现 | 有合成输入单元测试，不是任意 Unity JSON 通用导入器 |
+| Unity 2022.3 `.data` | 部分实现 | 有采样树与 GC metadata 解码；Draw Call / SetPass 标为不可用 |
+| Unity 6000.3.23f1 `.data` | 部分实现 | 两份录制的指定范围通过 CPU/GC 对照；帧时间来自下一帧起点，末帧不可用；渲染计数与更广版本支持待完成 |
+| `.pd3u` / `.raw` | 占位 | 文件头识别及帧数估算，不具备实质性能分析能力 |
+| ACP / MCP | 部分实现 | Windows Claude Code ACP 0.16.2 的 MCP 查询、流式诊断和取消通过；release 完成/取消/重新诊断已验证；其他 Agent 与广泛诊断准确性待验收 |
+| 跨平台安装包、体积和性能承诺 | 待验证 | 不能从框架支持推导出本项目已验证 |
 
-```
-React + TypeScript WebView (Tauri)
-            │
-            ▼
-Rust Backend (Tauri)
-  ├─ parser/    pd3u · data · json · raw
-  ├─ extractor/ cpu · gc · rendering
-  ├─ mcp/       内置 stdio MCP Server（暴露 performance_* 工具）
-  └─ acp_client/ 启动 ACP Agent + 注入 MCP Server + 流式回传
-            │
-            ▼
-   ACP 兼容 Agent 子进程
-   (Claude Code ACP / Gemini CLI / Codex CLI ...)
-```
+## 开发环境
 
-## 前置条件
+- Node.js >= 20 与 npm。
+- Rust stable；依赖版本以 `src-tauri/Cargo.lock` 为准。清单声明的最低 Rust 版本尚未单独验证。
+- Windows 构建需要 MSVC C++ 构建工具、Windows SDK 与 WebView2，见 [Tauri 前置条件](https://v2.tauri.app/start/prerequisites/)。
+- 解析文件不需要 Agent；内置 Agent 命令被 PATH 检测到，也不代表协议兼容。
 
-1. **Node.js >= 20** + npm
-2. **Rust stable**（[rustup](https://rustup.rs)）
-3. Windows: **WebView2**（Win11 自带，Win10 需手动装）
-4. **ACP 兼容 Agent**（至少装一个）：
-   - [Claude Code ACP](https://docs.anthropic.com/en/docs/claude-code) — `npm i -g @anthropic-ai/claude-code` + 启用 ACP
-   - [Gemini CLI](https://github.com/google-gemini/gemini-cli) — `gemini --experimental-acp`
-   - Codex CLI — `npm i -g @openai/codex`
+在仓库根目录执行：
 
-## 开发
-
-```bash
-# 1. 装前端依赖
-npm install
-
-# 2. 开发模式（自动启动 Tauri + Vite 热重载）
+```powershell
+npm ci
 npm run tauri:dev
+```
 
-# 3. 生产构建（产出 Windows 安装包）
+构建与验证：
+
+```powershell
+npm test
+npm run build
+cargo test --manifest-path src-tauri/Cargo.toml --locked
 npm run tauri:build
 ```
 
-### 仅跑测试
+`npm run build` 只验证前端；`tauri:build` 已在本机生成 MSI / NSIS 包；NSIS 当前用户安装、安装后界面/协议和卸载已通过；MSI、交互安装向导及原生文件选择仍待验收，见[发布记录](docs/performance-and-release.md)。Rust 依赖已缓存时可追加 `--offline`。默认 Rust 测试会跳过依赖私有文件或进程环境的集成测试，详见验证台账。
 
-```bash
-# 前端
-npm run test
+## 当前使用流程
 
-# Rust
-cd src-tauri && cargo test
-```
+1. 启动桌面应用，点击选择本地 Profiler 文件。
+2. 应用登记原文件路径，读取并解析，再展示指标与解析警告；不会复制文件到上传目录。
+3. 可选择 [ExtractProfilerDump.cs](docs/unity-scripts/ExtractProfilerDump.README.md) 导出的 `.dump.json`，或 Unity 6000.3.23f1 `.data`，查看 CPU/GC 指标及有效帧覆盖。`.data` 末帧的录制帧时间和全部渲染计数不可用；其他 Unity 6 版本仅提供帧头 CPU 估算。支持范围见[布局验证记录](docs/unity6-layout-research.md)。
+4. CPU 页可选择原始帧号、线程和深度，分页查看真实样本及 GC 字节；重置会释放当前快照和查询源。
+5. 选择已配置登录的 ACP Agent，点击“开始 AI 诊断”。当前验证了 Claude Code ACP 0.16.2；Agent 通过 MCP 查询本次录制。可点击取消，认证或协议失败会明确显示原因。
 
-## 文件格式支持
+当前没有统一文件大小上限；实际内存取决于输入结构。已移除未落实的“最大 500MB”提示，测量范围及已知内存峰值见[性能基线](docs/performance-and-release.md)。
 
-| 扩展名 | 来源 | 支持度 |
-|---|---|---|
-| `.json` | Unity Profiler Export JSON（Unity 6000.3 / 2022 LTS） | ✅ 完整，含 Unity 6 GC.Alloc metadata 字节提取 |
-| `.pd3u` | PlayerConnection Data Unity（实时流） | ⚠️ MVP：仅识别 magic，详细解析待补 |
-| `.data` | Unity 2022.3 Save to file | ✅ 完整 port `librashuai/UnityPerfAgent`：block 迭代、frame header、Stats、marker 表、主线程采样树、GC.Alloc metadata、Memory counter 34-record signature |
-| `.data` | Unity 6000.3 Save to file | ⚠️ 部分：block 迭代 + frame header + marker 表（新格式）+ Memory counter scan。Stats block / 主线程采样树 / GC.Alloc metadata 待逆向 |
-| `.raw` | 老版本 Unity Profiler 二进制 | ⚠️ 仅识别 magic + 版本估算 |
+## 项目约定 JSON 示例
 
-> `.data` 推荐工作流：Unity Editor → Window → Analysis → Profiler → 录制 → 三点菜单 → **Save to file** → 选本工具打开。
-
-## Unity 6000.3 特有支持
-
-针对 Unity 6 系列，解析器与诊断器额外支持：
-
-- **Marker 分类**：`PlayerLoop` / `BehaviourUpdate` / `FixedBehaviourUpdate` / `GC.Alloc` / `RenderGraph.*` / `Camera.Render` / `Gfx.WaitForPresentOnGfxThread` / `Physics.Simulate` / `JobHandle.Complete` 等按类别归类（Scripting / Memory / Rendering / RenderGraph / GfxWait / Physics / Jobs / Editor / Other）
-- **GC.Alloc 字节数提取**：Unity 6 在 marker metadata 中携带分配字节数（Int64），解析时自动覆盖默认 total_ms 字段值
-- **ProfilerCategory 字段**：Unity 6 新增 `category` 字段（解析时保留为元数据，未透传到前端）
-- **RenderGraph markers**：Unity 6 SRP 引入，识别 `RenderGraph.Compile` / `RenderGraph.Execute` / `RenderGraph.Dispatch` 等
-
-## 使用流程
-
-1. 启动应用：`npm run tauri:dev`
-2. 选择 Profiler 文件
-3. 自动解析并展示指标卡
-4. 在右上角选择 ACP Agent（需要至少装一个）
-5. 点击"开始 AI 诊断"
-6. Agent 通过 MCP 工具按需查询数据
-7. 流式渲染诊断文本 + Agent Log 抽屉可见完整 MCP 请求 / 响应
-
-## 在编辑器里使用（高级）
-
-我们内置的 MCP Server 也能被 Zed / JetBrains / Cursor 等 ACP 兼容编辑器直接调用。在 `~/.config/zed/settings.json` 中添加：
+以下是解析器 V1 结构的最小示例；数值为演示数据，不是性能基准：
 
 ```json
 {
-  "agent_servers": {
-    "UnityProfilerAnalysis": {
-      "command": "npm",
-      "args": ["run", "--prefix", "PATH_TO_THIS_REPO", "mcp:serve"]
-    }
-  }
+  "meta": { "unityVersion": "6000.3.23f1", "platform": "Windows" },
+  "frames": [{
+    "index": 0,
+    "durationMs": 16.0,
+    "cpuMs": 16.0,
+    "gcAllocBytes": 128,
+    "drawCalls": 100,
+    "setPassCalls": 20,
+    "mainThreadSamples": [{
+      "name": "PlayerLoop", "totalMs": 16.0, "callCount": 1, "maxMs": 16.0
+    }]
+  }]
 }
 ```
 
-详见 `docs/acp-mcp-integration.md`。
+Editor 脚本产生的 `frames[].threads[].samples[]` dump 由独立分支直接支持，无需转换为 V1。V1 的 cpuMs 缺失时主线程指标不可用，durationMs 只作为帧时间。ExtractProfilerDump 已通过本机 Editor 编译与重新导出；ProfilerJsonExporter 示例与全新 batch 启动仍待单独验收。
 
-## 技术栈
+## 项目信息
 
-- **桌面壳**：[Tauri v2](https://tauri.app/)
-- **前端**：React 18 + TypeScript + Vite
-- **后端**：Rust 1.75+
-- **MCP**：[`rmcp`](https://crates.io/crates/rmcp) 0.5（官方）
-- **ACP**：[`agent-client-protocol`](https://crates.io/crates/agent-client-protocol) 0.4（官方）
-
-## 风险与限制
-
-- **ACP SDK v0.4.1 早期版本**：协议变更或 API 不完整，可能需要 fork 修复
-- **`.pd3u` 解析 MVP 级**：实时流详细解析待补
-- **Unity 6000.x `.data` 部分字段待逆向**：Stats block / 主线程采样树 / GC.Alloc metadata 布局与 Unity 2022.3 不同，需要进一步逆向 UnityCsReference Unity 6 源码
-- **Agent 必须本机安装**：应用不会替你下载 Agent
-- **MVP 仅 CPU / GC / 渲染**：GPU 帧时间、纹理 / Mesh 内存、Addressables 等留待后续
-
-## License
-
-MIT
-
-## 致谢
-
-- [`librashuai/UnityPerfAgent`](https://github.com/librashuai/UnityPerfAgent) — 架构灵感
-- [Anthropic MCP](https://modelcontextprotocol.io/) — MCP 协议
-- [Agent Client Protocol](https://agentclientprotocol.com/) — Zed / Google ACP 协议
+架构与部分解析思路参考 [librashuai/UnityPerfAgent](https://github.com/librashuai/UnityPerfAgent)。本项目采用 [MIT License](LICENSE)，Copyright (c) 2026 amuroray742-png。

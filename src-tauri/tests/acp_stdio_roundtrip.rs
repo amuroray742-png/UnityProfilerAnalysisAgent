@@ -1,214 +1,280 @@
-//! 集成测试：用 PowerShell 当假 agent，验证 stdio 协议端到端通。
-//!
-//! PowerShell 脚本读 stdin、按行输出回 stdout、最后退出。
-//! 验证 start_diagnose 真实把 prompt 写进 stdin、stdout 按行切 chunk、
-//! child 退出后 emit Finished。
-
-use std::time::Duration;
-
+//! ACP sessions against an independent Node fixture and the real MCP bridge.
+use std::{path::PathBuf, time::Duration};
 use tokio::sync::mpsc;
-use unity_profiler_analysis_agent_lib::acp_client::agents::{builtin_presets, AgentPreset};
-use unity_profiler_analysis_agent_lib::acp_client::{start_diagnose, DiagnoseEvent};
-use unity_profiler_analysis_agent_lib::extractor::MetricsSnapshot;
+use unity_profiler_analysis_agent_lib::{
+    acp_client::{self, agents::AgentPreset, DiagnoseEvent, DiagnoseRequest},
+    extractor, parser,
+};
 
-fn fake_snapshot() -> MetricsSnapshot {
-    // 用 JSON template 构造最小可用 snapshot（test 不解析其内容）
-    let json = serde_json::json!({
-        "meta": {
-            "fileName": "test.data",
-            "fileId": "test-file-id",
-            "format": "Data",
-            "frameCount": 1,
-            "durationMs": 16.67,
-            "unityVersion": "6000.3.23f1",
-            "platform": "Windows",
-        },
-        "cpu": {
-            "mainThreadMs": {"p50": 16.0, "p95": 16.67, "p99": 17.0, "max": 20.0, "min": 14.0, "samples": 1},
-            "frameTimeline": [],
-            "topHotspots": [],
-        },
-        "gc": {
-            "totalAllocBytes": 0,
-            "allocPerFrameBytes": {"p50": 0.0, "p95": 0.0, "p99": 0.0, "max": 0.0, "min": 0.0, "samples": 0},
-            "genCollections": {"gen0": 0, "gen1": 0, "gen2": 0},
-            "topAllocSites": [],
-        },
-        "rendering": {
-            "drawCalls": {"p50": 0.0, "p95": 0.0, "p99": 0.0, "max": 0.0, "min": 0.0, "samples": 0},
-            "setPassCalls": {"p50": 0.0, "p95": 0.0, "p99": 0.0, "max": 0.0, "min": 0.0, "samples": 0},
-            "batchesSavedBySrpBatcher": 0,
-            "topRenderEvents": [],
-        },
-        "warnings": [],
-    });
-    serde_json::from_value(json).expect("fake snapshot template")
-}
-
-/// 假 agent preset：powershell 跑一个 echo 脚本
-#[allow(dead_code)]
-fn fake_powershell_echo_preset() -> Option<AgentPreset> {
-    builtin_presets()
-        .into_iter()
-        .find(|p| p.command == "powershell" || p.command == "pwsh")
-        .map(|mut p| {
-            p.id = "fake-powershell".to_string();
-            p.label = "Fake PowerShell Echo".to_string();
-            p.args = vec![
-                "-NoProfile".to_string(),
-                "-Command".to_string(),
-                r#"Write-Output 'line-A'; Start-Sleep -Milliseconds 30; Write-Output 'line-B'; Write-Output 'line-C'; Write-Output 'line-D'"#.to_string(),
-            ];
-            p.description = "fake agent for stdio protocol test".to_string();
-            p.available = true;
-            p
-        })
-}
-
-#[tokio::test(flavor = "current_thread")]
-#[ignore]
-async fn start_diagnose_roundtrips_stdin_to_chunks() {
-    // 1. 准备事件 channel
-    let (tx, mut rx) = mpsc::unbounded_channel::<DiagnoseEvent>();
-
-    // 2. 准备一个 preset，command 直接是 powershell
-    //    走 resolve_command 时会进 "其他" 分支，直接 spawn powershell
+async fn launch(
+    command: String,
+    args: Vec<String>,
+) -> (
+    acp_client::client::SessionHandle,
+    mpsc::UnboundedReceiver<DiagnoseEvent>,
+) {
+    let bytes = bytes::Bytes::from_static(include_bytes!("fixtures/editor-dump.json"));
+    let p = parser::json::parse(&bytes, "fixture.json", bytes.len() as u64)
+        .await
+        .unwrap();
+    let (tx, rx) = mpsc::unbounded_channel();
     let preset = AgentPreset {
-        id: "fake-powershell".to_string(),
-        label: "Fake PowerShell Echo".to_string(),
-        command: "powershell".to_string(),
-        args: vec![
-            "-NoProfile".to_string(),
-            "-Command".to_string(),
-            // 读 stdin 全部内容作为参数 (echo back)，然后输出固定 4 行
-            r#"Write-Output 'line-A'; Start-Sleep -Milliseconds 30; Write-Output 'line-B'; Write-Output 'line-C'; Write-Output 'line-D'"#.to_string(),
-        ],
-        description: "fake agent for stdio protocol test".to_string(),
+        id: "test".into(),
+        label: "test".into(),
+        command,
+        args,
+        description: "protocol test".into(),
         available: true,
     };
-
-    // 3. 构造请求
-    let (_cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
-    let req = unity_profiler_analysis_agent_lib::acp_client::DiagnoseRequest {
-        file_id: "test-file-id".to_string(),
-        agent_id: "fake-powershell".to_string(),
-        snapshot: fake_snapshot(),
-        event_tx: tx,
-        cancel_rx,
-    };
-
-    // 4. 启动
-    let session = start_diagnose(preset, req)
+    let handle = acp_client::start_diagnose(
+        preset,
+        DiagnoseRequest {
+            file_id: "fixture".into(),
+            agent_id: "test".into(),
+            snapshot: extractor::extract(&p),
+            details: p.details,
+            bridge_executable: PathBuf::from(
+                std::env::var_os("UPAA_TEST_APP_EXE")
+                    .unwrap_or_else(|| env!("CARGO_BIN_EXE_unity-profiler-analysis-agent").into()),
+            ),
+            event_tx: tx,
+        },
+    )
+    .await
+    .unwrap();
+    (handle, rx)
+}
+async fn fixture(
+    mode: &str,
+) -> (
+    acp_client::client::SessionHandle,
+    mpsc::UnboundedReceiver<DiagnoseEvent>,
+) {
+    launch(
+        "node".into(),
+        vec![
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/acp-agent.cjs")
+                .to_string_lossy()
+                .into_owned(),
+            mode.into(),
+        ],
+    )
+    .await
+}
+async fn collect(rx: &mut mpsc::UnboundedReceiver<DiagnoseEvent>) -> Vec<DiagnoseEvent> {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event);
+        }
+        events
+    })
+    .await
+    .expect("session did not terminate")
+}
+#[tokio::test]
+async fn actual_acp_handshake_mcp_query_stream_and_single_terminal() {
+    let (handle, mut rx) = fixture("success").await;
+    let events = collect(&mut rx).await;
+    handle.wait().await;
+    assert_eq!(
+        events.iter().filter(|e| e.terminal()).count(),
+        1,
+        "{events:?}"
+    );
+    assert!(
+        matches!(events.last(),Some(DiagnoseEvent::Finished{total_chunks:1,stop_reason}) if stop_reason=="end_turn"),
+        "{events:?}"
+    );
+    assert!(events
+        .iter()
+        .any(|e| matches!(e,DiagnoseEvent::Chunk{text} if text.contains("20 B"))));
+    assert!(!events
+        .iter()
+        .any(|e| matches!(e,DiagnoseEvent::Chunk{text} if text.contains("STALE"))));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e,DiagnoseEvent::Log{message} if message.contains("ordinary"))));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e,DiagnoseEvent::McpCall{tool,..} if tool=="performance_cpu_hierarchy")));
+}
+#[tokio::test]
+async fn errors_never_emit_success_terminal() {
+    for mode in ["error", "malformed", "version", "limit"] {
+        let (handle, mut rx) = fixture(mode).await;
+        let events = collect(&mut rx).await;
+        handle.wait().await;
+        assert_eq!(events.iter().filter(|e| e.terminal()).count(), 1);
+        assert!(
+            matches!(events.last(), Some(DiagnoseEvent::Error { .. })),
+            "{mode}: {events:?}"
+        );
+    }
+}
+#[tokio::test]
+async fn cancellation_during_initialization_is_bounded_and_idempotent() {
+    let (handle, mut rx) = fixture("hang-initialize").await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::timeout(Duration::from_secs(5), handle.cancel())
         .await
-        .expect("start_diagnose should succeed");
+        .unwrap();
+    handle.cancel().await;
+    let events = collect(&mut rx).await;
+    assert!(
+        matches!(events.last(), Some(DiagnoseEvent::Cancelled)),
+        "{events:?}"
+    );
+}
 
-    // 5. 收集事件，等待最多 10s
-    let mut events: Vec<DiagnoseEvent> = vec![];
-    let timeout = tokio::time::sleep(Duration::from_secs(10));
-    tokio::pin!(timeout);
-    loop {
-        tokio::select! {
-            Some(ev) = rx.recv() => {
-                let is_finished = matches!(ev, DiagnoseEvent::Finished { .. });
-                let is_error = matches!(ev, DiagnoseEvent::Error { .. });
-                let kind = match &ev {
-                    DiagnoseEvent::Started { .. } => "started",
-                    DiagnoseEvent::Chunk { .. } => "chunk",
-                    DiagnoseEvent::McpCall { .. } => "mcp-call",
-                    DiagnoseEvent::McpResult { .. } => "mcp-result",
-                    DiagnoseEvent::Finished { .. } => "finished",
-                    DiagnoseEvent::Error { .. } => "error",
-                };
-                println!("[event] {kind}");
-                if let DiagnoseEvent::Chunk { text } = &ev {
-                    print!("  payload: {}", text);
-                }
-                if let DiagnoseEvent::Error { message } = &ev {
-                    println!("  payload: {message}");
-                }
-                events.push(ev);
-                if is_finished {
+#[tokio::test]
+async fn app_state_rejects_duplicate_sessions_and_release_cancels_owned_work() {
+    use unity_profiler_analysis_agent_lib::state::AppState;
+    let bytes = bytes::Bytes::from_static(include_bytes!("fixtures/editor-dump.json"));
+    let profile = parser::json::parse(&bytes, "fixture", bytes.len() as u64)
+        .await
+        .unwrap();
+    let state = AppState::new();
+    state
+        .put_snapshot("a".into(), extractor::extract(&profile))
+        .await;
+    let preset = AgentPreset {
+        id: "test".into(),
+        label: "test".into(),
+        command: "node".into(),
+        args: vec![
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/acp-agent.cjs")
+                .to_string_lossy()
+                .into_owned(),
+            "hang-initialize".into(),
+        ],
+        description: "fixture".into(),
+        available: true,
+    };
+    let exe = PathBuf::from(
+        std::env::var_os("UPAA_TEST_APP_EXE")
+            .unwrap_or_else(|| env!("CARGO_BIN_EXE_unity-profiler-analysis-agent").into()),
+    );
+    let (id, handle, mut rx) = state
+        .start_session("a", preset.clone(), exe.clone())
+        .await
+        .unwrap();
+    assert!(state.start_session("a", preset, exe).await.is_err());
+    state.cancel_session("not-this-session").await;
+    assert!(state.0.lock().await.active_sessions.contains_key(&id));
+    tokio::time::timeout(Duration::from_secs(5), state.release_file("a"))
+        .await
+        .unwrap();
+    handle.wait().await;
+    assert!(state.0.lock().await.active_sessions.is_empty());
+    assert!(state.get_snapshot("a").await.is_none());
+    assert!(matches!(
+        collect(&mut rx).await.last(),
+        Some(DiagnoseEvent::Cancelled)
+    ));
+}
+
+#[tokio::test]
+#[ignore = "requires UPAA_REAL_AGENT; cancels after the first real MCP query on the public fixture"]
+async fn real_agent_cancellation_closes_session() {
+    let command = std::env::var("UPAA_REAL_AGENT").expect("set UPAA_REAL_AGENT");
+    let (handle, mut rx) = launch(command, vec![]).await;
+    tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            match rx.recv().await {
+                Some(DiagnoseEvent::McpCall { tool, .. }) => {
+                    println!("cancel after MCP {tool}");
                     break;
                 }
-                if is_error {
-                    // 继续收，看是否最终能到 Finished
+                Some(e) if e.terminal() => panic!("terminated before MCP: {e:?}"),
+                None => panic!("no MCP call"),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("no real MCP query before deadline");
+    let started = std::time::Instant::now();
+    tokio::time::timeout(Duration::from_secs(10), handle.cancel())
+        .await
+        .unwrap();
+    let events = collect(&mut rx).await;
+    let confirmed = events
+        .iter()
+        .any(|e| matches!(e,DiagnoseEvent::Log{message} if message=="ACP 取消已确认"));
+    println!(
+        "cancel_elapsed={:?}, protocol_confirmed={confirmed}",
+        started.elapsed()
+    );
+    assert!(
+        matches!(events.last(), Some(DiagnoseEvent::Cancelled)),
+        "{events:?}"
+    );
+}
+#[tokio::test]
+#[cfg(windows)]
+async fn cancellation_reaps_adapter_descendants_even_without_cancel_response() {
+    for mode in ["cancel", "uncooperative"] {
+        let (handle, mut rx) = fixture(mode).await;
+        let pid = tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(event) = rx.recv().await {
+                if let DiagnoseEvent::Log { message } = event {
+                    if let Some(pid) = message.split("DESCENDANT_PID=").nth(1) {
+                        return pid.trim().parse::<u32>().unwrap();
+                    }
                 }
             }
-            _ = &mut timeout => {
-                panic!("timed out waiting for events; got so far: {events:?}");
+            panic!("no descendant PID")
+        })
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(6), handle.cancel())
+            .await
+            .unwrap();
+        let events = collect(&mut rx).await;
+        assert!(
+            matches!(events.last(), Some(DiagnoseEvent::Cancelled)),
+            "{events:?}"
+        );
+        #[cfg(windows)]
+        unsafe {
+            use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::*};
+            let process = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+            if !process.is_null() {
+                assert_eq!(
+                    WaitForSingleObject(process, 2000),
+                    0,
+                    "descendant survived cancellation"
+                );
+                CloseHandle(process);
             }
         }
+        #[cfg(not(windows))]
+        let _ = pid;
     }
-
-    // 6. 验证：至少 1 个 Started，4 个 Chunk (line-A..D)，1 个 Finished
-    let started = events.iter().filter(|e| matches!(e, DiagnoseEvent::Started { .. })).count();
-    let chunks = events.iter().filter_map(|e| match e {
-        DiagnoseEvent::Chunk { text } => Some(text.clone()),
-        _ => None,
-    }).collect::<Vec<_>>();
-    let finished = events.iter().filter(|e| matches!(e, DiagnoseEvent::Finished { .. })).count();
-
-    println!("summary: started={started}, chunks={}, finished={finished}", chunks.len());
-    for (i, c) in chunks.iter().enumerate() {
-        println!("  chunk[{i}]: {}", c.trim_end());
-    }
-
-    assert_eq!(started, 1, "exactly 1 Started event expected");
-    assert_eq!(finished, 1, "exactly 1 Finished event expected");
-    assert!(chunks.len() >= 4, "expected ≥4 chunks, got {}", chunks.len());
-    let joined: String = chunks.join("");
-    for line in ["line-A", "line-B", "line-C", "line-D"] {
-        assert!(joined.contains(line), "missing expected output line: {line}\nfull output:\n{joined}");
-    }
-
-    // 7. cancel() 不应 panic
-    session.cancel().await;
 }
-
-#[tokio::test(flavor = "current_thread")]
-#[ignore]
-async fn start_diagnose_emits_finished_after_agent_exits() {
-    // 验证：agent 退出后 Finished 一定到达（不会卡住）
-    let (tx, mut rx) = mpsc::unbounded_channel::<DiagnoseEvent>();
-    let (_cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
-
-    let preset = AgentPreset {
-        id: "fast-exit".to_string(),
-        label: "Fast Exit".to_string(),
-        command: "powershell".to_string(),
-        args: vec![
-            "-NoProfile".to_string(),
-            "-Command".to_string(),
-            r#"Write-Output 'quick'"#.to_string(),
-        ],
-        description: "exits fast".to_string(),
-        available: true,
-    };
-
-    let req = unity_profiler_analysis_agent_lib::acp_client::DiagnoseRequest {
-        file_id: "f".to_string(),
-        agent_id: "fast-exit".to_string(),
-        snapshot: fake_snapshot(),
-        event_tx: tx,
-        cancel_rx,
-    };
-
-    let session = start_diagnose(preset, req).await.expect("start ok");
-
-    let mut got_finished = false;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    while tokio::time::Instant::now() < deadline {
-        match tokio::time::timeout(Duration::from_millis(500), rx.recv()).await {
-            Ok(Some(DiagnoseEvent::Finished { .. })) => {
-                got_finished = true;
-                break;
+#[tokio::test]
+#[ignore = "requires UPAA_REAL_AGENT; sends only the public synthetic fixture to an authenticated Agent"]
+async fn real_agent_queries_profiler_over_mcp() {
+    let command = std::env::var("UPAA_REAL_AGENT").expect("set UPAA_REAL_AGENT");
+    let (handle, mut rx) = launch(command, vec![]).await;
+    let result=tokio::time::timeout(Duration::from_secs(330),async {
+        let mut queried=false;let mut text=String::new();let mut terminal=None;
+        while let Some(event)=rx.recv().await {
+            match event {
+                DiagnoseEvent::McpCall{tool,..}=>{println!("MCP {tool}");queried=true;},
+                DiagnoseEvent::Chunk{text:chunk}=>text.push_str(&chunk),
+                event if event.terminal()=>terminal=Some(event),
+                _=>{},
             }
-            Ok(Some(_)) => continue,
-            Ok(None) => break,
-            Err(_) => continue,
         }
-    }
-
-    assert!(got_finished, "Finished event never arrived within 15s");
-    session.cancel().await;
+        println!("answer_chars={}, terminal={terminal:?}",text.len());
+        assert!(queried,"Agent never queried MCP");
+        assert!(!text.is_empty());
+        assert!(matches!(terminal,Some(DiagnoseEvent::Finished{stop_reason,..}) if stop_reason=="end_turn"));
+    }).await;
+    handle.cancel().await;
+    result.expect("real Agent timed out");
 }

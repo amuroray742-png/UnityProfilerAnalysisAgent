@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { FrameExplorer } from './components/FrameExplorer';
 import { UploadDropzone } from './components/UploadDropzone.tsx';
 import { MetricCard } from './components/MetricCard.tsx';
 import { HotspotTable } from './components/HotspotTable.tsx';
@@ -148,30 +149,33 @@ export default function App() {
               <div className="metrics-grid">
                 <MetricCard
                   label="主线程 p95"
+                  quality={state.snapshot.cpu.mainThreadMs.quality}
                   value={state.snapshot.cpu.mainThreadMs.p95}
                   unit="ms"
                   thresholds={{ warning: 16.67, danger: 33.33 }}
-                  detail={`p50 ${state.snapshot.cpu.mainThreadMs.p50.toFixed(2)} ms · max ${state.snapshot.cpu.mainThreadMs.max.toFixed(2)} ms`}
+                  detail={`p50 ${state.snapshot.cpu.mainThreadMs.p50?.toFixed(2) ?? "—"} ms · max ${state.snapshot.cpu.mainThreadMs.max?.toFixed(2) ?? "—"} ms`}
                 />
                 <MetricCard
                   label="GC 分配（每帧 p95）"
-                  value={state.snapshot.gc.allocPerFrameBytes.p95 / (1024 * 1024)}
+                  quality={state.snapshot.gc.allocPerFrameBytes.quality}
+                  value={state.snapshot.gc.allocPerFrameBytes.p95}
                   unit="bytes"
-                  thresholds={{ warning: 4, danger: 16 }}
-                  detail={`总分配 ${(state.snapshot.gc.totalAllocBytes / 1024 / 1024).toFixed(1)} MB`}
+                  thresholds={{ warning: 4 * 1024 * 1024, danger: 16 * 1024 * 1024 }}
+                  detail="GC 范围：已导出线程；仅统计有效帧"
                 />
                 <MetricCard
                   label="Draw Call p95"
+                  quality={state.snapshot.rendering.drawCalls.quality}
                   value={state.snapshot.rendering.drawCalls.p95}
                   unit="count"
                   thresholds={{ warning: 1500, danger: 3000 }}
-                  detail={`SetPass p95 ${state.snapshot.rendering.setPassCalls.p95}`}
+                  detail={`SetPass p95 ${state.snapshot.rendering.setPassCalls.p95 ?? "—"}`}
                 />
                 <MetricCard
                   label="帧数 / 时长"
                   value={state.snapshot.meta.frameCount}
                   unit="count"
-                  detail={`${(state.snapshot.meta.durationMs / 1000).toFixed(1)} s · ${state.snapshot.meta.unityVersion ?? 'Unity 版本未知'}`}
+                  detail={`${(state.snapshot.meta.durationMs === null ? "—" : (state.snapshot.meta.durationMs / 1000).toFixed(1))} s · ${state.snapshot.meta.unityVersion ?? 'Unity 版本未知'} · 分析 ${state.snapshot.meta.frameCount} / 声明 ${state.snapshot.meta.declaredFrameCount} 帧 · ${state.snapshot.meta.source} · 时长有效帧 ${state.snapshot.meta.durationQuality.validFrames}/${state.snapshot.meta.durationQuality.totalFrames}`}
                 />
               </div>
 
@@ -192,32 +196,38 @@ export default function App() {
               <div className="metrics-grid">
                 <MetricCard
                   label="主线程 p50"
+                  quality={state.snapshot.cpu.mainThreadMs.quality}
                   value={state.snapshot.cpu.mainThreadMs.p50}
                   unit="ms"
                 />
                 <MetricCard
                   label="主线程 p99"
+                  quality={state.snapshot.cpu.mainThreadMs.quality}
                   value={state.snapshot.cpu.mainThreadMs.p99}
                   unit="ms"
                   thresholds={{ warning: 16.67, danger: 33.33 }}
                 />
                 <MetricCard
                   label="主线程 max"
+                  quality={state.snapshot.cpu.mainThreadMs.quality}
                   value={state.snapshot.cpu.mainThreadMs.max}
                   unit="ms"
                   thresholds={{ warning: 33.33, danger: 50 }}
                 />
                 <MetricCard
                   label="帧时间样本"
-                  value={state.snapshot.cpu.frameTimeline.length}
+                  quality={state.snapshot.cpu.mainThreadMs.quality}
+                  value={state.snapshot.cpu.mainThreadMs.quality.validFrames}
                   unit="count"
                 />
               </div>
               <HotspotTable
                 title="主线程 Top 10 热点"
+                quality={state.snapshot.cpu.hotspotQuality}
                 hotspots={state.snapshot.cpu.topHotspots}
                 valueColumn="ms"
               />
+              {state.upload && <FrameExplorer key={state.upload.fileId} fileId={state.upload.fileId} frames={state.snapshot.cpu.frameTimeline} />}
             </>
           )}
 
@@ -226,22 +236,26 @@ export default function App() {
               <div className="metrics-grid">
                 <MetricCard
                   label="总 GC 分配"
-                  value={state.snapshot.gc.totalAllocBytes / (1024 * 1024)}
+                  quality={state.snapshot.gc.allocPerFrameBytes.quality}
+                  value={state.snapshot.gc.totalAllocBytes}
                   unit="bytes"
                 />
                 <MetricCard
                   label="每帧分配 p95"
-                  value={state.snapshot.gc.allocPerFrameBytes.p95 / (1024 * 1024)}
+                  quality={state.snapshot.gc.allocPerFrameBytes.quality}
+                  value={state.snapshot.gc.allocPerFrameBytes.p95}
                   unit="bytes"
-                  thresholds={{ warning: 4, danger: 16 }}
+                  thresholds={{ warning: 4 * 1024 * 1024, danger: 16 * 1024 * 1024 }}
                 />
                 <MetricCard
                   label="Gen0 回收"
+                  detail="输入未提供观测值"
                   value={state.snapshot.gc.genCollections.gen0}
                   unit="count"
                 />
                 <MetricCard
                   label="Gen2 回收"
+                  detail="输入未提供观测值"
                   value={state.snapshot.gc.genCollections.gen2}
                   unit="count"
                   thresholds={{ warning: 5, danger: 20 }}
@@ -250,7 +264,8 @@ export default function App() {
               <HotspotTable
                 title="GC 分配 Top 10 热点"
                 hotspots={state.snapshot.gc.topAllocSites}
-                valueColumn="ms"
+                quality={state.snapshot.gc.siteQuality}
+                valueColumn="bytes"
               />
             </>
           )}
@@ -260,27 +275,32 @@ export default function App() {
               <div className="metrics-grid">
                 <MetricCard
                   label="Draw Call p95"
+                  quality={state.snapshot.rendering.drawCalls.quality}
                   value={state.snapshot.rendering.drawCalls.p95}
                   unit="count"
                 />
                 <MetricCard
                   label="SetPass p95"
+                  quality={state.snapshot.rendering.setPassCalls.quality}
                   value={state.snapshot.rendering.setPassCalls.p95}
                   unit="count"
                 />
                 <MetricCard
                   label="SRP Batcher 节省"
+                  detail="输入未提供观测值"
                   value={state.snapshot.rendering.batchesSavedBySrpBatcher}
                   unit="count"
                 />
                 <MetricCard
                   label="渲染事件数"
-                  value={state.snapshot.rendering.topRenderEvents.length}
+                  quality={state.snapshot.rendering.eventQuality}
+                  value={state.snapshot.rendering.eventQuality.status === "unavailable" ? null : state.snapshot.rendering.topRenderEvents.length}
                   unit="count"
                 />
               </div>
               <HotspotTable
                 title="渲染事件 Top 10"
+                quality={state.snapshot.rendering.eventQuality}
                 hotspots={state.snapshot.rendering.topRenderEvents}
                 valueColumn="ms"
               />

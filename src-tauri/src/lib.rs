@@ -27,6 +27,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::upload,
             commands::analyze,
+            commands::frame_details,
+            commands::cpu_hierarchy,
+            commands::release_file,
             commands::diagnose,
             commands::cancel_diagnose,
             commands::list_agents,

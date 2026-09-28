@@ -1,7 +1,7 @@
 //! Unity 2022.3 stats block 解析
 //!
 //! 复刻 `librashuai/UnityPerfAgent/internal/capture/capture.go::readStatsAndAuxiliary`
-//! ```
+//! ```text
 //! MemoryStats    33 × u32 + 1 pad u32
 //! id/value pairs until id == -1
 //! 16 platform values (16 × u32)
@@ -23,8 +23,8 @@ use super::constants::{
     ALL_PROFILER_STATS_AUDIO_OFFSET, ALL_PROFILER_STATS_SIZE, MAX_THREADS_PER_FRAME,
 };
 use super::reader::Reader;
-use byteorder::{ByteOrder, LittleEndian};
 use crate::parser::ParseError;
+use byteorder::{ByteOrder, LittleEndian};
 
 #[derive(Debug, Default, Clone)]
 pub struct StatsResult {
@@ -118,7 +118,10 @@ fn skip_blob(r: &mut Reader) -> Result<(), ParseError> {
 fn skip_names_blob(r: &mut Reader) -> Result<(), ParseError> {
     let n = r.i32();
     if n < 0 {
-        return Err(ParseError::Other(format!("names blob length {} invalid", n)));
+        return Err(ParseError::Other(format!(
+            "names blob length {} invalid",
+            n
+        )));
     }
     r.skip(n as usize);
     // 4-byte align

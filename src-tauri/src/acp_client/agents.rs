@@ -61,10 +61,7 @@ pub fn probe_available(command: &str) -> bool {
 /// `CreateProcessW` 无法直接执行 `.ps1` 文件（默认关联到 Notepad），
 /// 必须通过 `powershell -File` 间接启动。
 /// `.cmd` / `.bat` 走 `cmd /C`。
-pub fn resolve_command(
-    command: &str,
-    args: &[String],
-) -> Option<(String, Vec<String>)> {
+pub fn resolve_command(command: &str, args: &[String]) -> Option<(String, Vec<String>)> {
     let path = which(command)?;
     let ext = path
         .extension()
@@ -155,11 +152,8 @@ mod tests {
 
     impl TestEnv {
         fn new(name: &str, pathext: &str) -> Self {
-            let tmp = std::env::temp_dir().join(format!(
-                "test-probe-{}-{}",
-                name,
-                std::process::id()
-            ));
+            let tmp =
+                std::env::temp_dir().join(format!("test-probe-{}-{}", name, std::process::id()));
             let _ = fs::create_dir_all(&tmp);
             let original_path = std::env::var_os("PATH").unwrap_or_default();
             let original_pathext = std::env::var_os("PATHEXT");
@@ -201,9 +195,13 @@ mod tests {
             resolve_command("fake-agent-ps1", &["--flag".to_string()]).expect("should resolve");
 
         assert_eq!(program, "powershell");
-        assert!(args.windows(2).any(|w| w[0] == "-NoProfile"), "missing -NoProfile");
         assert!(
-            args.windows(2).any(|w| w[0] == "-ExecutionPolicy" && w[1] == "Bypass"),
+            args.windows(2).any(|w| w[0] == "-NoProfile"),
+            "missing -NoProfile"
+        );
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "-ExecutionPolicy" && w[1] == "Bypass"),
             "missing -ExecutionPolicy Bypass"
         );
         assert!(args.windows(2).any(|w| w[0] == "-File"), "missing -File");

@@ -9,7 +9,7 @@
 
 use bytes::{Buf, Bytes};
 
-use super::{Frame, ParsedProfile, ParseError, ProfileMeta, Sample};
+use super::{Frame, ParseError, ParsedProfile, ProfileMeta, Sample};
 
 /// PD3U 文件常见开头（前 4 字节为标识）
 const PD3U_HEADER_MARKERS: &[&[u8]] = &[
@@ -47,6 +47,7 @@ pub async fn parse(
     let estimated_frames = (file_size_bytes / 8192).max(1) as usize;
 
     Ok(ParsedProfile {
+        details: None,
         meta: ProfileMeta {
             file_name: file_name.to_string(),
             format: super::ProfilerFormat::Pd3u,
@@ -57,6 +58,10 @@ pub async fn parse(
             file_size_bytes,
         },
         frames: vec![Frame {
+            quality: super::FrameQuality {
+                estimated: true,
+                ..super::FrameQuality::missing("pd3u-estimate")
+            },
             index: 0,
             duration_ms: 0.0,
             cpu_ms: 0.0,

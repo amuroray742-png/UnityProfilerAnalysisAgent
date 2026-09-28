@@ -11,7 +11,10 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use thiserror::Error;
 
+pub mod compact;
 pub mod data;
+pub mod detail;
+pub mod dump;
 pub mod json;
 pub mod pd3u;
 pub mod raw;
@@ -41,6 +44,9 @@ impl ProfilerFormat {
 /// 解析后的 Profiler 数据（统一内部表示）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedProfile {
+    /// Local, transient query source. Never serialized into a snapshot or export.
+    #[serde(skip)]
+    pub details: Option<std::sync::Arc<detail::FrameStore>>,
     pub meta: ProfileMeta,
     pub frames: Vec<Frame>,
     /// 解析过程中的警告（如 magic 不匹配、截断等）
@@ -61,16 +67,19 @@ pub struct ProfileMeta {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Frame {
+    #[serde(default)]
+    pub quality: FrameQuality,
     pub index: usize,
     pub duration_ms: f64,
     pub cpu_ms: f64,
     pub gc_alloc_bytes: u64,
     pub draw_calls: u32,
     pub set_pass_calls: u32,
-    /// 主线程采样（按耗时聚合）
+    /// 主线程 inclusive 摘要；dump / 结构化 data 按帧和名称合并。
+    /// 原始样本数是 call_count 之和，原始树通过 details 查询。
     pub main_thread_samples: Vec<Sample>,
-    /// GC 分配站点（按字节聚合）
-    pub gc_alloc_sites: Vec<Sample>,
+    /// GC 分配站点；dump / 结构化 data 按帧、线程和归因名称合并。
+    pub gc_alloc_sites: Vec<AllocSite>,
     /// 渲染事件
     pub render_events: Vec<Sample>,
 }
@@ -81,6 +90,52 @@ pub struct Sample {
     pub total_ms: f64,
     pub call_count: u64,
     pub max_ms: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrameQuality {
+    pub duration: bool,
+    pub cpu: bool,
+    pub gc: bool,
+    pub draw: bool,
+    pub set_pass: bool,
+    pub samples: bool,
+    pub sites: bool,
+    pub render: bool,
+    pub estimated: bool,
+    pub source: String,
+    pub reasons: Vec<String>,
+}
+impl Default for FrameQuality {
+    fn default() -> Self {
+        Self::missing("unknown")
+    }
+}
+impl FrameQuality {
+    pub fn missing(source: &str) -> Self {
+        Self {
+            duration: false,
+            cpu: false,
+            gc: false,
+            draw: false,
+            set_pass: false,
+            samples: false,
+            sites: false,
+            render: false,
+            estimated: false,
+            source: source.into(),
+            reasons: vec![],
+        }
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AllocSite {
+    pub name: String,
+    pub thread: String,
+    pub total_bytes: u64,
+    pub call_count: u64,
+    pub max_bytes: u64,
 }
 
 #[derive(Debug, Error)]
@@ -129,19 +184,25 @@ pub async fn parse_file(path: &Path) -> Result<ParsedProfile, ParseError> {
         .unwrap_or("(unknown)")
         .to_string();
 
-    // `.data` 文件可能很大（GB 级），走流式路径避免 OOM
+    // `.data` 分块读取；完整结果仍累积在内存，容量上限尚未验证。
     let mut profile = match format {
         ProfilerFormat::Json => {
-            let bytes = Bytes::from(tokio::fs::read(path).await?);
-            let file_size_bytes = bytes.len() as u64;
-            json::parse(&bytes, &file_name, file_size_bytes).await?
+            let path = path.to_owned();
+            tokio::task::spawn_blocking(move || json::parse_path(&path))
+                .await
+                .map_err(|e| ParseError::Other(e.to_string()))??
         }
         ProfilerFormat::Raw => {
             let bytes = Bytes::from(tokio::fs::read(path).await?);
             let file_size_bytes = bytes.len() as u64;
             raw::parse(&bytes, &file_name, file_size_bytes).await?
         }
-        ProfilerFormat::Data => data::parse_path(path)?,
+        ProfilerFormat::Data => {
+            let path = path.to_owned();
+            tokio::task::spawn_blocking(move || data::parse_path(&path))
+                .await
+                .map_err(|e| ParseError::Other(e.to_string()))??
+        }
         ProfilerFormat::Pd3u => {
             let bytes = Bytes::from(tokio::fs::read(path).await?);
             let file_size_bytes = bytes.len() as u64;

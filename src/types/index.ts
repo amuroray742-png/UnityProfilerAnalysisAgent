@@ -17,37 +17,51 @@ export interface Hotspot {
   maxMs: number;
 }
 
+export interface Quality {
+ status: 'available' | 'partial' | 'unavailable' | 'estimated'; source: string;
+ reasons: string[]; validFrames: number; totalFrames: number;
+}
+export interface AllocHotspot {
+ name: string; thread: string; totalBytes: number; avgBytes: number; maxBytes: number; callCount: number;
+}
 export interface FrameTimeStats {
-  p50: number;
-  p95: number;
-  p99: number;
-  max: number;
+ quality: Quality;
+  p50: number | null;
+  p95: number | null;
+  p99: number | null;
+  max: number | null;
 }
 
 export interface CpuMetrics {
   mainThreadMs: FrameTimeStats;
+  hotspotQuality: Quality;
   topHotspots: Hotspot[];
-  frameTimeline: Array<{ frameIndex: number; ms: number }>;
+  frameTimeline: Array<{ frameIndex: number; ms: number | null; frameTimeMs: number | null }>;
 }
 
 export interface GcMetrics {
-  totalAllocBytes: number;
+  totalAllocBytes: number | null;
+  siteQuality: Quality;
   allocPerFrameBytes: FrameTimeStats;
-  genCollections: { gen0: number; gen1: number; gen2: number };
-  topAllocSites: Hotspot[];
+  genCollections: { gen0: number | null; gen1: number | null; gen2: number | null };
+  topAllocSites: AllocHotspot[];
 }
 
 export interface RenderingMetrics {
   drawCalls: FrameTimeStats;
   setPassCalls: FrameTimeStats;
-  batchesSavedBySrpBatcher: number;
+  batchesSavedBySrpBatcher: number | null;
+  eventQuality: Quality;
   topRenderEvents: Hotspot[];
 }
 
 export interface MetricsSnapshot {
   meta: {
     fileName: string;
-    durationMs: number;
+    declaredFrameCount: number;
+    durationQuality: Quality;
+    source: string;
+    durationMs: number | null;
     frameCount: number;
     platform: string | null;
     unityVersion: string | null;
@@ -66,16 +80,40 @@ export interface AgentPreset {
   available: boolean;
 }
 
-export type DiagnoseEvent =
+export type DiagnoseEvent = {sessionId: string; fileId: string} & (
   | { kind: 'started'; agentId: string }
   | { kind: 'chunk'; text: string }
   | { kind: 'mcp-call'; tool: string; args: unknown }
   | { kind: 'mcp-result'; tool: string; result: unknown }
-  | { kind: 'finished'; totalChunks: number }
-  | { kind: 'error'; message: string };
+  | { kind: 'finished'; totalChunks: number; stopReason: string }
+  | { kind: 'cancelled' }
+  | { kind: 'log'; message: string }
+  | { kind: 'error'; message: string });
 
 export interface ErrorPayload {
   code: string;
   message: string;
   hint?: string;
+}
+
+export interface FrameInfo {
+  frameIndex: number; rawFrameId: number | null; rawDuplicateId: number | null;
+  startNs: string | null; source: string; cpuMs: number | null;
+  frameTimeMs: number | null; gcAllocBytes: number | null; warnings: string[];
+}
+export interface ThreadInfo {
+  threadIndex: number; threadId: string; name: string; group: string | null; sampleCount: number;
+}
+export interface DetailSample {
+  sampleIndex: number; parentIndex: number | null; depth: number; markerId: number;
+  name: string; categoryIndex: number | null; totalMs: number; startMs: number;
+  rawStartNs: string | null; rawDurationNs: number | null;
+  childrenCount: number; metadataCount: number; gcAllocBytes: number | null;
+}
+export interface FramePage {
+  info: FrameInfo; threadCount: number; threads: ThreadInfo[]; nextStart: number | null;
+}
+export interface HierarchyPage {
+  info: FrameInfo; thread: ThreadInfo; samples: DetailSample[];
+  nextStart: number | null; maxDepth: number; depthTruncated: boolean;
 }

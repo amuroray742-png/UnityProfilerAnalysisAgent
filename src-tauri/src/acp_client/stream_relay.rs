@@ -4,10 +4,10 @@
 
 use tauri::{AppHandle, Emitter};
 
-use super::DiagnoseEvent;
+use super::SessionEvent;
 
 /// 把内部事件 emit 到前端，前端 `listen('diagnose-event', ...)` 接收
-pub fn emit_event(app: &AppHandle, event: &DiagnoseEvent) {
+pub fn emit_event(app: &AppHandle, event: &SessionEvent) {
     if let Err(err) = app.emit("diagnose-event", event.clone()) {
         tracing::error!("Failed to emit diagnose event: {}", err);
     }

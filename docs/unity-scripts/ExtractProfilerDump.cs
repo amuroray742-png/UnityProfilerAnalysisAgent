@@ -1,9 +1,9 @@
 // ExtractProfilerDump.cs
 //
-// 穷尽导出 .data 文件中所有可见字段（用 Unity 6000.3 的官方
-// UnityEditor.Profiling.RawFrameDataView API），输出 JSON。
-// 跑法：Unity Editor → Window → General → Search "Extract Profiler Dump"
-// 或命令行：Unity.exe -batchMode -projectPath <project> -executeMethod ExtractProfilerDump.RunAll -inputFile <path.data> -outputFile <path.json>
+// 使用 Unity 6000.3 的 UnityEditor.Profiling.RawFrameDataView API，
+// 将指定帧范围的线程、样本和 GC metadata 导出为 JSON。
+// 跑法：Unity Editor → Tools → Extract Profiler Dump…
+// 或命令行：Unity.exe -batchMode -projectPath <project> -executeMethod ExtractProfilerDump.ExtractProfilerDump.RunAll -inputFile <path.data> -outputFile <path.json>
 //
 // 目的：让我们拿到「真实值」后比对 .data 二进制，反推 Unity 6 wire format。
 
@@ -15,7 +15,7 @@ using UnityEditor;
 using UnityEditor.Profiling;
 using UnityEditorInternal.Profiling;
 using UnityEngine;
-using ProfilerDriver = UnityEditorInternal.Profiling.ProfilerDriver;
+using ProfilerDriver = UnityEditorInternal.ProfilerDriver;
 
 namespace ExtractProfilerDump
 {
@@ -53,11 +53,15 @@ namespace ExtractProfilerDump
             {
                 outputFile = inputFile + ".dump.json";
             }
-            RunExtraction(inputFile, outputFile);
+            int startFrame = int.Parse(ParseArg("-startFrame") ?? "0");
+            int maxFrames = int.Parse(ParseArg("-maxFrames") ?? "64");
+            RunExtraction(inputFile, outputFile, startFrame, maxFrames);
         }
 
-        static void RunExtraction(string inputFile, string outputFile)
+        public static void RunExtraction(string inputFile, string outputFile, int startFrame = 0, int maxFrames = 64)
         {
+            if (startFrame < 0 || maxFrames < 1 || maxFrames > 64)
+                throw new ArgumentOutOfRangeException("Export requires startFrame >= 0 and 1 <= maxFrames <= 64");
             if (!File.Exists(inputFile))
             {
                 Debug.LogError($"[ExtractProfilerDump] input not found: {inputFile}");
@@ -68,7 +72,8 @@ namespace ExtractProfilerDump
             Debug.Log($"[ExtractProfilerDump] opening: {inputFile}");
             bool loaded = ProfilerDriver.LoadProfile(inputFile, false);
             Debug.Log($"[ExtractProfilerDump] loaded={loaded}, lastFrameIndex={ProfilerDriver.lastFrameIndex}");
-            Debug.Log($"[ExtractProfilerDump] opened, lastFrameIndex={ProfilerDriver.lastFrameIndex}");
+            if (!loaded || ProfilerDriver.firstFrameIndex < 0 || startFrame < ProfilerDriver.firstFrameIndex || startFrame > ProfilerDriver.lastFrameIndex)
+                throw new InvalidOperationException("Profile failed to load or requested start frame is unavailable");
 
             var dump = new DumpRoot
             {
@@ -80,19 +85,23 @@ namespace ExtractProfilerDump
             };
 
             int frameCount = ProfilerDriver.lastFrameIndex + 1;
-            int maxFrames = Math.Min(frameCount, 64); // 限制前 64 帧，避免 Editor 卡死
-            for (int f = 0; f < maxFrames; f++)
+            int exportCount = Math.Min(frameCount - startFrame, maxFrames);
+            for (int f = startFrame; f < startFrame + exportCount; f++)
             {
-                dump.frames.Add(ExtractFrame(f));
-                if ((f + 1) % 16 == 0)
+                var frame = ExtractFrame(f);
+                if (frame.threads.Count == 0 || frame.sample_count_total == 0)
+                    throw new InvalidOperationException($"Frame {f} has no exported samples");
+                dump.frames.Add(frame);
+                if ((f - startFrame + 1) % 16 == 0)
                 {
-                    Debug.Log($"[ExtractProfilerDump] frame {f + 1}/{maxFrames} done");
+                    Debug.Log($"[ExtractProfilerDump] frame {f - startFrame + 1}/{exportCount} done");
                 }
             }
 
-            File.WriteAllText(outputFile,
-                JsonUtility.ToJson(dump, prettyPrint: true),
-                new UTF8Encoding(false));
+            string json = JsonUtility.ToJson(dump, prettyPrint: true);
+            if (!json.Contains("\"frames\":"))
+                throw new InvalidOperationException("Unity serialization omitted frames; compile this script as an Editor asset");
+            File.WriteAllText(outputFile, json, new UTF8Encoding(false));
             Debug.Log($"[ExtractProfilerDump] wrote {outputFile}");
             if (Application.isBatchMode) EditorApplication.Exit(0);
         }

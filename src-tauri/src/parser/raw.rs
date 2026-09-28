@@ -13,7 +13,7 @@
 
 use bytes::{Buf, Bytes};
 
-use super::{Frame, ParsedProfile, ParseError, ProfileMeta, Sample};
+use super::{Frame, ParseError, ParsedProfile, ProfileMeta, Sample};
 
 /// 已知的 Unity Profiler .raw magic（部分版本）
 const MAGIC_CANDIDATES: &[&[u8]] = &[
@@ -71,6 +71,7 @@ pub async fn parse(
     ));
 
     Ok(ParsedProfile {
+        details: None,
         meta: ProfileMeta {
             file_name: file_name.to_string(),
             format: super::ProfilerFormat::Raw,
@@ -81,6 +82,10 @@ pub async fn parse(
             file_size_bytes,
         },
         frames: vec![Frame {
+            quality: super::FrameQuality {
+                estimated: true,
+                ..super::FrameQuality::missing("raw-estimate")
+            },
             index: 0,
             duration_ms: 0.0,
             cpu_ms: 0.0,
@@ -102,6 +107,7 @@ pub async fn parse(
 
 fn empty_profile(file_name: &str, file_size_bytes: u64, warnings: Vec<String>) -> ParsedProfile {
     ParsedProfile {
+        details: None,
         meta: ProfileMeta {
             file_name: file_name.to_string(),
             format: super::ProfilerFormat::Raw,

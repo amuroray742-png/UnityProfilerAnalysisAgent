@@ -7,7 +7,19 @@ import type {
   MetricsSnapshot,
   AgentPreset,
   DiagnoseEvent,
+  FramePage,
+  HierarchyPage,
 } from '../types/index.ts';
+
+export function getFrameDetails(fileId: string, frameIndex: number, start = 0, limit = 128): Promise<FramePage> {
+  return invoke('frame_details', { fileId, frameIndex, start, limit });
+}
+export function getCpuHierarchy(fileId: string, frameIndex: number, threadIndex: number | null, start = 0, limit = 200, maxDepth = 8): Promise<HierarchyPage> {
+  return invoke('cpu_hierarchy', { fileId, frameIndex, threadIndex, start, limit, maxDepth });
+}
+export function releaseProfiler(fileId: string): Promise<void> {
+  return invoke('release_file', { fileId });
+}
 
 /**
  * 上传 Profiler 文件。

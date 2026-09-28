@@ -9,6 +9,7 @@ dist/
 samples/private/
 uploads/
 .cache/
+__pycache__/
 
 # TypeScript build artifacts
 *.tsbuildinfo

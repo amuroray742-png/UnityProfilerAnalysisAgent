@@ -1,85 +1,69 @@
-# ACP / MCP 集成指南
+# ACP / MCP 集成与验收
 
-本应用同时是 **ACP Client**（启动 AI Agent）和 **MCP Server**（暴露 Profiler 数据工具）。
-本指南说明如何把这两种能力集成到编辑器（Zed / JetBrains / Cursor 等）。
+当前已接通 Windows 上的 ACP v1 诊断与 MCP stdio 查询。真实 Claude Code ACP 0.16.2 的完成及取消流程通过公开 fixture 验证；release 桌面完成/取消/重试及 NSIS 安装后协议已通过；其他 Agent、MSI 与更广泛诊断内容仍待验收。完成范围见[项目状态](project-status.md)。
 
-## 在 Zed 里使用
+## 使用流程
 
-`~/.config/zed/settings.json`：
+1. 导入支持的录制或 Editor dump，等待分析完成。
+2. 选择已安装且已完成自身登录配置的 ACP Agent，点击“开始 AI 诊断”。PATH 检测只代表程序存在，认证或协议错误会显示在界面。
+3. Agent 通过 MCP 查询本次录制的摘要、帧和调用树，回答以文本片段显示。日志中 MCP 记录来自本地服务实际执行，不由 Agent 输出文字冒充。
+4. “取消”按 sessionId 发送取消；重置或替换输入会同时释放该文件的诊断和数据。同一文件不能重复启动尚未结束的诊断。
 
-```json
-{
-  "agent_servers": {
-    "UnityProfilerAnalysis": {
-      "command": "cargo",
-      "args": ["run", "--manifest-path", "PATH_TO_THIS_REPO/src-tauri/Cargo.toml", "--bin", "unity-profiler-mcp"],
-      "env": {}
-    }
-  }
-}
-```
+| ID | 命令 | 参数 | 验证范围 |
+|---|---|---|---|
+| claude-code | claude-code-acp | 无 | 0.16.2，Windows，真实完成与取消 |
+| gemini | gemini | --experimental-acp | 预设保留，未验证 |
+| codex | codex-acp | 无 | 预设保留，未验证 |
 
-> 注意：上面的 `unity-profiler-mcp` 二进制需要在 `Cargo.toml` 里额外声明 `[[bin]]`。
-> 临时方案：通过 `cargo run --bin unity-profiler-mcp` 直接启动 MCP server。
+## ACP 会话与资源
 
-## 在 JetBrains 里使用
+[诊断入口](../src-tauri/src/acp_client.rs)创建独立临时工作目录、会话 MetricsStore 和 MCP 桥。[协议层](../src-tauri/src/acp_client/protocol.rs)依次执行 initialize → session/new（注入 MCP 配置）→ session/prompt，仅协商 ACP v1；不再将纯文本写入 stdin 后关闭输入。
 
-JetBrains 2024.3+ 支持 ACP。在 Settings → Tools → Agent Client Protocol 中添加 Agent：
+session/update 中的 agent_message_chunk 才作为回答正文；其他会话的通知被过滤。stderr 是日志，不直接作为失败终态。只有 end_turn 生成 Finished；refusal、max_tokens、max_turn_requests 会说明诊断未完成。协议错误、过早 EOF、非法 JSON 和超时产生一个 Error，之后不再追加 Finished。
 
-- Command: `cargo`
-- Args: `["run", "--manifest-path", "..."]`
+前后端事件包含 fileId 与本地 sessionId，camelCase 字段一致。前端缓冲早于 diagnose 命令响应到达的事件，只接收最终返回的会话；重试、重置后的旧事件被忽略。界面保留最近 500 条事件和最近 2 MiB 字符的回答，长会话可能截去早期内容；这不是服务端整体内存上限。
 
-## 在 Cursor / VSCode 里使用
+取消先发 session/cancel，等待最多 2 秒取得 prompt 的取消响应，再清理进程、MCP 服务和临时目录。初始化/新会话阶段尚无远端 sessionId 时直接结束进程。Windows 使用 Job Object 管理适配器后代，关闭 Job 时一并终止；不配合取消的 fixture 也通过子进程退出断言。创建进程后立即加入 Job，极早启动阶段及其他平台的完整进程树行为尚需更广验收。
 
-通过 [`use-acp`](https://www.npmjs.com/package/use-acp) React Hooks 接入，或在 settings.json 中配置 MCP：
+初始化超时 30 秒，新会话 60 秒，prompt 总期限 300 秒，单条 ACP 消息上限 1 MiB。客户端不声明文件或终端能力；仅对当前会话中名称精确匹配本服务的 MCP 只读工具授予 allow_once，其余权限请求回复 cancelled 并记录日志。这不是对任意 Agent 内建能力的操作系统沙箱。
 
-```json
-{
-  "mcpServers": {
-    "unity-profiler": {
-      "command": "cargo",
-      "args": ["run", "--manifest-path", "..."]
-    }
-  }
-}
-```
+## MCP 数据通道
 
-## MCP 工具集
+[MCP 服务](../src-tauri/src/mcp/server.rs)使用锁定的 rmcp 0.5 完成 initialize、tools/list 和 tools/call。每个[桥服务](../src-tauri/src/mcp/bridge.rs)绑定独立的 127.0.0.1 随机端口，持有该会话的数据。应用自身的 `--mcp-bridge <address>` 模式在启动 GUI 前连接父服务并转发 stdio；随机能力通过 `UPAA_MCP_TOKEN` 环境变量交付，不出现在命令行或日志。子进程不重复读取完整录制。
 
-应用内置的 MCP Server 暴露 5 个工具：
+父服务关闭后连接失效，桥进程退出。认证期限 3 秒，MCP 初始化期限 15 秒，每服务最多 8 个连接，单条入站 JSON 上限 64 KiB。stdout 仅输出 MCP JSON-RPC，启动错误写 stderr。在途阻塞查询结束后释放其数据引用；并发内存预算仍待 P2 测量。
 
-| 工具 | 用途 | 参数 |
+没有独立 `unity-profiler-mcp` 二进制或 `mcp:serve` npm script。桥需要正在运行的诊断会话提供配置，不能作为无参数的独立编辑器 MCP 服务。
+
+| 工具 | 参数 | 语义 |
 |---|---|---|
-| `performance_session_summary` | 会话摘要 | 无 |
-| `performance_frames` | 帧范围查询 | `start: int, limit: int (≤500)` |
-| `performance_frame` | 单帧详情 | `frame_index: int` |
-| `performance_cpu_hierarchy` | CPU 调用层级 | `frame_index: int, max_depth: int` |
-| `performance_analysis` | 综合分析 | `focus: 'cpu' \| 'gc' \| 'rendering' \| 'all'` |
+| performance_session_summary | 无 | 聚合指标、质量与 metricSemantics（分位数算法、inclusive CPU 和覆盖语义），省略逐帧时间线；不承诺固定字节大小 |
+| performance_frames | start、limit | 时间线数组偏移，limit 为 1–500，默认 200；返回原始帧号 |
+| performance_frame | frame_index、start、limit | 原始帧指标及线程分页，最多 128 个线程 |
+| performance_cpu_hierarchy | frame_index、thread_index、start、limit、max_depth | 原始前序树，最多 500 个样本、64 层；默认唯一 Main Thread |
+| performance_analysis | focus | 只对 available 指标应用规则，其余返回质量与警告 |
 
-## 推荐 ACP 兼容 Agent
+未知参数、非法类型与枚举、数量边界均校验。缺失帧或不可用调用树返回工具错误，不伪造空结果。调用树默认 max_depth=3，仅返回 depth < 3 的样本。响应附 queryWarnings：depthTruncated 时要求加深并从 start=0 重查，nextStart 非空时要求续页。即使 nextStart=null，也可能仍有深度截断；可见 GC 样本之和不能替代已校验的线程/帧总量。诊断提示要求包含嵌套 GC.Alloc，按最近非 GC 父节点归因并核对总量，无法解释的差额必须明确呈现。此约束减少遗漏风险，不保证模型遵循，也不等于对自由文本做了自动事实校验。CPU 为 inclusive，GC 为字节；详见[查询契约](frame-queries.md)。
 
-| Agent | 安装 | 启动命令 |
-|---|---|---|
-| Claude Code ACP | `npm i -g @anthropic-ai/claude-code` | `claude-code-acp` |
-| Gemini CLI | `npm i -g @google/gemini-cli` | `gemini --experimental-acp` |
-| Codex CLI | `npm i -g @openai/codex` | `codex-acp` |
+## 验证记录（2026-09-28）
 
-## 故障排查
+- [MCP 进程回归](../src-tauri/tests/mcp_wire.rs)：3 项，实际桥进程完成握手、工具发现、嵌套 GC 查询、参数错误、双会话隔离、认证失败、超长请求与退出。
+- [ACP 进程回归](../src-tauri/tests/acp_stdio_roundtrip.rs)：5 项默认运行；Node 独立 fixture 执行真实 MCP 调用，覆盖消息权限、非当前会话、stderr、错误终态、初始化取消、不配合取消时的后代清理，以及应用状态的重复诊断/释放。
+- 前端 hook 回归验证早到事件、会话过滤、失败不被完成覆盖、按 sessionId 取消与重置；不替代完整 Tauri 桌面交互。
+- 真实适配器：`@zed-industries/claude-code-acp 0.16.2`。公开 fixture 的诊断共调用 7 次 MCP，返回 241 个正文片段，以 end_turn 结束；整项测试 17.57 秒。另一次在首个 MCP 查询后取消，Agent 返回 cancelled；取消收尾约 64.6 毫秒，整项测试 4.27 秒。没有发送私有录制。
 
-### Agent 未被检测到
-
-确认命令在 PATH 中：
-
-```bash
-which claude-code-acp  # 或 claude-code-acp.cmd on Windows
+```powershell
+cargo test --manifest-path src-tauri/Cargo.toml --locked --offline
+$env:UPAA_REAL_AGENT = 'claude-code-acp'
+cargo test --manifest-path src-tauri/Cargo.toml --locked --offline --test acp_stdio_roundtrip real_agent_ -- --ignored --nocapture
 ```
 
-应用启动时会通过 `which` 检测，如果检测失败会显示"(未安装)"。
+真实 Agent 测试默认忽略；显式执行必须提供可用适配器与登录环境，失败不视为跳过。运行会把人工 fixture 的查询结果交给所选 Agent 的模型。模型结论受模型影响，上述验收只证明协议和数据链路，不保证诊断建议总是正确。
 
-### Agent 启动但 MCP 工具未出现
+实现依据：[ACP v1 初始化](https://agentclientprotocol.com/protocol/v1/initialization)、[会话配置](https://agentclientprotocol.com/protocol/v1/session-setup)、[prompt 与取消](https://agentclientprotocol.com/protocol/v1/prompt-turn)及[MCP stdio](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)。release 桌面与发布模式进程回归已有证据；剩余门槛包括原生窗口、更多 Agent、长期性能预算及发布，见[性能记录](performance-and-release.md)。
 
-检查 Agent 是否支持 `session/new.mcpServers` 注入（MCP 2025-11-25 spec）。
+### 统计解释约束（2026-09-28）
 
-### 流式输出卡住
+桌面诊断内容复核发现模型将小样本 p50 误判为口径差异，并从 inclusive 样本猜测剩余 CPU。摘要现附 `metricSemantics`：统计使用有效帧（含真实零），排序后取 `round((n-1)*q)`，不插值；例如 [0,32] 的 p50 为 32，不是平均值 16。未提供已验证的 self/exclusive 耗时，不允许用热点列表或父子 inclusive 相减推断未解释 CPU。树完整返回也不代表 instrumentation 覆盖全部运行工作。
 
-查看菜单 → Tools → Toggle DevTools，看 Console 是否有 Tauri IPC 错误。
+该字段解释现有算法，未改变计算结果、查询上限或 Tauri 快照。MCP 真实 stdio 回归核对有效帧为 2、GC p50=32 及语义字段交付；诊断提示要求遵守它。工具数据正确和提示完整仍不等于模型输出必然正确。
