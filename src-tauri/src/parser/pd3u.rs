@@ -68,6 +68,7 @@ pub async fn parse(
             gc_alloc_bytes: 0,
             draw_calls: 0,
             set_pass_calls: 0,
+            render_counters: Default::default(),
             main_thread_samples: vec![Sample {
                 name: "(PD3U 实时流估算)".to_string(),
                 total_ms: 0.0,

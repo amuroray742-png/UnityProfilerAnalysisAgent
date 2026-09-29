@@ -75,6 +75,8 @@ pub struct Frame {
     pub gc_alloc_bytes: u64,
     pub draw_calls: u32,
     pub set_pass_calls: u32,
+    #[serde(default)]
+    pub render_counters: std::collections::BTreeMap<String, u64>,
     /// 主线程 inclusive 摘要；dump / 结构化 data 按帧和名称合并。
     /// 原始样本数是 call_count 之和，原始树通过 details 查询。
     pub main_thread_samples: Vec<Sample>,

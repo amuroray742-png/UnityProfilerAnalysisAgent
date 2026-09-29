@@ -7,7 +7,7 @@ vi.mock('../lib/tauri', () => ({ getCpuHierarchy: vi.fn(), getFrameDetails: vi.f
 const quality: Quality = { status: 'available', source: 'fixture', reasons: [], validFrames: 2, totalFrames: 2 };
 const frames = [{ frameIndex: 10, ms: 1, frameTimeMs: 2, gcAllocBytes: 0 }, { frameIndex: 12, ms: 2, frameTimeMs: null, gcAllocBytes: 0 }];
 const page = (index: number): HierarchyPage => ({
-  info: { frameIndex: index, rawFrameId: null, rawDuplicateId: null, startNs: null, source: 'fixture', cpuMs: 1, frameTimeMs: 2, gcAllocBytes: 0, warnings: [] },
+  info: { renderCounters: {}, frameIndex: index, rawFrameId: null, rawDuplicateId: null, startNs: null, source: 'fixture', cpuMs: 1, frameTimeMs: 2, gcAllocBytes: 0, warnings: [] },
   thread: { threadIndex: 17, threadId: '18446744073709551615', name: 'Main Thread', group: null, sampleCount: 3 },
   samples: [{ sampleIndex: 0, parentIndex: null, depth: 0, markerId: 1, name: `Frame ${index}`, categoryIndex: null, totalMs: 1, startMs: 0, rawStartNs: null, rawDurationNs: null, childrenCount: 0, metadataCount: 1, gcAllocBytes: 0 }],
   nextStart: 2, maxDepth: 8, depthTruncated: true,

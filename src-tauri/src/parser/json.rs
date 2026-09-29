@@ -283,6 +283,7 @@ fn build_from_samples_v2(
         gc_alloc_bytes: 0,
         draw_calls: 0,
         set_pass_calls: 0,
+        render_counters: Default::default(),
         main_thread_samples: samples
             .iter()
             .map(|s| convert_sample(s, "sample"))
@@ -356,6 +357,7 @@ fn convert_frame(index: usize, jf: JsonFrame, _warnings: &mut Vec<String>) -> Fr
         gc_alloc_bytes: jf.gc_alloc_bytes.unwrap_or(0),
         draw_calls: jf.draw_calls.unwrap_or(0),
         set_pass_calls: jf.set_pass_calls.unwrap_or(0),
+        render_counters: Default::default(),
         main_thread_samples: main,
         gc_alloc_sites: jf
             .gc_alloc_sites

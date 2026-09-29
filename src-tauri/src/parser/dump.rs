@@ -232,6 +232,7 @@ pub fn parse(bytes: &[u8], name: &str, size: u64) -> Result<ParsedProfile, Parse
             gc_alloc_bytes: gc,
             draw_calls: 0,
             set_pass_calls: 0,
+            render_counters: Default::default(),
             main_thread_samples: main_samples,
             gc_alloc_sites: sites,
             render_events: vec![],

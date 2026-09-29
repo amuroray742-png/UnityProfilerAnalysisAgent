@@ -1,6 +1,6 @@
 # 原始帧与调用树查询
 
-适用输入：Editor dump，以及已接通结构解码的 Unity 6000.3.23f1 `.data`。其他输入保留聚合指标，查询调用树会明确返回不可用。MCP stdio 服务复用本接口并已通过进程测试，并已注入桌面 ACP 会话，随诊断终态释放。
+适用输入：Editor dump，以及已接通结构解码的 Unity 6000.3.23f1 / 6000.3.9f1 `.data`。其他输入保留聚合指标，查询调用树会明确返回不可用。MCP stdio 服务复用本接口并已通过进程测试，并已注入桌面 ACP 会话，随诊断终态释放。
 
 ## 桌面使用
 
@@ -42,3 +42,5 @@ Tauri 新增命令（原有命令名称和参数保持不变）：
 ## 每帧 GC 定位数据
 
 现有 `cpu.frameTimeline` 作为共享帧序列，新增 `gcAllocBytes: number | null`；字段位置保持兼容，值来自帧 GC 校验结果，独立于 CPU 是否可用。MCP `performance_frames` 的有界分页同步返回该字段，session summary 仍不复制完整时间线。Tauri 命令名称与参数不变。
+
+单帧 `info.renderCounters` 以原始计数 marker 名提供有效观测值；缺失键表示不可用，零值保留。时间线增加可空 `drawCalls` / `setPassCalls`，供高计数帧定位。渲染统计及测试范围见[渲染验收](rendering-validation.md)。

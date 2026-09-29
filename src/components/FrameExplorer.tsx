@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { getFrameDetails, getCpuHierarchy } from '../lib/tauri';
 import type { CpuMetrics, FramePage, HierarchyPage } from '../types';
 
-export function FrameExplorer({ fileId, frames, quality, mode = 'cpu' }: { fileId: string; frames: CpuMetrics['frameTimeline']; quality: CpuMetrics['mainThreadMs']['quality']; mode?: 'cpu' | 'gc' }) {
+export function FrameExplorer({ fileId, frames, quality, mode = 'cpu' }: { fileId: string; frames: Array<Pick<CpuMetrics['frameTimeline'][number], 'frameIndex' | 'ms' | 'frameTimeMs' | 'gcAllocBytes'>>; quality: CpuMetrics['mainThreadMs']['quality']; mode?: 'cpu' | 'gc' }) {
   const [frame, setFrame] = useState(frames[0]?.frameIndex ?? 0);
   const [thread, setThread] = useState<number | null>(null);
   const [depth, setDepth] = useState(8);

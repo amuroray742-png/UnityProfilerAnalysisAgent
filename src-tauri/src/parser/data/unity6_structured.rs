@@ -16,7 +16,16 @@ use crate::parser::{AllocSite, Frame, FrameQuality, ParseError, Sample as Summar
 #[derive(Debug, Default, Clone)]
 pub struct Decoder {
     markers: Arc<HashMap<u32, MarkerInfo>>,
+    counter_markers: Arc<HashSet<u32>>,
 }
+
+pub const RENDER_COUNTER_NAMES: [&str; 5] = [
+    "Draw Calls Count",
+    "SetPass Calls Count",
+    "Batches Count",
+    "Triangles Count",
+    "Vertices Count",
+];
 
 impl Decoder {
     pub(crate) fn marker_storage(&self) -> (usize, usize, usize) {
@@ -58,6 +67,8 @@ pub struct Sample {
     pub parent: Option<usize>,
     pub metadata_count: u32,
     pub gc_bytes: Option<u64>,
+    pub counter_value: Option<u64>,
+    pub is_counter: bool,
 }
 
 impl Sample {
@@ -76,7 +87,68 @@ impl DecodedFrame {
         let mut quality = FrameQuality::missing("unity6000.3-data-structured");
         quality.gc = true;
         quality.sites = true;
-        quality.reasons.push("渲染计数尚未从二进制结构确认".into());
+        let mut render_counters = std::collections::BTreeMap::new();
+        for counter in RENDER_COUNTER_NAMES {
+            let values: Vec<_> = self
+                .threads
+                .iter()
+                .flat_map(|t| &t.samples)
+                .filter(|s| s.name == counter)
+                .map(|s| s.counter_value)
+                .collect();
+            if let Some(value) = values
+                .first()
+                .copied()
+                .flatten()
+                .filter(|v| values.iter().all(|n| *n == Some(*v)))
+            {
+                render_counters.insert(counter.to_owned(), value);
+            } else {
+                let reason = if values.is_empty() {
+                    "未记录该计数"
+                } else if values.iter().any(Option::is_none) {
+                    "计数 metadata 缺失或未识别"
+                } else {
+                    "同帧多个观测值冲突"
+                };
+                quality.reasons.push(format!("{counter}: {reason}"));
+            }
+        }
+        let draw = render_counters
+            .get("Draw Calls Count")
+            .and_then(|v| u32::try_from(*v).ok());
+        let set_pass = render_counters
+            .get("SetPass Calls Count")
+            .and_then(|v| u32::try_from(*v).ok());
+        quality.draw = draw.is_some();
+        quality.set_pass = set_pass.is_some();
+        for name in ["Draw Calls Count", "SetPass Calls Count"] {
+            if render_counters
+                .get(name)
+                .is_some_and(|v| *v > u32::MAX as u64)
+            {
+                quality
+                    .reasons
+                    .push(format!("{name}: 超出当前聚合字段范围"));
+            }
+        }
+        quality.render = true;
+        let render_events = self
+            .threads
+            .iter()
+            .enumerate()
+            .flat_map(|(i, t)| {
+                t.samples
+                    .iter()
+                    .filter(|s| s.category == 0 && !s.is_counter && s.duration_ns > 0.0)
+                    .map(move |s| SummarySample {
+                        name: format!("{} #{} / {}", t.name, i, s.name),
+                        total_ms: s.editor_time_ms(),
+                        max_ms: s.editor_time_ms(),
+                        call_count: 1,
+                    })
+            })
+            .collect();
         quality
             .reasons
             .push("录制帧时间缺少下一帧起始时间戳".into());
@@ -142,11 +214,12 @@ impl DecodedFrame {
             duration_ms: 0.0,
             cpu_ms,
             gc_alloc_bytes: self.threads.iter().map(|t| t.gc_bytes).sum(),
-            draw_calls: 0,
-            set_pass_calls: 0,
+            draw_calls: draw.unwrap_or(0),
+            set_pass_calls: set_pass.unwrap_or(0),
+            render_counters,
             main_thread_samples,
             gc_alloc_sites,
-            render_events: vec![],
+            render_events,
         }
     }
 }
@@ -182,15 +255,6 @@ fn count(
     Ok(n)
 }
 
-fn zero(r: &mut Reader<'_>, field: &str) -> Result<(), ParseError> {
-    let n = r.u32();
-    check(r, field)?;
-    if n != 0 {
-        return Err(error(r, &format!("{field}: unsupported count {n}")));
-    }
-    Ok(())
-}
-
 impl Decoder {
     pub fn decode(&mut self, body: &[u8]) -> Result<DecodedFrame, ParseError> {
         if body.len() < 32 || body[body.len() - 4..] != 0xAFAFAFAFu32.to_le_bytes() {
@@ -211,6 +275,11 @@ impl Decoder {
             let id = r.u32();
             let name = r.str();
             let flags = r.u32();
+            if flags & 0x80 != 0 {
+                Arc::make_mut(&mut self.counter_markers).insert(id);
+            } else {
+                Arc::make_mut(&mut self.counter_markers).remove(&id);
+            }
             let metadata = count(&mut r, 8, 100_000, "marker metadata")?;
             if !updated.insert(id) {
                 return Err(error(&r, "duplicate marker definition"));
@@ -298,6 +367,8 @@ impl Decoder {
                 parent,
                 metadata_count: 0,
                 gc_bytes: None,
+                counter_value: None,
+                is_counter: self.counter_markers.contains(&marker_id),
             });
             if children > 0 {
                 stack.push((index, children));
@@ -306,7 +377,17 @@ impl Decoder {
         if stack.iter().any(|(_, left)| *left != 0) {
             return Err(error(r, "sample tree not closed"));
         }
-        zero(r, "post-sample section")?;
+        // Counted 12-byte auxiliary records precede indexed/GC metadata in
+        // 6000.3.9f1. Semantics are not exposed as performance metrics.
+        let auxiliary_count = count(r, 12, 1_000_000, "sample auxiliary records")?;
+        for _ in 0..auxiliary_count {
+            r.u32();
+            let index = r.u32() as usize;
+            r.u32();
+            if index >= n {
+                return Err(error(r, "auxiliary sample index"));
+            }
+        }
         let indexed_count = count(r, 8, n, "indexed records")?;
         let mut indexed = HashSet::new();
         for _ in 0..indexed_count {
@@ -371,7 +452,20 @@ impl Decoder {
                         return Err(error(r, "GC metadata payload differs"));
                     }
                 } else {
-                    r.skip(size);
+                    if RENDER_COUNTER_NAMES.contains(&sample.name.as_str())
+                        && self.counter_markers.contains(&sample.marker_id)
+                    {
+                        if fields != 1 || sample.counter_value.is_some() {
+                            return Err(error(r, "render counter metadata duplicate/arity"));
+                        }
+                        sample.counter_value = match (tag, size) {
+                            (2, 4) => Some(r.u32() as u64),
+                            (4, 8) => Some(r.u64()),
+                            _ => return Err(error(r, "unsupported render counter metadata type")),
+                        };
+                    } else {
+                        r.skip(size);
+                    }
                 }
                 r.skip((4 - size % 4) % 4);
                 check(r, "metadata payload")?;
