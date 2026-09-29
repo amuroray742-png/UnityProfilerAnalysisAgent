@@ -15,6 +15,7 @@ pub mod compact;
 pub mod data;
 pub mod detail;
 pub mod dump;
+pub mod evidence;
 pub mod json;
 pub mod pd3u;
 pub mod raw;

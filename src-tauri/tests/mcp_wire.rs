@@ -105,7 +105,7 @@ async fn shipped_stdio_binary_serves_real_tree_and_validates_arguments() {
     let mut client = Client::connect(&server, server.token()).await;
     client.initialize().await;
     let list = client.request("tools/list", json!({})).await;
-    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 7);
+    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 9);
     let summary = client.call("performance_session_summary", json!({})).await;
     assert_eq!(
         summary["result"]["structuredContent"]["meta"]["frameCount"],
@@ -115,16 +115,34 @@ async fn shipped_stdio_binary_serves_real_tree_and_validates_arguments() {
         .get("frameTimeline")
         .is_none());
     let semantics = client.call("performance_metric_semantics", json!({})).await;
-    assert_eq!(semantics["result"]["structuredContent"], summary["result"]["structuredContent"]["metricSemantics"]);
-    let hotspots = client.call("performance_hotspots", json!({"area":"gc","limit":1})).await;
+    assert_eq!(
+        semantics["result"]["structuredContent"],
+        summary["result"]["structuredContent"]["metricSemantics"]
+    );
+    let hotspots = client
+        .call("performance_hotspots", json!({"area":"gc","limit":1}))
+        .await;
     let rows = &hotspots["result"]["structuredContent"];
     assert_eq!(rows["rows"][0]["totalBytes"], 24);
     assert_eq!(rows["nextStart"], 1);
-    let next = client.call("performance_hotspots", json!({"area":"gc","start":1})).await;
-    assert_eq!(next["result"]["structuredContent"]["rows"][0]["totalBytes"], 8);
-    assert!(client.call("performance_hotspots",json!({"area":"gc","limit":51})).await["error"].is_object());
-    assert!(summary["result"]["content"][0]["text"].as_str().unwrap().contains('\n'));
-    let frames = client.call("performance_frames", json!({"start":0,"limit":2})).await;
+    let next = client
+        .call("performance_hotspots", json!({"area":"gc","start":1}))
+        .await;
+    assert_eq!(
+        next["result"]["structuredContent"]["rows"][0]["totalBytes"],
+        8
+    );
+    assert!(client
+        .call("performance_hotspots", json!({"area":"gc","limit":51}))
+        .await["error"]
+        .is_object());
+    assert!(summary["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains('\n'));
+    let frames = client
+        .call("performance_frames", json!({"start":0,"limit":2}))
+        .await;
     let frames = &frames["result"]["structuredContent"]["frames"];
     assert_eq!(frames[0]["frameIndex"], 10);
     assert_eq!(frames[0]["gcAllocBytes"], 32);
@@ -134,16 +152,51 @@ async fn shipped_stdio_binary_serves_real_tree_and_validates_arguments() {
     // not an average. The tool must explain this alongside the actual metric.
     let summary_data = &summary["result"]["structuredContent"];
     assert_eq!(summary_data["gc"]["allocPerFrameBytes"]["p50"], 32.0);
-    assert_eq!(summary_data["gc"]["allocPerFrameBytes"]["quality"]["validFrames"], 2);
-    assert_eq!(summary_data["metricSemantics"]["percentiles"]["smallSampleExample"]["p50"], 32);
-    assert!(summary_data["metricSemantics"]["percentiles"]["frequency"].as_str().unwrap().contains("affectedFrames"));
-    assert!(summary_data["metricSemantics"]["cpu"]["exclusiveTime"].as_str().unwrap().contains("未提供"));
-    assert!(summary_data["metricSemantics"]["cpu"]["frameTimeDifference"].as_str().unwrap().contains("相减不能证明"));
+    assert_eq!(
+        summary_data["gc"]["allocPerFrameBytes"]["quality"]["validFrames"],
+        2
+    );
+    assert_eq!(
+        summary_data["metricSemantics"]["percentiles"]["smallSampleExample"]["p50"],
+        32
+    );
+    assert!(summary_data["metricSemantics"]["percentiles"]["frequency"]
+        .as_str()
+        .unwrap()
+        .contains("affectedFrames"));
+    assert!(summary_data["metricSemantics"]["cpu"]["exclusiveTime"]
+        .as_str()
+        .unwrap()
+        .contains("selfMs"));
+    assert!(
+        summary_data["metricSemantics"]["cpu"]["frameTimeDifference"]
+            .as_str()
+            .unwrap()
+            .contains("相减不能证明")
+    );
     assert!(list["result"]["tools"]
         .as_array()
         .unwrap()
         .iter()
         .all(|t| t["annotations"]["readOnlyHint"] == true));
+    let evidence = client
+        .call(
+            "performance_frame_evidence",
+            json!({"frame_index":10,"limit":1}),
+        )
+        .await;
+    assert_eq!(
+        evidence["result"]["structuredContent"]["rows"][0]["metadataTruncated"],
+        true
+    );
+    let comparison = client
+        .call(
+            "performance_compare_frames",
+            json!({"frame_index":10,"baseline_frame_index":12,"limit":1}),
+        )
+        .await;
+    assert_eq!(comparison["result"]["structuredContent"]["nextStart"], 1);
+    assert!(serde_json::to_vec(&comparison).unwrap().len() < 65536);
     // The default depth hides a nested 4 B allocation even without a next page.
     // The wire response must explicitly warn against treating visible bytes as totals.
     let shallow = client

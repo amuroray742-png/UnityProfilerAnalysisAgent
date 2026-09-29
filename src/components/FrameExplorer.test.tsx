@@ -115,7 +115,7 @@ it('ranks GC across all threads independently of CPU and drills into the origina
   expect(rows.map(row => within(row).getAllByRole('cell')[0].textContent)).toEqual(['12', '10']);
   expect(within(rows[0]).getAllByRole('cell')[1]).toHaveTextContent('4096 B');
   expect(within(rows[1]).getAllByRole('cell')[1]).toHaveTextContent('0 B');
-  expect(screen.getByText(/全部已导出线程/)).toBeInTheDocument();
+  expect(screen.getAllByText(/全部已导出线程/).length).toBeGreaterThan(0);
   expect(screen.getByText(/有效 GC 分配.*缺失帧不按零值处理/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '查看帧 12 调用树' }));
   await screen.findByText('Frame 12');

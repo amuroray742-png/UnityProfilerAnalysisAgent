@@ -95,6 +95,16 @@ def run_ui(js, request, root, output, report, real_agent=False, agent_id='claude
     assert '帧 GC 0 B' in text()
     assert not js('return document.querySelector("select[aria-label=线程]").innerText.includes("Worker")')
     assert js('return document.querySelector("table[aria-label=调用树样本] tbody tr td:last-child").textContent') == '—'
+    assert js('return document.querySelector("table[aria-label=调用树样本] tbody tr").cells[3].textContent') == '12.0000'
+    click('details > summary')
+    button('读取帧证据')
+    wait('return document.body.innerText.includes("证据总计 0 条")')
+    button('比较调用路径')
+    wait('return !!document.querySelector("table[aria-label=调用路径对比]")')
+    assert '对照帧由用户选择' in text()
+    report['checks'].append('self time, empty counter evidence, explicit frame comparison through real IPC')
+    js('document.querySelector("table[aria-label=调用路径对比]").scrollIntoView({block:"center"})')
+    shot('frame12-evidence-comparison')
     shot('frame12-zero-total')
     report['checks'].append('slow-frame ranking jumps to original frame 12, resets Worker selection and preserves zero GC')
     button('GC')

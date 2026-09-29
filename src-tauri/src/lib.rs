@@ -6,9 +6,9 @@ pub mod errors;
 pub mod extractor;
 pub mod mcp;
 pub mod parser;
+pub mod project;
 pub mod reports;
 pub mod source;
-pub mod project;
 pub mod state;
 
 use state::AppState;
@@ -32,6 +32,8 @@ pub fn run() {
             commands::analyze,
             commands::frame_details,
             commands::cpu_hierarchy,
+            commands::frame_evidence,
+            commands::compare_frames,
             commands::release_file,
             commands::diagnose,
             commands::cancel_diagnose,

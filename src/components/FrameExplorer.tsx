@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getFrameDetails, getCpuHierarchy } from '../lib/tauri';
+import { FrameEvidence } from './FrameEvidence';
 import type { CpuMetrics, FramePage, HierarchyPage } from '../types';
 
 export function FrameExplorer({ fileId, frames, quality, mode = 'cpu' }: { fileId: string; frames: Array<Pick<CpuMetrics['frameTimeline'][number], 'frameIndex' | 'ms' | 'frameTimeMs' | 'gcAllocBytes'>>; quality: CpuMetrics['mainThreadMs']['quality']; mode?: 'cpu' | 'gc' }) {
@@ -63,17 +64,19 @@ export function FrameExplorer({ fileId, frames, quality, mode = 'cpu' }: { fileI
     <label>深度 <select aria-label="深度" value={depth} onChange={e => { setDepth(Number(e.target.value)); setOffsets([0]); }}>
       {[3, 8, 16, 64].map(d => <option key={d}>{d}</option>)}
     </select></label>
+    <p>Self 为父样本减直属子样本，包含等待和未细分工作，不等于纯 CPU 计算；区间无效时显示 —。</p>
+    <FrameEvidence key={`${fileId}:${frame}:${thread}`} fileId={fileId} frame={frame} thread={thread} frames={frames} />
     {error && <p role="alert">{error}</p>}
     {!page && !error && <p role="status">正在读取调用树…</p>}
     {page && <>
       <p>帧 {page.info.frameIndex} · 原始帧 ID {page.info.rawFrameId ?? '—'} · {page.info.source} · 线程 ID {page.thread.threadId} · {page.thread.sampleCount} 个样本 · 帧 GC {page.info.gcAllocBytes === null ? '—' : `${page.info.gcAllocBytes} B`}</p>
       {page.info.warnings.map((w, i) => <p key={i}>{w}</p>)}
       {page.depthTruncated && <p>存在超出当前深度的样本，请增加深度查看。</p>}
-      <div style={{ overflowX: 'auto' }}><table className="hotspot-table" aria-label="调用树样本"><thead><tr><th>样本 / 父样本</th><th>Marker</th><th>Inclusive ms</th><th>GC 字节</th></tr></thead>
+      <div style={{ overflowX: 'auto' }}><table className="hotspot-table" aria-label="调用树样本"><thead><tr><th>样本 / 父样本</th><th>Marker</th><th>Inclusive ms</th><th>Self ms</th><th>GC 字节</th></tr></thead>
         <tbody>{page.samples.map(s => <tr key={s.sampleIndex}>
           <td>{s.sampleIndex} / {s.parentIndex ?? '—'}</td>
           <td style={{ paddingLeft: Math.min(s.depth, 16) * 12 }}>{s.name} <small>#{s.markerId} · 深度 {s.depth}</small></td>
-          <td>{s.totalMs.toFixed(4)}</td><td>{s.gcAllocBytes === null ? '—' : `${s.gcAllocBytes} B`}</td>
+          <td>{s.totalMs.toFixed(4)}</td><td title={s.selfReason ?? undefined}>{s.selfMs == null ? '—' : s.selfMs.toFixed(4)}</td><td>{s.gcAllocBytes === null ? '—' : `${s.gcAllocBytes} B`}</td>
         </tr>)}</tbody></table></div>
       <button disabled={offsets.length === 1} onClick={() => setOffsets(a => a.slice(0, -1))}>上一页样本</button>{' '}
       <button disabled={page.nextStart === null} onClick={() => setOffsets(a => [...a, page.nextStart!])}>下一页样本</button>

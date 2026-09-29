@@ -100,3 +100,5 @@ Editor 脚本产生的 `frames[].threads[].samples[]` dump 由独立分支直接
 ## 项目信息
 
 架构与部分解析思路参考 [librashuai/UnityPerfAgent](https://github.com/librashuai/UnityPerfAgent)。本项目采用 [MIT License](LICENSE)，Copyright (c) 2026 amuroray742-png。
+
+[data 原始证据、Self Time 与帧对比](docs/data-evidence.md)：CPU/GC 页展开帧证据，查询 Counter/metadata 或比较完整调用路径。

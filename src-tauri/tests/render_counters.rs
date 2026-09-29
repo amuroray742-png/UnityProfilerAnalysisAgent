@@ -410,3 +410,49 @@ async fn render_counters_reach_production_snapshot_frame_queries_and_mcp() {
     assert_eq!(summary["hotspotCounts"]["rendering"], 1);
     assert!(summary["rendering"].get("topRenderEvents").is_none());
 }
+
+#[test]
+fn general_counter_evidence_survives_without_render_whitelist() {
+    let mut decoder = parser::data::unity6_structured::Decoder::default();
+    let decoded = decoder
+        .decode(&synthetic_named(
+            true,
+            45,
+            &[Some(123456)],
+            4,
+            true,
+            0,
+            "Total Used Memory",
+        ))
+        .unwrap();
+    let sample = &decoded.threads[1].samples[1];
+    assert!(sample.is_counter);
+    assert_eq!(sample.metadata[0].value.as_deref(), Some("123456"));
+    assert_eq!(sample.metadata[0].unit, None); // absent schema is not guessed from name
+    assert!(!decoded.summary(0).quality.draw);
+    let decoded = decoder
+        .decode(&synthetic_named(
+            false,
+            45,
+            &[Some(0)],
+            4,
+            true,
+            0,
+            "Total Used Memory",
+        ))
+        .unwrap();
+    assert_eq!(
+        decoded.threads[1].samples[1].metadata[0].value.as_deref(),
+        Some("0")
+    );
+}
+
+#[test]
+fn negative_signed_render_payload_is_unavailable_not_a_large_positive_count() {
+    for (tag,value) in [(2,u32::MAX as u64),(4,u64::MAX)] {
+        let frame=parser::data::unity6_structured::Decoder::default().decode(&synthetic(true,10,&[Some(value)],tag,true,0)).unwrap();
+        assert_eq!(frame.threads[1].samples[1].metadata[0].value.as_deref(),Some("-1"));
+        assert!(!frame.summary(0).quality.draw);
+        assert!(!frame.summary(0).render_counters.contains_key("Draw Calls Count"));
+    }
+}
