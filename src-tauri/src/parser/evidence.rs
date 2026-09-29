@@ -86,6 +86,80 @@ fn bounded_page(mut rows: Vec<Value>, start: usize, total: usize) -> Result<Valu
 }
 
 impl FrameStore {
+    /// Explicit bounded window. Flow IDs group observations, not inferred edges.
+    pub fn flows(
+        &self,
+        frame_index: usize,
+        end_frame_index: usize,
+        flow_id: Option<u32>,
+        start: usize,
+        limit: usize,
+    ) -> Result<Value, QueryError> {
+        if end_frame_index < frame_index
+            || end_frame_index - frame_index > 7
+            || limit == 0
+            || limit > 50
+        {
+            return Err(QueryError::BadArg(
+                "Flow 查询最多 8 帧，limit 必须在 1..=50".into(),
+            ));
+        }
+        let mut rows = Vec::new();
+        let mut total = 0usize;
+        let mut available = true;
+        let mut unknown_types = 0usize;
+        let mut begin_count = 0usize;
+        let mut end_count = 0usize;
+        for index in frame_index..=end_frame_index {
+            let frame = self.load(index)?;
+            available &= !frame.threads.is_empty();
+            for t in frame.threads {
+                let Some(events) = t.flow_events else {
+                    available = false;
+                    continue;
+                };
+                for (event_index, e) in events.into_iter().enumerate() {
+                    if flow_id.is_some_and(|id| id != e.flow_id) {
+                        continue;
+                    }
+                    let kind = match e.event_type {
+                        0 => "Begin",
+                        1 => "ParallelNext",
+                        2 => "End",
+                        3 => "Next",
+                        _ => "Unknown",
+                    };
+                    unknown_types += usize::from(e.event_type > 3);
+                    begin_count += usize::from(e.event_type == 0);
+                    end_count += usize::from(e.event_type == 2);
+                    if total >= start && rows.len() < limit {
+                        let sample = usize::try_from(e.sample_index)
+                            .ok()
+                            .and_then(|i| t.samples.get(i));
+                        rows.push(json!({"frameIndex":index,"threadIndex":t.info.thread_index,"threadId":t.info.thread_id,
+                            "thread":t.info.name.chars().take(160).collect::<String>(),"eventIndex":event_index,
+                            "sampleIndex":e.sample_index,"flowId":e.flow_id,"eventType":e.event_type,"kind":kind,
+                            "marker":sample.map(|s| s.name.chars().take(240).collect::<String>()),
+                            "sampleStartNs":sample.and_then(|s| s.raw_start_ns.as_ref()),
+                            "sampleDurationMs":sample.map(|s| s.total_ms)}));
+                    }
+                    total += 1;
+                }
+            }
+        }
+        page_limit(start, total, limit)?;
+        let mut page = bounded_page(rows, start, total)?;
+        page["available"] = json!(available);
+        page["frameIndex"] = json!(frame_index);
+        page["endFrameIndex"] = json!(end_frame_index);
+        page["flowId"] = json!(flow_id);
+        page["unknownTypes"] = json!(unknown_types);
+        page["beginCount"] = json!(begin_count);
+        page["endCount"] = json!(end_count);
+        page["scope"] = json!("仅当前查询帧窗口，按帧/线程/原始事件顺序展示，不是全局时间顺序。Flow ID 关联观测，不推断依赖方向、等待时长、关键路径或完整生命周期；ID 可能复用，缺起点/终点可能在窗口外。时间是所属样本区间，不是 Flow 事件精确时刻。线程/marker 名仅显示前 160/240 字符。Unknown 类型不解释。available=false 表示输入未提供 Flow，空事件不证明没有依赖。");
+        Ok(page)
+    }
+
     pub fn evidence(
         &self,
         frame_index: usize,
@@ -173,7 +247,11 @@ impl FrameStore {
         )?;
         let mut thread = json!(current.info);
         thread["name"] = json!(current.info.name.chars().take(128).collect::<String>());
-        thread["group"] = json!(current.info.group.as_ref().map(|s|s.chars().take(128).collect::<String>()));
+        thread["group"] = json!(current
+            .info
+            .group
+            .as_ref()
+            .map(|s| s.chars().take(128).collect::<String>()));
         let mut rows: BTreeMap<Vec<String>, [Totals; 2]> = BTreeMap::new();
         for (side, mut t) in [previous, current].into_iter().enumerate() {
             calculate_self(&mut t.samples);

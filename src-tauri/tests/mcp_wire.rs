@@ -105,7 +105,7 @@ async fn shipped_stdio_binary_serves_real_tree_and_validates_arguments() {
     let mut client = Client::connect(&server, server.token()).await;
     client.initialize().await;
     let list = client.request("tools/list", json!({})).await;
-    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 9);
+    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 10);
     let summary = client.call("performance_session_summary", json!({})).await;
     assert_eq!(
         summary["result"]["structuredContent"]["meta"]["frameCount"],
@@ -197,6 +197,9 @@ async fn shipped_stdio_binary_serves_real_tree_and_validates_arguments() {
         .await;
     assert_eq!(comparison["result"]["structuredContent"]["nextStart"], 1);
     assert!(serde_json::to_vec(&comparison).unwrap().len() < 65536);
+    let flows = client.call("performance_flow_events", json!({"frame_index":10})).await;
+    assert_eq!(flows["result"]["structuredContent"]["available"], false);
+    assert_eq!(flows["result"]["structuredContent"]["total"], 0);
     // The default depth hides a nested 4 B allocation even without a next page.
     // The wire response must explicitly warn against treating visible bytes as totals.
     let shallow = client

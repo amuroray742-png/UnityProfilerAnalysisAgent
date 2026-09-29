@@ -247,6 +247,27 @@ pub async fn frame_evidence(
         .map_err(|e| CommandError::Other(e.to_string()))
 }
 #[tauri::command(rename_all = "camelCase")]
+pub async fn flow_events(
+    file_id: String,
+    frame_index: usize,
+    end_frame_index: usize,
+    flow_id: Option<u32>,
+    start: usize,
+    limit: usize,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, CommandError> {
+    let source = state
+        .get_details(&file_id)
+        .await
+        .ok_or_else(|| CommandError::Other("没有原始帧数据".into()))?;
+    tokio::task::spawn_blocking(move || {
+        source.flows(frame_index, end_frame_index, flow_id, start, limit)
+    })
+    .await
+    .map_err(|e| CommandError::Other(e.to_string()))?
+    .map_err(|e| CommandError::Other(e.to_string()))
+}
+#[tauri::command(rename_all = "camelCase")]
 pub async fn compare_frames(
     file_id: String,
     frame_index: usize,

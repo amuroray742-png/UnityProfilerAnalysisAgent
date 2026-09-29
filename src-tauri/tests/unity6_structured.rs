@@ -121,6 +121,95 @@ fn counted_post_gc_indices_are_bounded_and_preserved() {
 }
 
 #[tokio::test]
+async fn flows_preserve_types_order_cross_frame_ids_and_validate_boundaries() {
+    use unity_profiler_analysis_agent_lib::parser::data;
+    let mut b = body(true);
+    let tail = b.len() - 8;
+    let mut records = vec![63u32];
+    for i in 0..63 {
+        records.extend([
+            if i == 62 { u32::MAX } else { i % 2 },
+            4294967295,
+            if i == 62 { 99 } else { i % 4 },
+        ]);
+    }
+    b.splice(tail..tail + 4, records.iter().flat_map(|v| v.to_le_bytes()));
+    let decoded = Decoder::default().decode(&b).unwrap();
+    assert_eq!(decoded.threads[0].flow_events.len(), 63);
+    assert_eq!(decoded.threads[0].flow_events[62].sample_index, -1);
+    let mut damaged = b.clone();
+    damaged[tail + 4..tail + 8].copy_from_slice(&2u32.to_le_bytes());
+    assert!(Decoder::default().decode(&damaged).is_err());
+    damaged = b.clone();
+    damaged[tail + 4..tail + 8].copy_from_slice(&(-2i32).to_le_bytes());
+    assert!(Decoder::default().decode(&damaged).is_err());
+    assert!(Decoder::default().decode(&b[..b.len() - 9]).is_err());
+    let mut bytes = Vec::new();
+    for _ in 0..2 {
+        for v in [0x20220328, b.len() as u32, 6000, 3, 23, 2, 1] {
+            word(&mut bytes, v);
+        }
+        bytes.extend(&b);
+    }
+    word(&mut bytes, 0xDEADFEED);
+    let bytes = bytes::Bytes::from(bytes);
+    let p = data::parse(&bytes, "flows.data", bytes.len() as u64)
+        .await
+        .unwrap();
+    let s = p.details.clone().unwrap();
+    let page = s.flows(0, 1, Some(u32::MAX), 0, 50).unwrap();
+    assert_eq!(page["available"], true);
+    assert_eq!(page["total"], 126);
+    assert_eq!(page["nextStart"], 50);
+    let next = s.flows(0, 1, Some(u32::MAX), 50, 50).unwrap();
+    assert_eq!(next["rows"][12]["kind"], "Unknown");
+    assert!(next["rows"][12]["marker"].is_null());
+    assert_eq!(next["rows"][13]["frameIndex"], 1);
+    assert_eq!(next["unknownTypes"], 2);
+    assert_eq!(s.flows(0, 1, Some(0), 0, 10).unwrap()["total"], 0);
+    let metrics = unity_profiler_analysis_agent_lib::mcp::MetricsStore::new();
+    metrics
+        .set_capture(
+            unity_profiler_analysis_agent_lib::extractor::extract(&p),
+            Some(s),
+        )
+        .await;
+    let result = unity_profiler_analysis_agent_lib::mcp::tools::dispatch(
+        &metrics,
+        "performance_flow_events",
+        serde_json::json!({"frame_index":0,"end_frame_index":1,"flow_id":4294967295u64}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result["total"], 126);
+
+    // Same ID on another thread remains a distinct observation, not deduplicated.
+    let section = decoded.thread_section_offset;
+    let mut second_thread = b[section + 4..b.len() - 4].to_vec();
+    second_thread[..8].copy_from_slice(&43u64.to_le_bytes());
+    b[section..section + 4].copy_from_slice(&2u32.to_le_bytes());
+    b.splice(b.len() - 4..b.len() - 4, second_thread);
+    let mut bytes = Vec::new();
+    for v in [0x20220328, b.len() as u32, 6000, 3, 23, 2, 1] {
+        word(&mut bytes, v);
+    }
+    bytes.extend(b);
+    word(&mut bytes, 0xDEADFEED);
+    let bytes = bytes::Bytes::from(bytes);
+    let p = data::parse(&bytes, "threads.data", bytes.len() as u64)
+        .await
+        .unwrap();
+    let page = p
+        .details
+        .unwrap()
+        .flows(0, 0, Some(u32::MAX), 62, 2)
+        .unwrap();
+    assert_eq!(page["total"], 126);
+    assert_eq!(page["rows"][0]["threadId"], "42");
+    assert_eq!(page["rows"][1]["threadId"], "43");
+}
+
+#[tokio::test]
 async fn production_file_and_bytes_paths_share_capture_state_and_reject_truncation() {
     use unity_profiler_analysis_agent_lib::{extractor, parser::data};
     let mut bytes = Vec::new();

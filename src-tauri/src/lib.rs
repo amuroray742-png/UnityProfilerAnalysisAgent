@@ -33,6 +33,7 @@ pub fn run() {
             commands::frame_details,
             commands::cpu_hierarchy,
             commands::frame_evidence,
+            commands::flow_events,
             commands::compare_frames,
             commands::release_file,
             commands::diagnose,

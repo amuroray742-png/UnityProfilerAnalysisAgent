@@ -1,6 +1,9 @@
 // Tauri IPC 桥：包装 invoke + listen，提供类型安全的前后端调用
 
 import { invoke } from '@tauri-apps/api/core';
+export function getFlowEvents(fileId: string, frameIndex: number, endFrameIndex: number, flowId: number | null, start = 0): Promise<import('../types').FlowPage> {
+  return invoke('flow_events', { fileId, frameIndex, endFrameIndex, flowId, start, limit: 20 });
+}
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import type {
   UploadResult,

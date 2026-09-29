@@ -64,5 +64,24 @@ def run_render_checks(js, request, input_path, reference_path, output, report):
     js('document.querySelector("table[aria-label=帧证据]").scrollIntoView({block:"start"})')
     (output / 'counter-evidence.png').write_bytes(base64.b64decode(request('GET', '/screenshot')))
     report['checks'].append('real capture metadata/counters shown with typed byte units through release UI')
+    click('//summary[normalize-space(.)="Flow 跨线程事件"]', 'xpath')
+    click('//button[normalize-space(.)="读取 Flow"]', 'xpath')
+    deadline = time.monotonic() + 30
+    while not js('return !!document.querySelector(arguments[0])', 'table[aria-label="Flow 事件"] tbody tr'):
+        if time.monotonic() > deadline: raise TimeoutError('Flow events')
+        time.sleep(.1)
+    flow_id = js('return document.querySelector(arguments[0]).textContent', 'table[aria-label="Flow 事件"] tbody button')
+    assert flow_id.isdigit()
+    click('table[aria-label="Flow 事件"] tbody button')
+    click('//button[normalize-space(.)="读取 Flow"]', 'xpath')
+    deadline = time.monotonic() + 30
+    while not js('return !!document.querySelector(arguments[0])', 'table[aria-label="Flow 事件"] tbody tr'):
+        if time.monotonic() > deadline: raise TimeoutError('filtered Flow events')
+        time.sleep(.1)
+    assert js('return [...document.querySelectorAll(arguments[0])].every(b=>b.textContent===arguments[1])', 'table[aria-label="Flow 事件"] tbody button', flow_id)
+    assert '不是全局时间顺序' in js('return document.body.textContent')
+    js('document.querySelector(arguments[0]).scrollIntoView({block:"center"})', 'table[aria-label="Flow 事件"]')
+    (output / 'flow-events.png').write_bytes(base64.b64decode(request('GET', '/screenshot')))
+    report['checks'].append('release Flow UI reads real binary events and filters same ID without claiming complete causality')
     click('//button[normalize-space(.)="重置"]', 'xpath')
     assert js('return !!document.querySelector(".dropzone")')
