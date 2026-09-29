@@ -128,7 +128,7 @@ impl Workspace {
         }
         let root_lease = root_lease(&root)?;
         let data = Project {
-            version: 1,
+            version: 2,
             id: id(),
             name,
             root,
@@ -141,7 +141,7 @@ impl Workspace {
             _lease: lease,
             _root_lease: root_lease,
             data: Mutex::new(data),
-            cancelled: AtomicBool::new(false),
+            cancelled: Arc::new(AtomicBool::new(false)),
             busy: AtomicBool::new(false),
             last_report_save: Mutex::new(std::time::Instant::now()),
         };
@@ -163,8 +163,22 @@ impl Workspace {
         let mut data: Project = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
         data.root = data.root.canonicalize().map_err(|e| e.to_string())?;
         let root_lease = root_lease(&data.root)?;
-        if data.version != 1 {
+        if data.version != 1 && data.version != 2 {
             return Err("不支持的优化项目版本".into());
+        }
+        if data.version == 1 {
+            let backup = directory.join("optimization.v1.backup.json");
+            if !backup.exists() {
+                let mut f = OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .open(&backup)
+                    .map_err(|e| e.to_string())?;
+                f.write_all(&bytes)
+                    .and_then(|_| f.sync_all())
+                    .map_err(|e| e.to_string())?;
+            }
+            data.version = 2;
         }
         for round in &mut data.rounds {
             for run in &mut round.runs {
@@ -173,9 +187,22 @@ impl Workspace {
                         return Err("变更备份校验失败".into());
                     }
                     if c.state == "prepared" {
-                        match editing::read(&data.root, &c.path).map(|b| hash(&b)) {
+                        match super::automatic::record_bytes(&data.root, c).map(|b| hash(&b)) {
                             Ok(h) if h == c.after_hash => c.state = "applied".into(),
-                            Ok(h) if h == c.before_hash => c.state = "not_applied".into(),
+                            Ok(h) if c.kind == "modify" && h == c.before_hash => {
+                                c.state = "not_applied".into()
+                            }
+                            Err(_)
+                                if c.kind != "modify"
+                                    && super::automatic::checked_path(&data.root, &c.path)
+                                        .is_ok_and(|p| {
+                                            std::fs::symlink_metadata(p).is_err_and(|e| {
+                                                e.kind() == std::io::ErrorKind::NotFound
+                                            })
+                                        }) =>
+                            {
+                                c.state = "not_applied".into()
+                            }
                             _ => {
                                 c.state = "conflict".into();
                                 run.reason = Some("中断写入后文件变化，需人工核查".into());
@@ -200,7 +227,7 @@ impl Workspace {
             _lease: lease,
             _root_lease: root_lease,
             data: Mutex::new(data),
-            cancelled: AtomicBool::new(false),
+            cancelled: Arc::new(AtomicBool::new(false)),
             busy: AtomicBool::new(false),
             last_report_save: Mutex::new(std::time::Instant::now()),
         };

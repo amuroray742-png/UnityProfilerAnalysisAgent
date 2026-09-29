@@ -22,7 +22,7 @@ impl EditScope {
             }
             return Ok(result);
         }
-        if name == "optimization_replace" {
+        if matches!(name, "optimization_replace" | "optimization_create") {
             let root = self.workspace.data.lock().unwrap().root.clone();
             let status = crate::project::editor::status(&root, &self.workspace.cancelled).await;
             if status.status == "busy" {
@@ -59,11 +59,20 @@ impl EditScope {
             if run.checks.len() >= 3 {
                 return Err("已达到 3 次检查上限，停止自动修复".into());
             }
-            let paths: Vec<_> = run.changes.iter().map(|c| c.path.clone()).collect();
+            if let Err(e) = super::automatic::reconcile_meta(&root, run) {
+                self.workspace.cancelled.store(true, Ordering::SeqCst);
+                return Err(e);
+            }
+            let paths: Vec<_> = run
+                .changes
+                .iter()
+                .filter(|c| editing::allowed(&c.path))
+                .map(|c| c.path.clone())
+                .collect();
             let expected: BTreeMap<_, _> = run
                 .changes
                 .iter()
-                .filter(|c| c.state == "applied")
+                .filter(|c| c.state == "applied" && editing::allowed(&c.path))
                 .map(|c| (c.path.clone(), c.after_hash.clone()))
                 .collect();
             let revision = run.changes.len();
@@ -122,14 +131,26 @@ impl EditScope {
             .flat_map(|r| &mut r.runs)
             .find(|r| r.id == self.run_id)
             .ok_or("运行不存在")?;
-        value["checkedRevision"] = json!(revision);
+        let normalized = super::automatic::reconcile_meta(&root, run);
+        let accepted_meta = normalized.as_ref().cloned().unwrap_or_default();
+        let owned_meta: Vec<_> = if normalized.is_ok() {
+            run.changes
+                .iter()
+                .filter(|c| c.path.ends_with(".meta") && c.state == "applied")
+                .map(|c| c.path.clone())
+                .collect()
+        } else {
+            vec![]
+        };
+        value["normalizedMetadata"] = json!(accepted_meta);
+        value["checkedRevision"] = json!(run.changes.len());
         match (before, after) {
             (Ok(before), Ok(after)) => {
                 let keys: std::collections::BTreeSet<_> =
                     before.keys().chain(after.keys()).collect();
                 let changed: Vec<_> = keys
                     .into_iter()
-                    .filter(|p| before.get(*p) != after.get(*p))
+                    .filter(|p| before.get(*p) != after.get(*p) && !owned_meta.contains(*p))
                     .cloned()
                     .collect();
                 if !changed.is_empty() {
@@ -152,7 +173,12 @@ impl EditScope {
         value["fileWatchScope"] = json!(
             "Assets、ProjectSettings、内嵌 Packages；代码指纹及其他资源的大小/修改时间，不遍历链接"
         );
-        if run.changes.len() != revision {
+        if let Err(e) = normalized {
+            value["status"] = json!("unavailable");
+            value["reason"] = json!(e);
+            self.workspace.cancelled.store(true, Ordering::SeqCst);
+        }
+        if run.changes.len() != revision + accepted_meta.len() {
             value["status"] = json!("unavailable");
             value["reason"] = json!("检查期间代码再次修改");
         }
@@ -205,7 +231,11 @@ impl Workspace {
             }
             Finished { .. } => {
                 run.status = if !run.changes.iter().any(|c| c.state == "applied") {
-                    "failed"
+                    if run.automatic {
+                        "investigated"
+                    } else {
+                        "failed"
+                    }
                 } else {
                     "modified"
                 }
@@ -231,6 +261,17 @@ impl Workspace {
             }
             _ => return Ok(()),
         }
+        let tasks = (event.terminal() && run.automatic).then(|| run.tasks.clone());
+        if let Some(tasks) = tasks {
+            if let Some(round) = d
+                .rounds
+                .iter_mut()
+                .find(|r| r.runs.iter().any(|r| r.id == run_id))
+            {
+                round.tasks = tasks;
+                round.task_version += 1;
+            }
+        }
         if event.terminal() {
             self.busy.store(false, Ordering::SeqCst);
         }
@@ -248,8 +289,10 @@ impl Workspace {
 pub fn schemas() -> Value {
     json!({"tools":[
         {"name":"optimization_context","description":"默认分页读取本轮持久化任务、限制、检查及既有修改。编辑前读完任务页面。报告正文及资源证据用 report_id 按需分页读取，不续接聊天历史。","inputSchema":{"type":"object","properties":{"start":{"type":"integer","minimum":0},"report_id":{"type":"string"}},"additionalProperties":false}},
-        {"name":"optimization_read","description":"只读取用户批准的已有代码，返回行号和当前指纹，按 nextStart 续页。","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1}},"required":["path"],"additionalProperties":false}},
+        {"name":"optimization_read","description":"读取本会话允许的工程代码（自动模式可继续调查），编辑必须先读取，返回行号和当前指纹，按 nextStart 续页。","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1}},"required":["path"],"additionalProperties":false}},
         {"name":"optimization_replace","description":"在批准文件中唯一原文替换，保留编码与换行，持久化备份后原子写入。必须先读取最新指纹；不允许新增/删除/改名。取消保留已写改动。","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"},"path":{"type":"string"},"expected_hash":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["task_id","path","expected_hash","old_text","new_text"],"additionalProperties":false}},
+        {"name":"optimization_task","description":"自动优化会话记录或更新内部任务。调查后补充证据再执行，不需要用户逐项勾选。","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["optimize","marker","investigate"]},"title":{"type":"string"},"evidence":{"type":"string"},"instructions":{"type":"string"},"acceptance":{"type":"string"}},"required":["id","kind","title","evidence","instructions","acceptance"],"additionalProperties":false}},
+        {"name":"optimization_create","description":"自动模式在 Assets 下新增代码和必要目录，后端管理 meta 与回退；绝不覆盖已有文件。先记录有证据的任务。","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"}},"required":["task_id","path","content"],"additionalProperties":false}},
         {"name":"optimization_check","description":"请求匹配工程的固定编译/Shader 检查与用户选择的 EditMode 测试，每个新会话最多 3 次。检查未完成不能宣称通过。","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}
     ]})
 }

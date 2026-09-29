@@ -2,6 +2,7 @@ use super::*;
 use crate::acp_client::{self, client::SessionHandle, DiagnoseEvent, DiagnoseRequest};
 use serde_json::{json, Value};
 use std::sync::{atomic::Ordering, Arc};
+use tauri::Manager;
 #[derive(Default)]
 pub struct OptimizationState {
     pub operation: tokio::sync::Mutex<()>,
@@ -40,6 +41,14 @@ impl Drop for StartingRun {
     deny_unknown_fields
 )]
 pub enum Action {
+    PrepareAutomatic {
+        file_id: String,
+    },
+    StartAutomatic {
+        round_id: String,
+        agent_id: String,
+        requirements: String,
+    },
     Create {
         directory: PathBuf,
         root: PathBuf,
@@ -121,13 +130,16 @@ fn compact_comparison(value: &Option<Value>) -> Value {
     }
     v
 }
+fn run_view(s: &Run) -> Value {
+    json!({"id":s.id,"automatic":s.automatic,"tasks":s.tasks,"text":s.text.chars().take(4000).collect::<String>(),"textPartial":s.text.chars().count()>4000,"requirements":s.requirements,"taskVersion":s.task_version,"agentId":s.agent_id,"sessionId":s.session_id,"status":s.status,"reason":s.reason,"createdAt":s.created_at,"checks":s.checks,"baselineCheck":s.baseline_check,"changes":s.changes.iter().map(|c|json!({"path":c.path,"kind":c.kind,"taskId":c.task_id,"beforeHash":c.before_hash,"afterHash":c.after_hash,"state":c.state})).collect::<Vec<_>>()})
+}
 fn view(w: &Workspace) -> Value {
     let d = w.data.lock().unwrap();
     json!({"id":d.id,"name":d.name,"root":d.root,"directory":w.directory,"budgets":d.budgets,"busy":w.busy.load(Ordering::SeqCst),
     "captures":d.captures.iter().map(|c|json!({"id":c.id,"path":c.path,"hash":c.hash,"conditions":c.conditions,"snapshot":c.snapshot.meta})).collect::<Vec<_>>(),
     "rounds":d.rounds.iter().map(|r|json!({"performanceStatus":r.performance_status(),"id":r.id,"baseline":r.baseline,"candidate":r.candidate,"tasks":r.tasks,"taskVersion":r.task_version,"taskVerifications":r.task_verifications,"tests":r.tests,"comparison":compact_comparison(&r.comparison),"correctness":r.correctness,"decision":r.decision,
         "reports":r.reports.iter().map(|p|json!({"reportId":p.report_id,"stage":p.stage,"agentId":p.agent_id,"status":p.status})).collect::<Vec<_>>(),
-        "runs":r.runs.iter().map(|s|json!({"id":s.id,"taskVersion":s.task_version,"agentId":s.agent_id,"sessionId":s.session_id,"status":s.status,"reason":s.reason,"createdAt":s.created_at,"checks":s.checks,"baselineCheck":s.baseline_check,"changes":s.changes.iter().map(|c|json!({"path":c.path,"beforeHash":c.before_hash,"afterHash":c.after_hash,"state":c.state})).collect::<Vec<_>>()})).collect::<Vec<_>>() })).collect::<Vec<_>>()})
+        "runs":r.runs.iter().map(run_view).collect::<Vec<_>>() })).collect::<Vec<_>>()})
 }
 async fn capture(path: PathBuf, conditions: Conditions) -> Result<Capture, String> {
     let path = path.canonicalize().map_err(|e| e.to_string())?;
@@ -164,7 +176,8 @@ async fn capture(path: PathBuf, conditions: Conditions) -> Result<Capture, Strin
 }
 #[tauri::command(rename_all = "camelCase")]
 pub async fn optimization_command(
-    action: Action,
+    mut action: Action,
+    app: tauri::AppHandle,
     state: tauri::State<'_, OptimizationState>,
     app_state: tauri::State<'_, crate::state::AppState>,
 ) -> Result<Value, String> {
@@ -173,6 +186,83 @@ pub async fn optimization_command(
     } else {
         Some(state.operation.lock().await)
     };
+    if let Action::PrepareAutomatic { file_id } = &action {
+        let file_id = file_id.clone();
+        let (root, report_id) = {
+            let inner = app_state.0.lock().await;
+            if !inner.active_sessions.is_empty() {
+                return Err("请等待定位结束".into());
+            }
+            let report = inner
+                .reports
+                .values()
+                .filter(|r| r.file_id == file_id && r.stage == "project" && r.status == "completed")
+                .max_by_key(|r| &r.created_at)
+                .ok_or("请先完成工程定位")?;
+            let root = report
+                .project_context
+                .as_ref()
+                .and_then(|c| c["project"]["root"].as_str())
+                .ok_or("工程身份缺失")?;
+            (
+                PathBuf::from(root)
+                    .canonicalize()
+                    .map_err(|e| e.to_string())?,
+                report.report_id.clone(),
+            )
+        };
+        let mut current = state.workspace.lock().await;
+        if current
+            .as_ref()
+            .is_some_and(|w| w.busy.load(Ordering::SeqCst))
+        {
+            return Err("优化正在运行".into());
+        }
+        if current
+            .as_ref()
+            .is_some_and(|w| w.data.lock().unwrap().root != root)
+        {
+            *current = None;
+        }
+        if current.is_none() {
+            let directory = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| e.to_string())?
+                .join("optimization-projects")
+                .join(storage::hash(
+                    root.to_string_lossy().to_lowercase().as_bytes(),
+                ));
+            let w = tokio::task::spawn_blocking(move || {
+                std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+                if directory.join("optimization.json").exists() {
+                    Workspace::open(directory)
+                } else {
+                    let name = root
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    Workspace::create(directory, root, name)
+                }
+            })
+            .await
+            .map_err(|e| e.to_string())??;
+            *current = Some(Arc::new(w));
+        }
+        let w = current.as_ref().unwrap();
+        if w.data
+            .lock()
+            .unwrap()
+            .rounds
+            .last()
+            .is_some_and(|r| r.reports.iter().any(|p| p.report_id == report_id))
+        {
+            return Ok(view(w));
+        }
+        drop(current);
+        action = Action::Adopt { file_id };
+    }
     match action {
         Action::Create {
             directory,
@@ -256,7 +346,8 @@ pub async fn optimization_command(
             };
             let localization = reports
                 .iter()
-                .find(|r| r.stage == "project" && r.status == "completed")
+                .filter(|r| r.stage == "project" && r.status == "completed")
+                .max_by_key(|r| &r.created_at)
                 .ok_or("需要完成工程定位；旧报告需重新定位生成任务")?;
             let context = localization
                 .project_context
@@ -268,8 +359,8 @@ pub async fn optimization_command(
             if root != w.data.lock().unwrap().root {
                 return Err("定位报告属于其他工程".into());
             }
-            let tasks: Vec<Task> = serde_json::from_value(context["taskDrafts"].clone())
-                .map_err(|_| "旧定位报告没有结构化任务，请重新定位")?;
+            let tasks: Vec<Task> =
+                serde_json::from_value(context["taskDrafts"].clone()).unwrap_or_default();
             let c = capture(path, Conditions::default()).await?;
             if c.hash != capture_hash {
                 return Err("录制已变化，拒绝将旧报告绑定新数据".into());
@@ -385,7 +476,22 @@ pub async fn optimization_command(
             }
             w.save(&d)?;
         }
-        Action::Start { round_id, agent_id } => {
+        Action::Start { .. } | Action::StartAutomatic { .. } => {
+            let (round_id, agent_id, requirements) = match action {
+                Action::Start { round_id, agent_id } => (round_id, agent_id, None),
+                Action::StartAutomatic {
+                    round_id,
+                    agent_id,
+                    requirements,
+                } => {
+                    if requirements.len() > 16000 {
+                        return Err("补充要求过长".into());
+                    }
+                    (round_id, agent_id, Some(requirements))
+                }
+                _ => unreachable!(),
+            };
+            let automatic = requirements.is_some();
             let _start = START_LOCK.lock().await;
             if !app_state.0.lock().await.active_sessions.is_empty() {
                 return Err("请先结束诊断".into());
@@ -424,7 +530,7 @@ pub async fn optimization_command(
             if ACTIVE.swap(true, Ordering::SeqCst) {
                 return Err("已有修改运行".into());
             }
-            let run = match w.begin(&round_id, agent_id.clone()) {
+            let run = match w.begin_mode(&round_id, agent_id.clone(), requirements) {
                 Ok(id) => id,
                 Err(e) => {
                     ACTIVE.store(false, Ordering::SeqCst);
@@ -463,8 +569,29 @@ pub async fn optimization_command(
                 return Ok(view(&w));
             }
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let project = if automatic {
+                let root = root.clone();
+                let file_id = run.clone();
+                let cancelled = w.cancelled.clone();
+                let prepared = tokio::task::spawn_blocking(move || {
+                    crate::project::ProjectScope::prepare(file_id, root, cancelled)
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+                if w.cancelled.load(Ordering::SeqCst) {
+                    w.event(&run, &DiagnoseEvent::Cancelled)?;
+                    return Ok(view(&w));
+                }
+                let mut project = prepared?;
+                // Scanning follows the user's cancellation; closing the read-only ACP scope
+                // must not cancel the workspace or block subsequent manual checks/rollback.
+                project.cancelled = Arc::new(AtomicBool::new(false));
+                Some(Arc::new(project))
+            } else {
+                None
+            };
             let request = DiagnoseRequest {
-                project: None,
+                project,
                 source: None,
                 parent_report: None,
                 file_id: run.clone(),
@@ -488,7 +615,13 @@ pub async fn optimization_command(
                         return Err(e.to_string());
                     }
                 };
-            *state.active.lock().await = Some(handle.clone());
+            {
+                let mut active = state.active.lock().await;
+                *active = Some(handle.clone());
+            }
+            if w.cancelled.load(Ordering::SeqCst) {
+                handle.cancel().await;
+            }
             let work = w.clone();
             tokio::spawn(async move {
                 while let Some(event) = rx.recv().await {
@@ -793,6 +926,12 @@ pub async fn optimization_command(
                         run.text
                     );
                     for c in &run.changes {
+                        text += &format!(
+                            "\n变更类型：{} · {} · 任务 {}\n",
+                            c.kind,
+                            c.path,
+                            c.task_id.as_deref().unwrap_or("旧记录未关联")
+                        );
                         let diff = editing::diff(c)?;
                         let lines: Vec<_> = diff.lines().collect();
                         let preview = lines

@@ -98,6 +98,14 @@ pub fn validate_tasks(tasks: &[Task], root: &Path) -> Result<(), String> {
 }
 impl Workspace {
     pub fn begin(&self, round_id: &str, agent_id: String) -> Result<String, String> {
+        self.begin_mode(round_id, agent_id, None)
+    }
+    pub fn begin_mode(
+        &self,
+        round_id: &str,
+        agent_id: String,
+        requirements: Option<String>,
+    ) -> Result<String, String> {
         let mut d = self.data.lock().unwrap();
         if self.busy.load(Ordering::SeqCst) {
             return Err("已有优化任务运行".into());
@@ -121,9 +129,23 @@ impl Workspace {
                 }
             }
         }
-        validate_tasks(&tasks, &d.root)?;
+        if requirements.is_none() {
+            validate_tasks(&tasks, &d.root)?;
+        } else {
+            if !round
+                .reports
+                .iter()
+                .any(|r| r.stage == "project" && r.status == "completed")
+            {
+                return Err("需要完整工程定位报告".into());
+            }
+            tasks.clear();
+        }
         let id = id();
         let run = Run {
+            automatic: requirements.is_some(),
+            requirements: requirements.unwrap_or_default(),
+            read_receipts: BTreeMap::new(),
             task_version: round.task_version,
             id: id.clone(),
             agent_id,
@@ -150,6 +172,9 @@ impl Workspace {
         Ok(id)
     }
     pub fn edit_query(&self, run_id: &str, name: &str, a: Value) -> Result<Value, String> {
+        if matches!(name, "optimization_task" | "optimization_create") {
+            return self.automatic_query(run_id, name, a);
+        }
         let allowed = match name {
             "optimization_context" => vec!["start", "report_id"],
             "optimization_read" => vec!["path", "start_line"],
@@ -189,7 +214,7 @@ impl Workspace {
                     .ok_or("报告不属于本轮")?;
                 serde_json::to_string_pretty(report).unwrap()
             } else {
-                serde_json::to_string_pretty(&json!({"projectRoot":root,"checks":round.runs.iter().find(|r|r.id==run_id).map(|r|&r.checks),"reports":round.reports.iter().map(|r|json!({"reportId":r.report_id,"stage":r.stage,"agentId":r.agent_id,"status":r.status,"textBytes":r.text.len(),"read":"使用 report_id 按需分页读取完整报告及资源证据"})).collect::<Vec<_>>(),"selectedTests":round.tests,"baselineCheck":round.runs.iter().find(|r|r.id==run_id).map(|r|&r.baseline_check),"runTasks":round.runs.iter().find(|r|r.id==run_id).map(|r|&r.tasks),"existingChanges":round.runs.iter().flat_map(|r|&r.changes).map(|c|json!({"path":c.path,"beforeHash":c.before_hash,"afterHash":c.after_hash,"state":c.state})).collect::<Vec<_>>()})).unwrap()
+                serde_json::to_string_pretty(&json!({"projectRoot":root,"checks":round.runs.iter().find(|r|r.id==run_id).map(|r|&r.checks),"reports":round.reports.iter().map(|r|json!({"reportId":r.report_id,"stage":r.stage,"agentId":r.agent_id,"status":r.status,"textBytes":r.text.len(),"read":"使用 report_id 按需分页读取完整报告及资源证据"})).collect::<Vec<_>>(),"selectedTests":round.tests,"baselineCheck":round.runs.iter().find(|r|r.id==run_id).map(|r|&r.baseline_check),"mode":round.runs.iter().find(|r|r.id==run_id).map(|r|if r.automatic {"automatic"}else{"restricted"}),"requirements":round.runs.iter().find(|r|r.id==run_id).map(|r|&r.requirements),"runTasks":round.runs.iter().find(|r|r.id==run_id).map(|r|&r.tasks),"existingChanges":round.runs.iter().flat_map(|r|&r.changes).map(|c|json!({"path":c.path,"beforeHash":c.before_hash,"afterHash":c.after_hash,"state":c.state})).collect::<Vec<_>>()})).unwrap()
             };
             let chars: Vec<_> = text.chars().collect();
             if start > chars.len() {
@@ -205,14 +230,15 @@ impl Workspace {
             return Err("修改会话已结束".into());
         }
         let path = a["path"].as_str().ok_or("缺少 path")?;
-        if !run.tasks.iter().any(|t| t.files.contains_key(path)) {
+        if !run.automatic && !run.tasks.iter().any(|t| t.files.contains_key(path)) {
             return Err("超出用户批准的文件范围".into());
         }
         if name == "optimization_replace"
-            && !run
-                .tasks
-                .iter()
-                .any(|t| Some(t.id.as_str()) == a["task_id"].as_str() && t.files.contains_key(path))
+            && !run.tasks.iter().any(|t| {
+                Some(t.id.as_str()) == a["task_id"].as_str()
+                    && ["optimize", "marker"].contains(&t.kind.as_str())
+                    && (run.automatic || t.files.contains_key(path))
+            })
         {
             return Err("编辑必须绑定用户选定任务和文件".into());
         }
@@ -225,12 +251,20 @@ impl Workspace {
             .rev()
             .find(|c| c.path == path && c.state == "applied")
             .map(|c| &c.after_hash)
-            .or_else(|| run.tasks.iter().find_map(|t| t.files.get(path)))
-            .unwrap();
-        if &hash != expected {
+            .or_else(|| {
+                if run.automatic {
+                    run.read_receipts.get(path)
+                } else {
+                    run.tasks.iter().find_map(|t| t.files.get(path))
+                }
+            });
+        if expected.is_some_and(|expected| &hash != expected) {
             return Err("文件发生外部变化，停止修改；请重新定位并确认范围".into());
         }
         if name == "optimization_read" {
+            if run.automatic {
+                run.read_receipts.insert(path.into(), hash.clone());
+            }
             let start = match a.get("start_line") {
                 None => 1,
                 Some(v) => v.as_u64().ok_or("start_line 必须为正整数")? as usize,
@@ -262,7 +296,9 @@ impl Workspace {
         if name != "optimization_replace" {
             return Err("未知修改工具".into());
         }
-        if a["expected_hash"].as_str() != Some(&hash) {
+        if a["expected_hash"].as_str() != Some(&hash)
+            || (run.automatic && run.read_receipts.get(path) != Some(&hash))
+        {
             return Err("必须先读取最新文件指纹".into());
         }
         let old = a["old_text"].as_str().ok_or("缺少 old_text")?;
@@ -287,6 +323,8 @@ impl Workspace {
             return Ok(json!({"changed":false,"hash":hash}));
         }
         run.changes.push(Change {
+            task_id: a["task_id"].as_str().map(str::to_owned),
+            kind: "modify".into(),
             path: path.into(),
             before_hash: hash.clone(),
             after_hash: after_hash.clone(),
@@ -316,6 +354,7 @@ impl Workspace {
             .find(|r| r.id == run_id)
             .unwrap();
         r.changes.last_mut().unwrap().state = "applied".into();
+        r.read_receipts.remove(path);
         self.save(&d)?;
         Ok(
             json!({"changed":true,"hash":after_hash,"path":path,"status":"已修改，尚需编译与性能复验"}),
@@ -342,15 +381,30 @@ impl Workspace {
             .iter()
             .flat_map(|r| &r.runs)
             .flat_map(|r| &r.changes)
-            .any(|c| c.state != "rolled_back" && paths.contains(&c.path))
+            .any(|c| {
+                c.state != "rolled_back"
+                    && (paths.contains(&c.path)
+                        || d.rounds[index]
+                            .runs
+                            .iter()
+                            .flat_map(|r| &r.changes)
+                            .any(|c| c.kind == "create"))
+            })
         {
             return Err("后续轮次修改了相同文件，请先回退后续轮次".into());
         }
+        super::automatic::preflight_rollback(&root, &d.rounds[index].runs)?;
         // Walk revisions backwards. Stop on conflicts, retain prior restored entries.
         for ri in (0..d.rounds[index].runs.len()).rev() {
             for ci in (0..d.rounds[index].runs[ri].changes.len()).rev() {
                 let c = d.rounds[index].runs[ri].changes[ci].clone();
                 if c.state == "rolled_back" || c.state == "not_applied" {
+                    continue;
+                }
+                if c.kind != "modify" {
+                    super::automatic::rollback_created(&root, &c, &d.rounds[index].runs)?;
+                    d.rounds[index].runs[ri].changes[ci].state = "rolled_back".into();
+                    self.save(&d)?;
                     continue;
                 }
                 let current = storage::hash(&read(&root, &c.path)?);

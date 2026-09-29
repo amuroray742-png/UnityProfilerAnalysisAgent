@@ -11,9 +11,9 @@ const state:DiagnoseState={phase:'done',upload:null,snapshot:null,agents:[{id:'c
 function project(){return {id:'p',name:'Public',root:'C:/Public',directory:'C:/Records',busy:false,budgets:{},captures:[{id:'a',path:'a.json',conditions:emptyConditions(),snapshot:{fileName:'a.json',frameCount:2,unityVersion:'6000.3'}}],rounds:[{id:'r',baseline:'a',candidate:null,tasks:[{id:'t',title:'减少分配',kind:'optimize',evidence:'帧 10 已读代码',files:{'Assets/Work.cs':'hash'},instructions:'缓存固定数据',constraints:'保持玩法',acceptance:'重录',selected:true}],tests:[],runs:[],comparison:null,correctness:'pending',decision:'pending',reports:[{stage:'project',agentId:'codex'}]}]};}
 it('selects modification Agent independently and starts by round ID, never an old session ID',async()=>{
  const p=project();vi.mocked(invoke).mockResolvedValue(p);render(<OptimizationPanel state={state}/>);fireEvent.click(screen.getByText(/打开优化项目/));
- const select=await screen.findByLabelText(/修改 Agent（/);await waitFor(()=>expect(select).toHaveValue('codex'));
- fireEvent.change(select,{target:{value:'claude-code'}});fireEvent.click(screen.getByText('确认本轮范围，开始修改（新会话）'));
- await waitFor(()=>expect(invoke).toHaveBeenCalledWith('optimization_command',{action:{op:'start',roundId:'r',agentId:'claude-code'}}));
+ const select=await screen.findByLabelText(/修改 AI/);await waitFor(()=>expect(select).toHaveValue('codex'));
+ fireEvent.change(select,{target:{value:'claude-code'}});fireEvent.click(screen.getByText('开始优化'));
+ await waitFor(()=>expect(invoke).toHaveBeenCalledWith('optimization_command',{action:{op:'startAutomatic',roundId:'r',agentId:'claude-code',requirements:''}}));
  expect(state.selectedAgent).toBe('claude-code');expect(p.rounds[0].reports[0].agentId).toBe('codex');
  expect(JSON.stringify(vi.mocked(invoke).mock.calls)).not.toContain('diagnostic');
 });
@@ -31,4 +31,27 @@ it('rechecks cancelled edits without starting an Agent or reusing a session',asy
  vi.mocked(invoke).mockResolvedValue(p);render(<OptimizationPanel state={state}/>);fireEvent.click(screen.getByText(/打开优化项目/));fireEvent.click(await screen.findByText(/重新执行 Unity 检查/));
  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('optimization_command',{action:{op:'check',roundId:'r'}}));
  expect(vi.mocked(invoke).mock.calls.some(c=>JSON.stringify(c).includes('"op":"start"'))).toBe(false);
+});
+
+it('starts from a completed report without tasks, path dialogs, or a file confirmation',async()=>{
+ const report={reportId:'report',fileId:'capture',stage:'project',status:'completed',agentId:'codex'};
+ const input={...state,upload:{fileId:'capture'},reports:[report]} as DiagnoseState;
+ const p=project();p.rounds[0].tasks=[];
+ vi.mocked(invoke).mockImplementation(async(_name,args)=>{const op=(args as {action:{op:string}}).action.op;return op==='get'?null:p;});
+ render(<OptimizationPanel state={input}/>);
+ const button=await screen.findByText('开始优化');await waitFor(()=>expect(button).not.toBeDisabled());
+ expect(screen.queryByText('本轮任务与授权范围')).not.toBeInTheDocument();
+ expect(screen.queryByRole('checkbox',{name:/选择/})).not.toBeInTheDocument();
+ fireEvent.change(screen.getByLabelText('补充要求（选填）'),{target:{value:'保持玩法'}});fireEvent.click(button);
+ await waitFor(()=>expect(invoke).toHaveBeenCalledWith('optimization_command',{action:{op:'startAutomatic',roundId:'r',agentId:'codex',requirements:'保持玩法'}}));
+ expect(invoke).toHaveBeenCalledWith('optimization_command',{action:{op:'prepareAutomatic',fileId:'capture'}});
+});
+
+it('honors an explicitly selected saved round instead of replacing it with the current recording',async()=>{
+ const input={...state,upload:{fileId:'other-capture'},reports:[{reportId:'other-report',stage:'project',status:'completed',agentId:'codex'}]} as DiagnoseState;
+ vi.mocked(invoke).mockResolvedValue(project());render(<OptimizationPanel state={input}/>);
+ const selector=await screen.findByLabelText('轮次');fireEvent.change(selector,{target:{value:'r'}});
+ fireEvent.click(screen.getByText('开始优化'));
+ await waitFor(()=>expect(invoke).toHaveBeenCalledWith('optimization_command',{action:{op:'startAutomatic',roundId:'r',agentId:'codex',requirements:''}}));
+ expect(vi.mocked(invoke).mock.calls.some(c=>JSON.stringify(c).includes('prepareAutomatic'))).toBe(false);
 });
