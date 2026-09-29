@@ -107,3 +107,6 @@ codex-acp --version
 ## 报告与源码会话增量
 
 源码定位使用独立 ACP 会话，后端携带完整首轮报告和当前录制的性能查询上下文；只有该会话注册并授权 `source_files` / `source_search` / `source_read`。Agent 工作目录仍是临时目录，不新增终端、写入或网络工具。后端保存有上限、带终态的报告，导出不依赖 UI 流缓冲。命令、限制、复现和证据边界见[报告与源码指南](reports-and-source.md)。
+
+
+工程定位另用 `project` 报告阶段和独立 ACP 会话，注册 `project_summary`、`project_files`、`project_search`、`project_read`、`project_asset`、`project_references`；旧 `source_*` 仍仅限 C#。普通诊断不能访问工程工具，工程会话不能访问终端或 Unity eval。Editor 查询由 Rust 白名单桥接，固定协议与路径校验，取消仅针对对应 requestId。整体工程诊断 900 秒上限，单次 Editor 查询另有短超时；详情见[工程定位指南](project-diagnosis.md)。

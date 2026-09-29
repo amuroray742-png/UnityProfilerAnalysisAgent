@@ -29,6 +29,7 @@ pub struct AppStateInner {
     /// active session_id（用于 cancel）
     pub reports: HashMap<String, crate::reports::Report>,
     pub sources: HashMap<String, Arc<crate::source::SourceScope>>,
+    pub projects: HashMap<String, Arc<crate::project::ProjectScope>>,
     pub preparations: HashMap<String, Arc<std::sync::atomic::AtomicBool>>,
     pub active_sessions: HashMap<String, ActiveSession>,
 }
@@ -51,6 +52,7 @@ impl AppState {
             active_sessions: HashMap::new(),
             reports: HashMap::new(),
             sources: HashMap::new(),
+            projects: HashMap::new(),
             preparations: HashMap::new(),
         })))
     }
@@ -89,6 +91,15 @@ impl AppState {
     }
     pub async fn release_file(&self, file_id: &str) {
         let mut inner = self.0.lock().await;
+        inner.projects.retain(|_, p| {
+            if p.info.file_id == file_id {
+                p.cancelled
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                false
+            } else {
+                true
+            }
+        });
         inner.reports.retain(|_, r| r.file_id != file_id);
         if let Some(flag) = inner.preparations.remove(file_id) {
             flag.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -176,7 +187,7 @@ impl AppState {
         if inner.preparations.contains_key(file_id) {
             return Err(AcpError::Session("源码目录正在准备".into()));
         }
-        let (parent, source) = if let Some((report_id, scope_id)) = source_request {
+        let (parent, source, project) = if let Some((report_id, scope_id)) = source_request {
             let report = inner
                 .reports
                 .get(&report_id)
@@ -192,23 +203,41 @@ impl AppState {
                     s.info.file_id == file_id
                         && !s.cancelled.load(std::sync::atomic::Ordering::Relaxed)
                 })
-                .cloned()
-                .ok_or_else(|| AcpError::Session("源码范围已失效，请重新准备目录".into()))?;
-            (Some(report), Some(source))
+                .cloned();
+            let project = inner
+                .projects
+                .get(&scope_id)
+                .filter(|p| {
+                    p.info.file_id == file_id
+                        && !p.cancelled.load(std::sync::atomic::Ordering::Relaxed)
+                })
+                .cloned();
+            if source.is_none() && project.is_none() {
+                return Err(AcpError::Session(
+                    "源码/工程范围已失效，请重新准备目录".into(),
+                ));
+            }
+            (Some(report), source, project)
         } else {
-            (None, None)
+            (None, None, None)
         };
         let (event_tx, mut agent_rx) = tokio::sync::mpsc::unbounded_channel();
         let (relay_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let id = Uuid::new_v4().to_string();
-        let report = crate::reports::Report::new(
+        let mut report = crate::reports::Report::new(
             id.clone(),
             file_id.into(),
             preset.id.clone(),
             parent.as_ref().map(|r| r.report_id.clone()),
             &snapshot,
         );
+        if let Some(p) = &project {
+            report.stage = "project".into();
+            report.project_context = Some(p.context());
+        }
+        let report_project = project.clone();
         let req = DiagnoseRequest {
+            project,
             source,
             parent_report: parent.as_ref().map(|r| r.markdown()),
             file_id: file_id.into(),
@@ -232,6 +261,11 @@ impl AppState {
                     let mut inner = relay_state.0.lock().await;
                     if let Some(r) = inner.reports.get_mut(&report_id) {
                         r.apply(&event);
+                        if terminal {
+                            if let Some(p) = &report_project {
+                                r.project_context = Some(p.context());
+                            }
+                        }
                     }
                 }
                 let _ = relay_tx.send(event);
@@ -261,6 +295,15 @@ impl AppState {
         {
             let inner = self.0.lock().await;
             if let Some(session) = inner.active_sessions.get(session_id) {
+                for project in inner
+                    .projects
+                    .values()
+                    .filter(|p| p.info.file_id == session.file_id)
+                {
+                    project
+                        .cancelled
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                }
                 for scope in inner
                     .sources
                     .values()

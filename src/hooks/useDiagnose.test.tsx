@@ -1,10 +1,10 @@
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useDiagnose } from './useDiagnose';
-import { analyzeProfiler, releaseProfiler, uploadProfiler, diagnose, cancelDiagnose, listAgents, onDiagnoseEvent, listReports, prepareSource, diagnoseSource } from '../lib/tauri';
+import { analyzeProfiler, releaseProfiler, uploadProfiler, diagnose, cancelDiagnose, listAgents, onDiagnoseEvent, listReports, prepareSource, diagnoseSource, prepareProject, diagnoseProject } from '../lib/tauri';
 import type { MetricsSnapshot, UploadResult, DiagnoseEvent, DiagnosisReport } from '../types';
 vi.mock('../lib/tauri', () => ({
-  listReports: vi.fn(async () => []), prepareSource: vi.fn(), cancelSourcePreparation: vi.fn(async () => {}), diagnoseSource: vi.fn(),
+  prepareProject: vi.fn(), diagnoseProject: vi.fn(), listReports: vi.fn(async () => []), prepareSource: vi.fn(), cancelSourcePreparation: vi.fn(async () => {}), diagnoseSource: vi.fn(),
   uploadProfiler: vi.fn(), analyzeProfiler: vi.fn(), releaseProfiler: vi.fn(),
   diagnose: vi.fn(), cancelDiagnose: vi.fn(), listAgents: vi.fn(async () => []),
   onDiagnoseEvent: vi.fn(async () => () => {}),
@@ -57,6 +57,23 @@ async function readyHook() {
   await waitFor(()=>expect(hook.result.current.state.selectedAgent).toBe('agent'));
   return {...hook,emit:(event: DiagnoseEvent)=>act(()=>emit(event))};
 }
+it('keeps the previous project report if a replacement session cannot start', async () => {
+  const hook = await readyHook();
+  const parent = {reportId:'one',sessionId:'one',fileId:'a',stage:'performance',status:'completed',text:'first'} as DiagnosisReport;
+  const old = {reportId:'old',sessionId:'old',fileId:'a',stage:'project',status:'completed',text:'previous location'} as DiagnosisReport;
+  vi.mocked(diagnose).mockResolvedValueOnce({sessionId:'one'}); vi.mocked(listReports).mockResolvedValue([parent]);
+  await act(async () => { await hook.result.current.startDiagnose(); });
+  await act(async () => { hook.emit({kind:'finished',totalChunks:1,stopReason:'end_turn',fileId:'a',sessionId:'one'}); });
+  vi.mocked(prepareProject).mockResolvedValue({scopeId:'scope',fileId:'a',root:'public',fileCount:1,warnings:[],unityVersion:'6000.3',editor:{status:'unavailable',reason:'offline',unityVersion:null,targetPlatform:null,sampledAt:null}});
+  vi.mocked(diagnoseProject).mockResolvedValueOnce({sessionId:'old'});
+  await act(async () => { await hook.result.current.startProject('public'); });
+  vi.mocked(listReports).mockResolvedValue([parent,old]);
+  await act(async () => { hook.emit({kind:'finished',totalChunks:1,stopReason:'end_turn',fileId:'a',sessionId:'old'}); });
+  vi.mocked(diagnoseProject).mockRejectedValueOnce(new Error('cannot launch'));
+  await act(async () => { await hook.result.current.startProject('public'); });
+  expect(hook.result.current.state.reports).toEqual([parent,old]);
+  expect(hook.result.current.state.errorMessage).toBe('cannot launch');
+});
 it('buffers early session events and never changes an error terminal to success',async()=>{
   const hook=await readyHook();
   let resolve!: (value:{sessionId:string})=>void;
@@ -139,4 +156,22 @@ it('ignores a cancel response after switching recordings', async () => {
   expect(hook.result.current.state.phase).toBe('ready');
   expect(hook.result.current.state.reports).toEqual([]);
   expect(listReports).not.toHaveBeenCalled();
+});
+
+it('preserves the complete first report when project diagnosis fails and rejects its late chunks', async () => {
+  const hook = await readyHook();
+  const parent = {reportId:'one',sessionId:'one',fileId:'a',stage:'performance',status:'completed',text:'first evidence'} as DiagnosisReport;
+  vi.mocked(diagnose).mockResolvedValueOnce({sessionId:'one'});
+  vi.mocked(listReports).mockResolvedValue([parent]);
+  await act(async () => { await hook.result.current.startDiagnose(); });
+  await act(async () => { hook.emit({kind:'finished', totalChunks:1, stopReason:'end_turn', fileId:'a', sessionId:'one'}); });
+  vi.mocked(prepareProject).mockResolvedValue({scopeId:'scope',fileId:'a',root:'public',fileCount:1,warnings:[],unityVersion:'6000.3',editor:{status:'unavailable',reason:'offline',unityVersion:null,targetPlatform:null,sampledAt:null}});
+  vi.mocked(diagnoseProject).mockResolvedValue({sessionId:'project'});
+  await act(async () => { await hook.result.current.startProject('public'); });
+  expect(diagnoseProject).toHaveBeenCalledWith('a','agent','one','scope');
+  await act(async () => { hook.emit({kind:'error',message:'Agent failed',fileId:'a',sessionId:'project'}); });
+  hook.emit({kind:'chunk',text:'late text',fileId:'a',sessionId:'project'});
+  expect(hook.result.current.state.reports).toEqual([parent]);
+  expect(hook.result.current.state.phase).toBe('error');
+  expect(hook.result.current.state.streamedText).toBe('');
 });

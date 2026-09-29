@@ -437,6 +437,115 @@ pub async fn diagnose_source(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<DiagnoseSession, CommandError> {
+    if !state.0.lock().await.sources.contains_key(&scope_id) {
+        return Err(CommandError::Other("不是 C# 源码范围".into()));
+    }
+    launch_diagnosis(
+        file_id,
+        agent_id,
+        state.inner(),
+        app,
+        Some((parent_report_id, scope_id)),
+    )
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn prepare_project(
+    file_id: String,
+    root: String,
+    state: State<'_, AppState>,
+) -> Result<crate::project::ProjectInfo, CommandError> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let flag = Arc::new(AtomicBool::new(false));
+    {
+        let mut inner = state.0.lock().await;
+        if !inner
+            .reports
+            .values()
+            .any(|r| r.file_id == file_id && r.stage == "performance" && r.status == "completed")
+        {
+            return Err(CommandError::Other("需要当前录制完整首轮报告".into()));
+        }
+        if inner.active_sessions.values().any(|s| s.file_id == file_id)
+            || inner.preparations.contains_key(&file_id)
+        {
+            return Err(CommandError::Other("当前录制已有运行任务".into()));
+        }
+        inner.projects.retain(|_, p| {
+            if p.info.file_id == file_id {
+                p.cancelled.store(true, Ordering::Relaxed);
+                false
+            } else {
+                true
+            }
+        });
+        inner.preparations.insert(file_id.clone(), flag.clone());
+    }
+    let scan_flag = flag.clone();
+    let scan_id = file_id.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::project::ProjectScope::prepare(scan_id, PathBuf::from(root), scan_flag)
+    })
+    .await;
+    let mut result = result.map_err(|e| e.to_string()).and_then(|r| r);
+    if let Ok(scope) = &mut result {
+        let status =
+            crate::project::editor::status(std::path::Path::new(&scope.info.root), &flag).await;
+        *scope.editor_status.lock().unwrap() = status.clone();
+        scope.info.editor = status;
+    }
+    let mut inner = state.0.lock().await;
+    if inner
+        .preparations
+        .get(&file_id)
+        .is_some_and(|f| Arc::ptr_eq(f, &flag))
+    {
+        inner.preparations.remove(&file_id);
+    }
+    if flag.load(Ordering::Relaxed) || !inner.snapshots.contains_key(&file_id) {
+        return Err(CommandError::Other("工程准备已取消".into()));
+    }
+    let scope = result.map_err(CommandError::Other)?;
+    let info = scope.info.clone();
+    inner
+        .projects
+        .insert(info.scope_id.clone(), Arc::new(scope));
+    Ok(info)
+}
+#[tauri::command(rename_all = "camelCase")]
+pub async fn project_editor_status(
+    file_id: String,
+    scope_id: String,
+    state: State<'_, AppState>,
+) -> Result<crate::project::editor::EditorStatus, CommandError> {
+    let scope = state
+        .0
+        .lock()
+        .await
+        .projects
+        .get(&scope_id)
+        .filter(|p| p.info.file_id == file_id)
+        .cloned()
+        .ok_or_else(|| CommandError::Other("工程范围不属于当前录制".into()))?;
+    let status =
+        crate::project::editor::status(std::path::Path::new(&scope.info.root), &scope.cancelled)
+            .await;
+    *scope.editor_status.lock().unwrap() = status.clone();
+    Ok(status)
+}
+#[tauri::command(rename_all = "camelCase")]
+pub async fn diagnose_project(
+    file_id: String,
+    agent_id: String,
+    parent_report_id: String,
+    scope_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<DiagnoseSession, CommandError> {
+    if !state.0.lock().await.projects.contains_key(&scope_id) {
+        return Err(CommandError::Other("不是 Unity 工程范围".into()));
+    }
     launch_diagnosis(
         file_id,
         agent_id,

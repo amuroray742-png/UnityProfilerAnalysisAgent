@@ -483,7 +483,7 @@ async fn real_agent_locates_public_csharp_with_evidence() {
     )
     .unwrap();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let handle=acp_client::start_diagnose(AgentPreset{id:"real-source-test".into(),label:"real".into(),command,args:vec![],description:"public C# validation".into(),available:true},DiagnoseRequest{file_id:"public".into(),agent_id:"real-source-test".into(),snapshot:extractor::extract(&profile),details:profile.details,bridge_executable:std::env::var_os("UPAA_TEST_APP_EXE").map(PathBuf::from).unwrap_or_else(||bridge_executable()),event_tx:tx,source:Some(source),parent_report:Some("首轮诊断：公开合成录制帧 160 有 40 ms 主线程峰值与 8 MiB GC 分配，需要定位 AllocationWork.Update 的分配；Unmapped.Native 也需核对。帧 100 可作普通帧参考。不能从名称推断具体源码或版本一致性。".into())}).await.unwrap();
+    let handle=acp_client::start_diagnose(AgentPreset{id:"real-source-test".into(),label:"real".into(),command,args:vec![],description:"public C# validation".into(),available:true},DiagnoseRequest{file_id:"public".into(),agent_id:"real-source-test".into(),snapshot:extractor::extract(&profile),details:profile.details,bridge_executable:std::env::var_os("UPAA_TEST_APP_EXE").map(PathBuf::from).unwrap_or_else(||bridge_executable()),event_tx:tx,source:Some(source),project:None,parent_report:Some("首轮诊断：公开合成录制帧 160 有 40 ms 主线程峰值与 8 MiB GC 分配，需要定位 AllocationWork.Update 的分配；Unmapped.Native 也需核对。帧 100 可作普通帧参考。不能从名称推断具体源码或版本一致性。".into())}).await.unwrap();
     let result=tokio::time::timeout(std::time::Duration::from_secs(420),async{
   let mut read=false;let mut performance=false;let mut text=String::new();let mut terminal=None;
   while let Some(event)=rx.recv().await{match event{DiagnoseEvent::McpCall{tool,args}=>{println!("MCP {tool} {args}");read|=tool=="source_read" && args["path"]=="Assets/AllocationWork.cs";performance|=tool.starts_with("performance_");},DiagnoseEvent::Chunk{text:t}=>text.push_str(&t),e if e.terminal()=>terminal=Some(e),_=>{}}}
@@ -500,4 +500,136 @@ async fn real_agent_locates_public_csharp_with_evidence() {
         )
         .unwrap()
     );
+}
+
+#[tokio::test]
+async fn project_session_preserves_reports_and_isolates_tools() {
+    use unity_profiler_analysis_agent_lib::{acp_client::agents::AgentPreset, state::AppState};
+    let state = AppState::new();
+    let profile = parser::json::parse(
+        &bytes::Bytes::from_static(include_bytes!("fixtures/editor-dump.json")),
+        "public.json",
+        0,
+    )
+    .await
+    .unwrap();
+    state
+        .put_snapshot("fixture".into(), extractor::extract(&profile))
+        .await;
+    {
+        let mut inner = state.0.lock().await;
+        inner
+            .details
+            .insert("fixture".into(), profile.details.unwrap());
+        let mut parent = report().await;
+        parent.apply(&DiagnoseEvent::Chunk {
+            text: "首轮报告：帧 10 的分配需要调查。".into(),
+        });
+        parent.apply(&DiagnoseEvent::Finished {
+            total_chunks: 1,
+            stop_reason: "end_turn".into(),
+        });
+        inner.reports.insert("r".into(), parent);
+    }
+    let scope = Arc::new(
+        unity_profiler_analysis_agent_lib::project::ProjectScope::prepare(
+            "fixture".into(),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/unity-project"),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap(),
+    );
+    let scope_id = scope.info.scope_id.clone();
+    state
+        .0
+        .lock()
+        .await
+        .projects
+        .insert(scope_id.clone(), scope);
+    let preset = AgentPreset {
+        id: "fixture".into(),
+        label: "fixture".into(),
+        command: "node".into(),
+        args: vec![
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/acp-agent.cjs")
+                .to_string_lossy()
+                .into(),
+            "project".into(),
+        ],
+        description: "public".into(),
+        available: true,
+    };
+    let (id, _, mut rx) = state
+        .start_report_session(
+            "fixture",
+            preset.clone(),
+            bridge_executable(),
+            Some(("r".into(), scope_id)),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(25), async {
+        while let Some(e) = rx.recv().await {
+            if e.terminal() {
+                assert!(matches!(e, DiagnoseEvent::Finished { .. }), "{e:?}");
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let inner = state.0.lock().await;
+    assert_eq!(inner.reports["r"].status, "completed");
+    assert_eq!(inner.reports[&id].stage, "project");
+    assert!(inner.reports[&id].text.contains("AllocationWork.cs"));
+    assert_eq!(inner.reports.len(), 2);
+    drop(inner);
+    state.finish_session(&id).await;
+    let new_scope = Arc::new(
+        unity_profiler_analysis_agent_lib::project::ProjectScope::prepare(
+            "fixture".into(),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/unity-project"),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap(),
+    );
+    let new_scope_id = new_scope.info.scope_id.clone();
+    state
+        .0
+        .lock()
+        .await
+        .projects
+        .insert(new_scope_id.clone(), new_scope.clone());
+    let mut cancelling = preset;
+    *cancelling.args.last_mut().unwrap() = "cancel".into();
+    let (cancel_id, _, mut cancel_rx) = state
+        .start_report_session(
+            "fixture",
+            cancelling,
+            bridge_executable(),
+            Some(("r".into(), new_scope_id)),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            if matches!(cancel_rx.recv().await.unwrap(), DiagnoseEvent::Chunk { .. }) {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    state.cancel_session(&cancel_id).await;
+    let inner = state.0.lock().await;
+    assert_eq!(inner.reports["r"].status, "completed");
+    assert_eq!(inner.reports[&cancel_id].status, "cancelled");
+    assert!(!inner.reports.contains_key(&id));
+    assert!(new_scope
+        .query("project_read", json!({"path":"Assets/AllocationWork.cs"}))
+        .await
+        .is_err());
+    drop(inner);
+    state.release_file("fixture").await;
 }

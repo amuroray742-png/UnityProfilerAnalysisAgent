@@ -1,0 +1,1 @@
+{"name":"UPAA.Inspector.Editor","references":["Unity.Pipeline"],"includePlatforms":["Editor"],"overrideReferences":true,"precompiledReferences":["Newtonsoft.Json.dll"],"autoReferenced":true}

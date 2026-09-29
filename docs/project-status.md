@@ -2,7 +2,7 @@
 
 ## 当前结论
 
-更新日期：2026-09-29。历史基线为 `8524d32`；报告与源码定位增量基于已合并 PR #8 的内容（`a9f9481` 及其合并提交），没有扩展解析版本或重新进行安装包验收。
+更新日期：2026-09-29。历史基线为 `8524d32`；工程联合定位增量基于已合并 PR #9 的内容（`01aae9b`，合并提交 `1e0ca19`），没有扩展解析版本或重新进行安装包验收。
 
 **本轮 CPU/GC 分析与诊断功能已完成限定范围的本地验收；完整可信分析 MVP 与正式发布尚未完成。** P0 基线覆盖两份 Windows Unity 6000.3.23f1 录制的指定参考帧；原始结构、异常帧定位及 Windows Claude Code ACP 查询、诊断、取消、重新诊断均有验证。按维护者确认，渲染、版本升级、签名及长期性能预算后续推进，不阻塞本轮功能验收。该结论不外推至其他版本、所有录制、未核对的帧或所有模型回答。
 
@@ -13,6 +13,26 @@ P0 第二阶段已接通无扫描生产路径：[二进制布局对照记录](un
 ## 渲染增量（2026-09-28）
 
 新增 6000.3.9f1 结构入口与五类渲染计数。单份私有录制 2,000 帧逐帧对照通过，五类计数各 1,998 帧有效；CPU/GC 的 7 帧、30,860 个样本及旧 6000.3.23f1 的 64 帧回归通过。公开测试、接口语义、复现命令和未覆盖边界集中维护于[渲染验收记录](rendering-validation.md)。GPU、SRP 收益、更多版本与录制仍未完成。
+
+## Unity 工程联合定位增量（2026-09-29）
+
+桌面主流程从 C# 目录升级为完整 Unity 工程，增加 GUID/fileID/原始 PPtr 索引、六个受会话限制的 `project_*` 工具、同工程身份校验的 Unity CLI 桥接和 Editor-only UPM 插件。首轮保留，最终报告旁可直接单独/合并导出 Markdown 或 HTML；记录实际 Editor 资源采集指纹与缺失信息。旧 C# 接口与权限不扩大。使用步骤和明确限制见[工程联合定位指南](project-diagnosis.md)。
+
+验证进展：
+
+- 前端 29 项测试通过，覆盖工程选择、离线说明、最终报告直接导出/合并导出和工程会话失败后的首轮保留、替换会话启动失败保留旧定位报告、迟到事件过滤；生产构建通过。
+- 离线工程回归覆盖 GUID/fileID、Prefab 原始覆盖、缺失和重复引用、Unicode/BOM UTF-16、二进制、2 MiB C# / 64 MiB 资源上限、分页与 64 KiB 响应预算、文件和 meta 变化、junction、取消及隔离。原始反向引用始终标记 partial。
+- Unity CLI `1.0.0-beta.8`、Pipeline `0.6.0-exp.1`、Unity `6000.3.23f1` 真实编译成功。公开工程资源来自 Editor 生成器（仓库副本约 23 KB），没有发送私有工程。显式 `live_editor_public_assets_match_known_fixture` 核对 3 顶点 Mesh、纹理 Android 覆盖 32、Prefab variant 的 ShadowCasting Off、LOD 和分页；查询前后 Assets/Packages/ProjectSettings 哈希完全一致，场景 dirty=false。取消不退出 Editor；未打开工程不会连接其他已打开工程。属性对照通过已知生成参数与 Editor API 完成，未做逐字段 Inspector GUI 截图验收。
+- 首次真实工程 Agent 运行曾在持续输出时触及旧 300 秒上限，已保留失败状态而不是报告成功。工程会话改为独立 900 秒上限，仍受取消和 2 MiB 正文上限控制；提示词要求聚焦关键引用链，减少重复属性输出。
+
+- 完整 Rust 回归：106 项通过、15 项默认忽略；显式公开 Editor 集成另行通过。release EXE 的 ACP/MCP/报告会话回归：18 项通过、4 项默认忽略。忽略项不计入验证完成。
+- 真实 Codex release 桌面联合流程通过（验收 EXE SHA-256 `afdc0df064351456e9aaf91e61c5c5fcbaa6c5de4051ebad50eb539c4051ecec`）：首轮 → 工程选择/Editor 检查 → 工程报告 → 单独及合并 Markdown/HTML 导出；保存取消、写失败重试、换到未打开的公开工程后的离线提示/取消、首轮保留及重置均通过。自动化仅替代原生目录/保存对话框的返回值，不替代业务查询或报告正文。
+- [公开定位报告样例](evidence/public-project-report.md)约 12 KB，实际查询了 Prefab、材质两项 Editor 资源，资源指纹在报告附录可追溯。人工逐项核对 `AllocationWork.cs:9`，Prefab 的脚本/材质/Mesh 引用、场景源 Prefab 与阴影 override 行号、材质 Shader/纹理行号及 SHA-256 短值，均与公开样例一致。报告没有把同名方法误配给 `OtherWork`，明确 `Unmapped.Native` 未定位、数组字节与样本不直接对应、源 Prefab On 与场景实例 Off 不能混为同一个有效值，并给出有条件复用和 A/B 验证建议。该合成输入无渲染计数，因此 AI 正确未扩展为无依据的渲染优化审计；渲染资源属性由独立 Editor 集成测试核对。
+- 导出 HTML 在 headless Edge 阅读和打印通过：1 个表格、2 个代码块，无横向溢出和 script/img/iframe/object 元素，生成 436,343 字节 PDF。桌面与 HTML 截图已检查；产物位于 `.cache/desktop-reports/`，复现工具为 `tools/desktop-smoke.py --report-source --agent-id codex` 与 `tools/report-html-smoke.py`。
+
+- 最终 release 构建成功（SHA-256 `ad65565a7472933ba451db0b648a5ad2cba7af90015912daac0ab2cf761f5259`）。在真实 Agent 验收后，补充了 Editor 查询前后离线哈希复核、摘要警告限长及替换会话启动失败保留旧报告；最终版本重新通过完整 Rust/前端测试、显式 Editor 测试、18 项 release 协议回归及桌面启动/真实 IPC 冒烟。Python 工具测试 8 项通过。
+
+边界：公开性能输入是人工合成 fixture，资源与代码只有关联候选意义，不能证明录制根因或优化收益。Editor API 是当前状态；离线索引不是完整 YAML/Prefab 有效覆盖解析器。大型业务工程性能预算、更多版本/平台、恶意用户 Editor 回调隔离和所有模型回答的准确性没有由本次验证证明；同步 Unity API 内部不可强制中断。安装包和原生系统对话框本轮不重新计入验收。
 
 ## 报告与 C# 源码定位增量（2026-09-29）
 

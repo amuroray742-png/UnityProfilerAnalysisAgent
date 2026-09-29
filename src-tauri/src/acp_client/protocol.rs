@@ -17,6 +17,7 @@ pub struct Peer<R, W> {
     pub chunks: u64,
     cancelled: bool,
     pub allow_source: bool,
+    pub allow_project: bool,
     report_bytes: usize,
 }
 impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Peer<R, W> {
@@ -36,6 +37,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Peer<R, W> {
             chunks: 0,
             cancelled: false,
             allow_source: false,
+            allow_project: false,
             report_bytes: 0,
         }
     }
@@ -76,7 +78,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Peer<R, W> {
             .request(
                 "session/prompt",
                 json!({"sessionId":session,"prompt":[{"type":"text","text":prompt}]}),
-                Duration::from_secs(300),
+                Duration::from_secs(if self.allow_project { 900 } else { 300 }),
             )
             .await?;
         let reason = result["stopReason"]
@@ -147,10 +149,18 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Peer<R, W> {
         if let Some(id) = message.get("id") {
             let response = if method == "session/request_permission" {
                 let title = params["toolCall"]["title"].as_str().unwrap_or("");
-                let trusted = (self.allow_source
-                    && ["source_files", "source_search", "source_read"]
+                let trusted = (self.allow_project
+                    && crate::project::schemas()["tools"]
+                        .as_array()
+                        .unwrap()
                         .iter()
-                        .any(|n| title == format!("mcp__unity-profiler__{n}")))
+                        .any(|t| {
+                            title == format!("mcp__unity-profiler__{}", t["name"].as_str().unwrap())
+                        }))
+                    || (self.allow_source
+                        && ["source_files", "source_search", "source_read"]
+                            .iter()
+                            .any(|n| title == format!("mcp__unity-profiler__{n}")))
                     || crate::mcp::list_tool_schemas()["tools"]
                         .as_array()
                         .unwrap()

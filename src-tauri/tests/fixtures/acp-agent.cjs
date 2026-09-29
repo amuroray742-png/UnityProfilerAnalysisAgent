@@ -26,9 +26,18 @@ async function query() {
   await request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'acp-fixture', version: '1' } });
   notify('notifications/initialized', {});
   const list = await request('tools/list', {});
-  if (list.tools.length !== (mode === 'source' ? 10 : 7)) throw new Error('tools missing');
+  if (list.tools.length !== (mode === 'project' ? 13 : mode === 'source' ? 10 : 7)) throw new Error('tools missing');
   const data = await request('tools/call', { name: 'performance_cpu_hierarchy', arguments: { frame_index: 10, start: 2, limit: 2, max_depth: 64 } });
   if (data.structuredContent.samples[0].gcAllocBytes !== 20) throw new Error('wrong data');
+  if (mode === 'project') {
+    const summary = await request('tools/call', {name:'project_summary',arguments:{}});
+    if (!summary.structuredContent.project.root) throw new Error('project identity missing');
+    const code = await request('tools/call', {name:'project_read',arguments:{path:'Assets/AllocationWork.cs'}});
+    if (!code.structuredContent.rows.some(r=>r.text.includes('new byte'))) throw new Error('project content missing');
+    const refs = await request('tools/call', {name:'project_references',arguments:{path:'Assets/PublicMaterial.mat',direction:'incoming'}});
+    if (!refs.structuredContent.rows.length || refs.structuredContent.coverage !== 'partial') throw new Error('references/coverage missing');
+    chunk('Assets/AllocationWork.cs:9 是候选分配；Assets/PublicMaterial.mat 存在静态引用，不证明当帧渲染成本。');
+  }
   if (mode === 'source') {
     const files = await request('tools/call', {name:'source_files',arguments:{}});
     if (!files.structuredContent.rows.some(r=>r.path==='Assets/AllocationWork.cs')) throw new Error('source file missing');
@@ -70,6 +79,8 @@ readline.createInterface({ input: process.stdin }).on('line', async line => {
       if (allowed.outcome.optionId !== 'allow') throw new Error('read-only MCP permission denied');
       const sourcePermission = await permission('ps', 'mcp__unity-profiler__source_read');
       if (mode === 'source' ? sourcePermission.outcome.optionId !== 'allow' : sourcePermission.outcome.outcome !== 'cancelled') throw new Error('wrong source permission scope');
+      const projectPermission = await permission('pp', 'mcp__unity-profiler__project_read');
+      if (mode === 'project' ? projectPermission.outcome.optionId !== 'allow' : projectPermission.outcome.outcome !== 'cancelled') throw new Error('wrong project permission scope');
       const denied = await permission('p2', 'Terminal');
       if (denied.outcome.outcome !== 'cancelled') throw new Error('unexpected terminal permission');
       await query(); result(m.id, { stopReason: mode === 'limit' ? 'max_tokens' : 'end_turn' });

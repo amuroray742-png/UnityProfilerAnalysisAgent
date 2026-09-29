@@ -4,6 +4,8 @@ pub const MAX_REPORT: usize = 2 * 1024 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Report {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_context: Option<serde_json::Value>,
     pub report_id: String,
     pub file_id: String,
     pub session_id: String,
@@ -28,6 +30,7 @@ impl Report {
         snapshot: &MetricsSnapshot,
     ) -> Self {
         Self {
+            project_context: None,
             report_id: id.clone(),
             session_id: id,
             file_id,
@@ -111,7 +114,7 @@ impl Report {
         }
     }
     pub fn markdown(&self) -> String {
-        format!("# {}\n\n- 录制：{}\n- Unity：{}\n- 分析帧数：{}\n- 覆盖率：{}\n- Agent：{}\n- 时间：{}\n- 状态：{}{}\n\n{}\n\n---\n\n证据边界：AI 建议需结合原始性能数据和实际源码核对；inclusive 耗时不可相加为总 CPU，源码可能与录制版本不一致。\n",if self.stage=="source"{"C# 源码定位报告"}else{"性能诊断报告"},self.file_name,self.unity_version.as_deref().unwrap_or("未知"),self.frame_count,self.coverage,self.agent_id,self.created_at,self.status,self.incomplete_reason.as_ref().map(|r|format!("（{r}）")).unwrap_or_default(),self.text)
+        format!("# {}\n\n- 录制：{}\n- Unity：{}\n- 分析帧数：{}\n- 覆盖率：{}\n- Agent：{}\n- 时间：{}\n- 状态：{}{}\n\n{}\n\n---\n\n证据边界：AI 建议需结合原始性能数据和实际源码核对；inclusive 耗时不可相加为总 CPU，源码可能与录制版本不一致。\n",if self.stage=="project"{"Unity 工程性能定位报告"}else if self.stage=="source"{"C# 源码定位报告"}else{"性能诊断报告"},self.file_name,self.unity_version.as_deref().unwrap_or("未知"),self.frame_count,self.coverage,self.agent_id,self.created_at,self.status,self.incomplete_reason.as_ref().map(|r|format!("（{r}）")).unwrap_or_default(),format!("{}{}", self.text, self.project_context.as_ref().map(|c| format!("\n\n## 工程采集范围与证据状态\n\n```json\n{}\n```", serde_json::to_string_pretty(c).unwrap())).unwrap_or_default()))
     }
 }
 /// Validate identity before cloning text. Only a linked parent/child pair may be combined.
@@ -139,7 +142,7 @@ pub fn select_reports(
                     .is_some_and(|p| reports.iter().any(|a| &a.report_id == p))
             }))
     {
-        return Err("只能合并相关的首轮与源码报告".into());
+        return Err("只能合并相关的首轮与定位报告".into());
     }
     reports.sort_by(|a, b| a.created_at.cmp(&b.created_at));
     Ok(reports)

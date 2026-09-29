@@ -12,7 +12,7 @@ import { useDiagnose } from './hooks/useDiagnose.ts';
 type Tab = 'overview' | 'cpu' | 'gc' | 'rendering' | 'log';
 
 export default function App() {
-  const { state, handleFile, selectAgent, startDiagnose, startSource, cancel, reset } = useDiagnose();
+  const { state, handleFile, selectAgent, startDiagnose, startSource, startProject, cancel, reset } = useDiagnose();
   const [tab, setTab] = useState<Tab>('overview');
 
   const isBusy = state.phase === 'uploading' || state.phase === 'analyzing';
@@ -36,7 +36,7 @@ export default function App() {
       case 'ready':
         return '已就绪，等待 AI 诊断';
       case 'preparing':
-        return '正在准备源码目录...';
+        return '正在准备 Unity 工程 / 源码目录...';
       case 'diagnosing':
         return 'AI 诊断中...';
       case 'done':
@@ -182,7 +182,7 @@ export default function App() {
                 />
               </div>
 
-              <ReportPanel key={state.upload?.fileId} state={state} startSource={startSource} />
+              <ReportPanel key={state.upload?.fileId} state={state} startSource={startSource} startProject={startProject} />
             </>
           )}
 
