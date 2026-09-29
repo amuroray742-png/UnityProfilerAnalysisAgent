@@ -18,7 +18,9 @@ pub struct Peer<R, W> {
     cancelled: bool,
     pub allow_source: bool,
     pub allow_project: bool,
+    pub allow_modification: bool,
     report_bytes: usize,
+    pending_mcp: std::collections::HashMap<String, String>,
 }
 impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Peer<R, W> {
     pub fn new(
@@ -38,7 +40,9 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Peer<R, W> {
             cancelled: false,
             allow_source: false,
             allow_project: false,
+            allow_modification: false,
             report_bytes: 0,
+            pending_mcp: std::collections::HashMap::new(),
         }
     }
     async fn send(&mut self, value: Value) -> Result<(), AcpError> {
@@ -64,7 +68,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Peer<R, W> {
         let created = self
             .request(
                 "session/new",
-                json!({"cwd":cwd,"mcpServers":[mcp]}),
+                json!({"cwd":cwd,"mcpServers":[mcp],"_meta":{"disableBuiltInTools":self.allow_modification,"claudeCode":{"options":if self.allow_modification {json!({"settingSources":["user"]})}else{json!({})}}}}),
                 Duration::from_secs(60),
             )
             .await?;
@@ -74,11 +78,18 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Peer<R, W> {
             .ok_or_else(|| AcpError::Protocol("缺少 sessionId".into()))?
             .to_owned();
         self.session = Some(session.clone());
+        let _ = self.events.send(DiagnoseEvent::SessionCreated {
+            acp_session_id: session.clone(),
+        });
         let result = self
             .request(
                 "session/prompt",
                 json!({"sessionId":session,"prompt":[{"type":"text","text":prompt}]}),
-                Duration::from_secs(if self.allow_project { 900 } else { 300 }),
+                Duration::from_secs(if self.allow_project || self.allow_modification {
+                    900
+                } else {
+                    300
+                }),
             )
             .await?;
         let reason = result["stopReason"]
@@ -148,15 +159,36 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Peer<R, W> {
             .is_some_and(|id| params["sessionId"].as_str() == Some(id));
         if let Some(id) = message.get("id") {
             let response = if method == "session/request_permission" {
-                let title = params["toolCall"]["title"].as_str().unwrap_or("");
-                let trusted = (self.allow_project
-                    && crate::project::schemas()["tools"]
+                let correlated = if matching && params["_meta"]["is_mcp_tool_approval"] == true {
+                    params["toolCall"]["toolCallId"]
+                        .as_str()
+                        .and_then(|id| self.pending_mcp.remove(id))
+                } else {
+                    None
+                };
+                let title = correlated
+                    .as_deref()
+                    .unwrap_or_else(|| params["toolCall"]["title"].as_str().unwrap_or(""));
+                let trusted = (self.allow_modification
+                    && crate::optimization::session::schemas()["tools"]
                         .as_array()
                         .unwrap()
                         .iter()
                         .any(|t| {
                             title == format!("mcp__unity-profiler__{}", t["name"].as_str().unwrap())
                         }))
+                    || (self.allow_project
+                        && crate::project::schemas()["tools"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|t| {
+                                title
+                                    == format!(
+                                        "mcp__unity-profiler__{}",
+                                        t["name"].as_str().unwrap()
+                                    )
+                            }))
                     || (self.allow_source
                         && ["source_files", "source_search", "source_read"]
                             .iter()
@@ -195,6 +227,21 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Peer<R, W> {
             self.send(response).await?;
         } else if method == "session/update" && matching && !self.cancelled {
             let update = &params["update"];
+            if let Some(id) = update["toolCallId"].as_str() {
+                if matches!(update["status"].as_str(), Some("completed" | "failed")) {
+                    self.pending_mcp.remove(id);
+                } else if update["sessionUpdate"] == "tool_call"
+                    && update["rawInput"]["server"] == "unity-profiler"
+                {
+                    if let Some(name) = update["rawInput"]["tool"].as_str() {
+                        if self.pending_mcp.len() >= 1024 {
+                            return Err(AcpError::Protocol("未完成工具调用过多".into()));
+                        }
+                        self.pending_mcp
+                            .insert(id.into(), format!("mcp__unity-profiler__{name}"));
+                    }
+                }
+            }
             if update["sessionUpdate"] == "agent_message_chunk"
                 && update["content"]["type"] == "text"
             {

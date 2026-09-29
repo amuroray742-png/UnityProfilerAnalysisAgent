@@ -36,7 +36,11 @@ def main():
     parser.add_argument('--render-reference', type=Path, help='Editor counter reference for --render-input')
     parser.add_argument('--agent-id', choices=['claude-code', 'codex', 'gemini'], default='claude-code', help='Agent preset for explicit --real-agent validation')
     parser.add_argument('--report-source', action='store_true', help='Real Agent report/export/C# workflow using public fixtures only')
+    parser.add_argument('--optimization-loop', action='store_true', help='Real public optimization workflow with saved tasks, two Agents, checks and rollback')
+    parser.add_argument('--optimization-saved', type=Path, help='Reopen the public acceptance records and exercise final UI exports without calling an Agent')
     args = parser.parse_args()
+    if args.optimization_loop and (args.ui or args.real_agent or args.report_source or args.measure_input or args.render_input):
+        parser.error('--optimization-loop is a separate public real-Agent workflow')
     if args.report_source and (args.ui or args.real_agent or args.measure_input or args.render_input):
         parser.error('--report-source is a separate public real-Agent workflow')
     if bool(args.render_input) != bool(args.render_reference):
@@ -65,7 +69,7 @@ def main():
     for path in (args.application, args.driver, args.native_driver):
         if not path.is_file():
             raise FileNotFoundError(path)
-    output = root / '.cache' / ('desktop-reports' if args.report_source else 'desktop-render' if args.render_input else 'desktop-memory' if args.measure_input else 'desktop-ui' if args.ui else 'desktop-smoke')
+    output = root / '.cache' / ('desktop-optimization-saved' if args.optimization_saved else 'desktop-optimization' if args.optimization_loop else 'desktop-reports' if args.report_source else 'desktop-render' if args.render_input else 'desktop-memory' if args.measure_input else 'desktop-ui' if args.ui else 'desktop-smoke')
     output.mkdir(parents=True, exist_ok=True)
     def port():
         with socket.socket() as sock:
@@ -79,7 +83,7 @@ def main():
         raw = None if body is None else json.dumps(body).encode()
         req = urllib.request.Request(base + path, data=raw, method=method, headers={'Content-Type': 'application/json'})
         try:
-            with urllib.request.urlopen(req, timeout=45) as response:
+            with urllib.request.urlopen(req, timeout=960 if args.optimization_loop and path.endswith('/execute/async') else 45) as response:
                 value = json.load(response)['value']
         except urllib.error.HTTPError as error:
             raise RuntimeError(error.read().decode()) from error
@@ -154,6 +158,13 @@ def main():
                 report['realAgentRequested'] = args.real_agent
                 report['agentId'] = args.agent_id if args.real_agent else None
                 run_ui(js, lambda method, path, body=None: request(method, f'/session/{session}' + path, body), root, output, report, args.real_agent, args.agent_id)
+            if args.optimization_loop:
+                from desktop_optimization_checks import run_optimization_checks
+                report['scope']='Public release optimization workflow; native dialogs substituted; synthetic A/B is not game benefit evidence'
+                run_optimization_checks(js, lambda method,path,body=None: request(method, f'/session/{session}'+path,body),root,output,report,args.agent_id)
+            if args.optimization_saved:
+                from desktop_optimization_checks import run_saved_checks
+                run_saved_checks(js,lambda method,path,body=None: request(method,f'/session/{session}'+path,body),root,output,report,args.optimization_saved)
             if args.report_source:
                 from desktop_report_checks import run_report_checks
                 report['scope'] = 'Release public real-Agent reports/source/export; native picker/save responses substituted'
@@ -196,7 +207,8 @@ def main():
             (output / 'result.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
         if not report.get('passed'):
             raise AssertionError('Desktop smoke or cleanup failed')
-        print(json.dumps(report, ensure_ascii=True), flush=True)
+        summary = {'passed': report['passed'], 'evidence': str(output / 'result.json'), 'checks': report['checks']} if args.optimization_loop or args.optimization_saved else report
+        print(json.dumps(summary, ensure_ascii=True), flush=True)
 
 
 if __name__ == '__main__':

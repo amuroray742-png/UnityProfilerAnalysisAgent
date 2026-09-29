@@ -103,4 +103,12 @@ flowchart LR
   R --> X[单独或合并 MD/安全 HTML 导出]
 ```
 
-只在工程会话注册六个 `project_*` 工具；AI 无权使用 CLI 的通用执行命令。Editor 插件按对象分批读取，取消是协作式批次检查，不可中断同步 Unity API。只采集已加载场景，外部包只返回当前工程解析的资源摘要。Editor 不可用仍可离线定位，报告明确缺少相关证据；不同平台/版本及变化的资源指纹拒绝混用。完整限制见[工程定位指南](project-diagnosis.md)。
+只在工程会话注册 `project_*` 查询及 `project_propose_tasks` 候选任务工具；提案不授权写入。AI 无权使用 CLI 的通用执行命令。Editor 插件按对象分批读取，取消是协作式批次检查，不可中断同步 Unity API。只采集已加载场景，外部包只返回当前工程解析的资源摘要。Editor 不可用仍可离线定位，报告明确缺少相关证据；不同平台/版本及变化的资源指纹拒绝混用。完整限制见[工程定位指南](project-diagnosis.md)。
+
+## 持久化优化项目
+
+`optimization/` 管理项目、轮次、任务版本、修改运行、文件前后字节、检查及 A/B。`optimization_command` 接收操作标签；每次 Start 独立新建 ACP 会话，拒绝旧 session ID。普通诊断的 `MetricsStore` 没有编辑范围；修改会话只增加 `optimization_context/read/replace/check`，后端校验任务和文件指纹。
+
+保存目录中的 `optimization.json` 与首次写入备份先落盘，再对目标文件做单文件替换。应用中断后核对 prepared 条目；回退按逆序、内容指纹和后续轮次依赖执行。跨进程锁分别保护保存目录及 Unity 工程，仍不等价于文件系统沙箱。
+
+Unity 固定检查协议与只读采集协议分开版本化。编译、相关 Shader 导入和选定 EditMode 测试由 Editor 执行；检查记录跨域重载保存在 Library。业务文件监测出现变化时暂停后续编辑。A/B 保存独立录制指纹及紧凑帧指标，调用树仍按需读取原录制，统计只使用有效值。完整限制和状态见[优化项目说明](optimization-loop.md)。

@@ -5,6 +5,7 @@ pub mod commands;
 pub mod errors;
 pub mod extractor;
 pub mod mcp;
+pub mod optimization;
 pub mod parser;
 pub mod project;
 pub mod reports;
@@ -27,7 +28,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(AppState::new())
+        .manage(optimization::commands::OptimizationState::default())
         .invoke_handler(tauri::generate_handler![
+            optimization::commands::optimization_command,
             commands::upload,
             commands::analyze,
             commands::frame_details,

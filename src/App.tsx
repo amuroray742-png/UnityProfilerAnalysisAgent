@@ -1,3 +1,4 @@
+import { OptimizationPanel } from './components/OptimizationPanel';
 import { RenderingPanel } from './components/RenderingPanel';
 import { useState } from 'react';
 import { FrameExplorer } from './components/FrameExplorer';
@@ -104,6 +105,7 @@ export default function App() {
         </div>
       </header>
 
+      <OptimizationPanel state={state} onOpenCapture={handleFile} />
       {state.errorMessage && <div className="error-banner">{state.errorMessage}</div>}
       {state.snapshot?.warnings && state.snapshot.warnings.length > 0 && (
         <div className="warning-banner">

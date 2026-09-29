@@ -84,6 +84,7 @@ export interface AgentPreset {
 }
 
 export type DiagnoseEvent = {sessionId: string; fileId: string} & (
+  | { kind: 'session-created'; acpSessionId: string }
   | { kind: 'started'; agentId: string }
   | { kind: 'chunk'; text: string }
   | { kind: 'mcp-call'; tool: string; args: unknown }

@@ -39,7 +39,7 @@ jobs:
       - name: Release stdio bridge regression
         env:
           UPAA_TEST_APP_EXE: ${{ github.workspace }}/src-tauri/target/release/unity-profiler-analysis-agent.exe
-        run: cargo +stable test --manifest-path src-tauri/Cargo.toml --locked --test mcp_wire --test acp_stdio_roundtrip
+        run: cargo +stable test --manifest-path src-tauri/Cargo.toml --locked --test mcp_wire --test acp_stdio_roundtrip --test reports_source --test optimization
       - name: Build production benchmark
         run: cargo +stable build --manifest-path src-tauri/Cargo.toml --release --locked --example profile_benchmark
       - name: NSIS installation and removal

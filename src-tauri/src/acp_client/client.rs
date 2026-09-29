@@ -53,9 +53,24 @@ impl Drop for Control {
 }
 
 pub async fn spawn_agent(preset: &AgentPreset, cwd: &std::path::Path) -> Result<Child, AcpError> {
+    spawn_agent_with_policy(preset, cwd, false).await
+}
+pub async fn spawn_agent_with_policy(
+    preset: &AgentPreset,
+    cwd: &std::path::Path,
+    modification: bool,
+) -> Result<Child, AcpError> {
     let (program, args) = resolve_command(&preset.command, &preset.args)
         .ok_or_else(|| AcpError::AgentNotInstalled(preset.command.clone()))?;
     let mut cmd = Command::new(program);
+    if modification && preset.id == "codex" {
+        // Do not inherit full-access/auto-review mode from the user's adapter environment.
+        cmd.env("INITIAL_AGENT_MODE", "read-only");
+        cmd.env(
+            "CODEX_CONFIG",
+            r#"{"features":{"shell_tool":false},"web_search":"disabled"}"#,
+        );
+    }
     cmd.args(args)
         .current_dir(cwd)
         .stdin(Stdio::piped())

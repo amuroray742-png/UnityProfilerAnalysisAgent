@@ -128,6 +128,10 @@ pub async fn analyze(
         .await
         .ok_or_else(|| CommandError::UnknownFileId(file_id.clone()))?;
 
+    if state.0.lock().await.reports.values().any(|r|r.file_id==file_id) {return Err(CommandError::Other("该录制已有报告，请重新导入后解析".into()));}
+    let hash_path=entry.file_path.clone();
+    let hash=tokio::task::spawn_blocking(move||crate::optimization::storage::file_hash(&hash_path,&std::sync::atomic::AtomicBool::new(false))).await.map_err(|e|CommandError::Other(e.to_string()))?.map_err(CommandError::Other)?;
+    let verify_path=entry.file_path.clone();
     // 解析：根据扩展名分发；`.data` 走流式路径带进度
     let file_ext = entry
         .file_path
@@ -163,6 +167,8 @@ pub async fn analyze(
             .map_err(|e| CommandError::Parse(e.to_string()))?
     };
 
+    let after=tokio::task::spawn_blocking(move||crate::optimization::storage::file_hash(&verify_path,&std::sync::atomic::AtomicBool::new(false))).await.map_err(|e|CommandError::Other(e.to_string()))?.map_err(CommandError::Other)?;
+    if hash!=after{return Err(CommandError::Other("解析期间录制发生变化，请重试".into()));}
     let total_bytes = profile.meta.file_size_bytes;
     let frame_count = profile.frames.len();
     let details = profile.details.clone();
@@ -176,6 +182,7 @@ pub async fn analyze(
         return Err(CommandError::UnknownFileId(file_id));
     }
 
+    {let mut s=state.0.lock().await;if s.uploads.contains_key(&file_id){s.capture_hashes.insert(file_id.clone(),hash);}else{return Err(CommandError::UnknownFileId(file_id));}}
     // 完成后发 100% 事件
     let _ = app.emit(
         "parse-progress",
@@ -318,6 +325,10 @@ async fn launch_diagnosis(
     app: AppHandle,
     source: Option<(String, String)>,
 ) -> Result<DiagnoseSession, CommandError> {
+    let _start = crate::optimization::commands::START_LOCK.lock().await;
+    if crate::optimization::commands::active() {
+        return Err(CommandError::Other("修改期间不能启动诊断".into()));
+    }
     let preset = builtin_presets()
         .into_iter()
         .find(|p| p.id == agent_id)
