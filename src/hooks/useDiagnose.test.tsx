@@ -1,17 +1,50 @@
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useDiagnose } from './useDiagnose';
-import { analyzeProfiler, releaseProfiler, uploadProfiler, diagnose, cancelDiagnose, listAgents, onDiagnoseEvent } from '../lib/tauri';
-import type { MetricsSnapshot, UploadResult, DiagnoseEvent } from '../types';
+import { analyzeProfiler, releaseProfiler, uploadProfiler, diagnose, cancelDiagnose, listAgents, onDiagnoseEvent, listReports, prepareSource, diagnoseSource } from '../lib/tauri';
+import type { MetricsSnapshot, UploadResult, DiagnoseEvent, DiagnosisReport } from '../types';
 vi.mock('../lib/tauri', () => ({
+  listReports: vi.fn(async () => []), prepareSource: vi.fn(), cancelSourcePreparation: vi.fn(async () => {}), diagnoseSource: vi.fn(),
   uploadProfiler: vi.fn(), analyzeProfiler: vi.fn(), releaseProfiler: vi.fn(),
   diagnose: vi.fn(), cancelDiagnose: vi.fn(), listAgents: vi.fn(async () => []),
   onDiagnoseEvent: vi.fn(async () => () => {}),
 }));
 beforeEach(() => {
+  vi.mocked(listReports).mockResolvedValue([]);
   vi.mocked(cancelDiagnose).mockResolvedValue(undefined);
   vi.mocked(releaseProfiler).mockResolvedValue(undefined);
   vi.mocked(uploadProfiler).mockResolvedValue({ fileId: 'a', filename: 'a', sizeBytes: 0, extension: 'json' });
+});
+
+it('ignores a previous run report fetch completing after a new run starts on the same recording', async () => {
+  const hook = await readyHook();
+  vi.mocked(diagnose).mockResolvedValueOnce({sessionId:'one'}).mockResolvedValueOnce({sessionId:'two'});
+  let resolve!: (reports: DiagnosisReport[]) => void;
+  vi.mocked(listReports).mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+  await act(async () => { await hook.result.current.startDiagnose(); });
+  hook.emit({kind:'finished', totalChunks:0, stopReason:'end_turn', fileId:'a', sessionId:'one'});
+  await act(async () => { await hook.result.current.startDiagnose(); });
+  await act(async () => { resolve([{reportId:'one',sessionId:'one',fileId:'a',text:'old report'} as DiagnosisReport]); });
+  expect(hook.result.current.state.reports).toEqual([]);
+  expect(hook.result.current.state.streamedText).toBe('');
+});
+
+it('preserves the complete first report when source diagnosis fails and rejects its late chunks', async () => {
+  const hook = await readyHook();
+  const parent = {reportId:'one',sessionId:'one',fileId:'a',stage:'performance',status:'completed',text:'first evidence'} as DiagnosisReport;
+  vi.mocked(diagnose).mockResolvedValueOnce({sessionId:'one'});
+  vi.mocked(listReports).mockResolvedValue([parent]);
+  await act(async () => { await hook.result.current.startDiagnose(); });
+  await act(async () => { hook.emit({kind:'finished', totalChunks:1, stopReason:'end_turn', fileId:'a', sessionId:'one'}); });
+  vi.mocked(prepareSource).mockResolvedValue({scopeId:'scope',fileId:'a',root:'public',fileCount:1,warnings:[]});
+  vi.mocked(diagnoseSource).mockResolvedValue({sessionId:'source'});
+  await act(async () => { await hook.result.current.startSource('public'); });
+  expect(diagnoseSource).toHaveBeenCalledWith('a','agent','one','scope');
+  await act(async () => { hook.emit({kind:'error',message:'Agent failed',fileId:'a',sessionId:'source'}); });
+  hook.emit({kind:'chunk',text:'late text',fileId:'a',sessionId:'source'});
+  expect(hook.result.current.state.reports).toEqual([parent]);
+  expect(hook.result.current.state.phase).toBe('error');
+  expect(hook.result.current.state.streamedText).toBe('');
 });
 
 async function readyHook() {
@@ -81,4 +114,29 @@ it('a late upload is released without starting analysis', async () => {
   expect(releaseProfiler).toHaveBeenCalledWith('late');
   expect(analyzeProfiler).not.toHaveBeenCalled();
   expect(result.current.state.upload).toBeNull();
+});
+
+it('clears old reports and text when switching recordings', async () => {
+  const hook = await readyHook();
+  vi.mocked(diagnose).mockResolvedValue({ sessionId: 'old-report' });
+  await act(async () => { await hook.result.current.startDiagnose(); });
+  hook.emit({ kind: 'chunk', text: 'old body', fileId: 'a', sessionId: 'old-report' });
+  await act(async () => { await hook.result.current.handleFile('another'); });
+  expect(hook.result.current.state.streamedText).toBe('');
+  expect(hook.result.current.state.reports).toEqual([]);
+});
+
+it('ignores a cancel response after switching recordings', async () => {
+  const hook = await readyHook();
+  vi.mocked(diagnose).mockResolvedValue({sessionId:'old'});
+  await act(async () => { await hook.result.current.startDiagnose(); });
+  let resolve!: () => void;
+  vi.mocked(cancelDiagnose).mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+  let pending!: Promise<void>;
+  act(() => { pending = hook.result.current.cancel(); });
+  await act(async () => { await hook.result.current.handleFile('next'); });
+  await act(async () => { resolve(); await pending; });
+  expect(hook.result.current.state.phase).toBe('ready');
+  expect(hook.result.current.state.reports).toEqual([]);
+  expect(listReports).not.toHaveBeenCalled();
 });

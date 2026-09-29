@@ -4,7 +4,7 @@ import { FrameExplorer } from './components/FrameExplorer';
 import { UploadDropzone } from './components/UploadDropzone.tsx';
 import { MetricCard } from './components/MetricCard.tsx';
 import { HotspotTable } from './components/HotspotTable.tsx';
-import { DiagnosisStream } from './components/DiagnosisStream.tsx';
+import { ReportPanel } from './components/ReportPanel';
 import { AgentLogDrawer } from './components/AgentLogDrawer.tsx';
 import { ParseProgressBar } from './components/ParseProgressBar.tsx';
 import { useDiagnose } from './hooks/useDiagnose.ts';
@@ -12,11 +12,11 @@ import { useDiagnose } from './hooks/useDiagnose.ts';
 type Tab = 'overview' | 'cpu' | 'gc' | 'rendering' | 'log';
 
 export default function App() {
-  const { state, handleFile, selectAgent, startDiagnose, cancel, reset } = useDiagnose();
+  const { state, handleFile, selectAgent, startDiagnose, startSource, cancel, reset } = useDiagnose();
   const [tab, setTab] = useState<Tab>('overview');
 
   const isBusy = state.phase === 'uploading' || state.phase === 'analyzing';
-  const isDiagnosing = state.phase === 'diagnosing';
+  const isDiagnosing = state.phase === 'diagnosing' || state.phase === 'preparing';
   const showResults = state.snapshot != null;
 
   // 是否有可用 Agent（任意一个 available=true）
@@ -35,6 +35,8 @@ export default function App() {
         return '解析中...';
       case 'ready':
         return '已就绪，等待 AI 诊断';
+      case 'preparing':
+        return '正在准备源码目录...';
       case 'diagnosing':
         return 'AI 诊断中...';
       case 'done':
@@ -180,15 +182,7 @@ export default function App() {
                 />
               </div>
 
-              <DiagnosisStream
-                text={state.streamedText}
-                isStreaming={isDiagnosing}
-                emptyHint={
-                  state.phase === 'ready'
-                    ? '选择 Agent 后点击"开始 AI 诊断"'
-                    : '点击"开始 AI 诊断"让 Agent 分析性能瓶颈'
-                }
-              />
+              <ReportPanel key={state.upload?.fileId} state={state} startSource={startSource} />
             </>
           )}
 

@@ -76,3 +76,9 @@ export async function onDiagnoseEvent(
 export async function onParseWarning(handler: (warning: string) => void): Promise<UnlistenFn> {
   return listen<string>('parse-warning', (e) => handler(e.payload));
 }
+export const listReports = (fileId: string) => invoke<import('../types').DiagnosisReport[]>('list_reports', { fileId });
+export const prepareSource = (fileId: string, root: string) => invoke<import('../types').SourceInfo>('prepare_source', { fileId, root });
+export const cancelSourcePreparation = (fileId: string) => invoke<void>('cancel_source_preparation', { fileId });
+export const diagnoseSource = (fileId: string, agentId: string, parentReportId: string, scopeId: string) => invoke<{ sessionId: string }>('diagnose_source', { fileId, agentId, parentReportId, scopeId });
+export const exportReports = (fileId: string, reportIds: string[], format: 'markdown' | 'html', path: string) => invoke<void>('export_reports', { fileId, reportIds, format, path });
+export const renderReportMarkdown = (text: string) => invoke<string>('render_report_markdown', { text });

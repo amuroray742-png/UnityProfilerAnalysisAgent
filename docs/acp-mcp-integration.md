@@ -103,3 +103,7 @@ codex-acp --version
 ## 渲染查询增量
 
 `performance_hotspots` 新增 `area=rendering`，分页返回按线程聚合的渲染 CPU marker；不是 GPU 时间。摘要增加 Batches/Triangles/Vertices 的统计与各自覆盖率，仍不携带完整事件列表。`performance_frames` 增加可空 Draw Call/SetPass，`performance_frame` 返回有效 `renderCounters`；`performance_analysis` 为 rendering 返回高 Draw Call 候选帧，在完整质量且超过原有默认阈值时给出帧证据。部分覆盖不触发确定性诊断。新语义已接入提示，公开合成输入的 MCP 查询通过；私有渲染录制未发送给任何 Agent，不宣称已验证模型对这份录制的自然语言解释。详见[渲染验收](rendering-validation.md)。
+
+## 报告与源码会话增量
+
+源码定位使用独立 ACP 会话，后端携带完整首轮报告和当前录制的性能查询上下文；只有该会话注册并授权 `source_files` / `source_search` / `source_read`。Agent 工作目录仍是临时目录，不新增终端、写入或网络工具。后端保存有上限、带终态的报告，导出不依赖 UI 流缓冲。命令、限制、复现和证据边界见[报告与源码指南](reports-and-source.md)。

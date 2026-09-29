@@ -121,3 +121,9 @@ export interface HierarchyPage {
   info: FrameInfo; thread: ThreadInfo; samples: DetailSample[];
   nextStart: number | null; maxDepth: number; depthTruncated: boolean;
 }
+export interface DiagnosisReport {
+ reportId: string; fileId: string; sessionId: string; stage: 'performance' | 'source'; parentReportId: string | null;
+ text: string; createdAt: string; agentId: string; status: 'running' | 'completed' | 'cancelled' | 'failed' | 'incomplete';
+ incompleteReason: string | null; fileName: string; unityVersion: string | null; frameCount: number; coverage: string;
+}
+export interface SourceInfo { scopeId: string; fileId: string; root: string; fileCount: number; warnings: string[] }

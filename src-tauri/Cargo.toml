@@ -63,6 +63,8 @@ dirs = "5"
 
 # 配置
 config = { version = "0.14", default-features = false, features = ["toml"] }
+pulldown-cmark = "0.13"
+sha2 = "0.10"
 
 [profile.release]
 panic = "abort"
@@ -73,4 +75,4 @@ strip = true
 incremental = false
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security", "Win32_Storage_FileSystem"] }

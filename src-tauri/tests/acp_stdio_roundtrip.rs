@@ -39,6 +39,8 @@ async fn launch_public_input(
     let handle = acp_client::start_diagnose(
         preset,
         DiagnoseRequest {
+            source: None,
+            parent_report: None,
             file_id: "fixture".into(),
             agent_id: "test".into(),
             snapshot: extractor::extract(&p),
@@ -293,7 +295,12 @@ async fn real_agent_queries_profiler_over_mcp() {
 #[ignore = "requires UPAA_REAL_AGENT; sends only the public isolated-peak fixture; inspect printed answer separately"]
 async fn real_agent_investigates_isolated_cpu_and_gc_peak() {
     let command = std::env::var("UPAA_REAL_AGENT").expect("set UPAA_REAL_AGENT");
-    let (handle, mut rx) = launch_public_input(command, vec![], include_bytes!("fixtures/isolated-peak.json")).await;
+    let (handle, mut rx) = launch_public_input(
+        command,
+        vec![],
+        include_bytes!("fixtures/isolated-peak.json"),
+    )
+    .await;
     let result = tokio::time::timeout(Duration::from_secs(330), async {
         let mut analysis = false;
         let mut peak_tree = false;

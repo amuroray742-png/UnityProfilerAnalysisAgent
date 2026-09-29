@@ -1,0 +1,37 @@
+import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { ReportPanel } from './ReportPanel';
+import { open, save } from '@tauri-apps/plugin-dialog';
+import { exportReports, renderReportMarkdown } from '../lib/tauri';
+import type { DiagnoseState } from '../hooks/useDiagnose';
+import type { DiagnosisReport } from '../types';
+vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn(), save: vi.fn() }));
+vi.mock('../lib/tauri', () => ({ exportReports: vi.fn(), renderReportMarkdown: vi.fn(async () => '') }));
+afterEach(cleanup);
+beforeEach(() => { vi.clearAllMocks(); vi.mocked(exportReports).mockResolvedValue(undefined); });
+const report = (stage: 'source' | 'performance'): DiagnosisReport => ({ reportId: stage, fileId: 'f', sessionId: stage, stage, parentReportId: stage === 'source' ? 'performance' : null, text: `${stage} 正文`, createdAt: '2026-09-29', agentId: 'codex', status: 'completed', incompleteReason: null, fileName: 'test.data', unityVersion: '6000.3', frameCount: 2, coverage: 'CPU 2/2' });
+const state = (): DiagnoseState => ({ phase: 'done', upload: { fileId: 'f', filename: 'test.data', extension: 'data', sizeBytes: 1 }, snapshot: null, agents: [], selectedAgent: 'codex', sessionId: 'source', streamedText: 'source 正文', events: [], errorMessage: null, reports: [report('performance'), report('source')], activeStage: 'source', sourceInfo: null });
+it('exports selected backend report IDs, treats save cancellation normally and retains reports on write failure', async () => {
+ render(<ReportPanel state={state()} startSource={vi.fn()} />);
+ vi.mocked(save).mockResolvedValueOnce(null);
+ fireEvent.click(screen.getByText('导出报告'));
+ await waitFor(() => expect(save).toHaveBeenCalledTimes(1)); expect(exportReports).not.toHaveBeenCalled();
+ fireEvent.change(screen.getByLabelText('导出报告范围'), { target: { value: 'combined' } });
+ fireEvent.change(screen.getByLabelText('导出格式'), { target: { value: 'html' } });
+ vi.mocked(save).mockResolvedValueOnce('C:/report.html'); vi.mocked(exportReports).mockRejectedValueOnce(new Error('disk full'));
+ await waitFor(() => expect(screen.getByText('导出报告')).not.toBeDisabled());
+ fireEvent.click(screen.getByText('导出报告'));
+ await waitFor(() => expect(exportReports).toHaveBeenCalledWith('f', ['performance', 'source'], 'html', 'C:/report.html'));
+ expect(await screen.findByText(/导出失败.*disk full/)).toBeInTheDocument();
+ expect(screen.getByText('performance 正文')).toBeInTheDocument(); expect(screen.getByText('source 正文')).toBeInTheDocument();
+});
+it('accepts a directory picker and only allows source analysis after a complete first report', async () => {
+ const startSource = vi.fn(async () => {}); const current = state(); current.reports = [report('performance')]; current.activeStage = 'performance'; current.streamedText = 'performance 正文';
+ const { rerender } = render(<ReportPanel state={current} startSource={startSource} />);
+ vi.mocked(open).mockResolvedValue('C:/PublicProject/Assets'); fireEvent.click(screen.getByText('选择目录'));
+ await waitFor(() => expect(screen.getByLabelText('源码目录')).toHaveValue('C:/PublicProject/Assets'));
+ fireEvent.click(screen.getByText('开始源码定位')); expect(startSource).toHaveBeenCalledWith('C:/PublicProject/Assets');
+ rerender(<ReportPanel state={{ ...current, reports: [{ ...report('performance'), status: 'incomplete' }] }} startSource={startSource} />);
+ expect(screen.queryByText('开始源码定位')).not.toBeInTheDocument();
+ expect(renderReportMarkdown).toBeDefined();
+});

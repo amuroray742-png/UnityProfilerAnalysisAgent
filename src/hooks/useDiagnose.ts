@@ -8,18 +8,20 @@ import {
   cancelDiagnose,
   listAgents,
   onDiagnoseEvent,
-  releaseProfiler,
+  releaseProfiler, listReports, prepareSource, cancelSourcePreparation, diagnoseSource,
 } from '../lib/tauri.ts';
 import type {
+  DiagnosisReport, SourceInfo,
   AgentPreset,
   DiagnoseEvent,
   MetricsSnapshot,
   UploadResult,
 } from '../types/index.ts';
 
-export type Phase = 'idle' | 'uploading' | 'analyzing' | 'ready' | 'diagnosing' | 'done' | 'error';
+export type Phase = 'idle' | 'uploading' | 'analyzing' | 'ready' | 'preparing' | 'diagnosing' | 'done' | 'error';
 
 export interface DiagnoseState {
+  reports: DiagnosisReport[]; activeStage: 'performance' | 'source'; sourceInfo: SourceInfo | null;
   phase: Phase;
   upload: UploadResult | null;
   snapshot: MetricsSnapshot | null;
@@ -33,6 +35,7 @@ export interface DiagnoseState {
 
 export function useDiagnose() {
   const [state, setState] = useState<DiagnoseState>({
+    reports: [], activeStage: 'performance', sourceInfo: null,
     phase: 'idle',
     upload: null,
     snapshot: null,
@@ -47,9 +50,11 @@ export function useDiagnose() {
   const sessionRef = useRef<string | null>(null);
   const pendingSession = useRef<{ fileId: string; events: DiagnoseEvent[] } | null>(null);
   const inputEpoch = useRef(0);
+  const prepareEpoch = useRef(0);
+  const reportEpoch = useRef(0);
   const uploadRef = useRef<string | null>(null);
   const releaseInput = useCallback(() => {
-    inputEpoch.current++;
+    inputEpoch.current++; prepareEpoch.current++; reportEpoch.current++;
     if (sessionRef.current) void cancelDiagnose(sessionRef.current).catch(console.error);
     sessionRef.current = null;
     pendingSession.current = null;
@@ -75,20 +80,29 @@ export function useDiagnose() {
       });
   }, []);
 
+  const refreshReports = useCallback(async (fileId: string) => {
+    const epoch = inputEpoch.current;
+    const run = reportEpoch.current;
+    try { const reports = await listReports(fileId);
+      if (epoch === inputEpoch.current && run === reportEpoch.current && fileId === uploadRef.current) setState(s => ({ ...s, reports, streamedText: reports.find(r => r.sessionId === sessionRef.current)?.text ?? s.streamedText }));
+    } catch (e) { if (epoch === inputEpoch.current && run === reportEpoch.current && fileId === uploadRef.current) setState(s => ({ ...s, errorMessage: `读取报告失败：${String(e)}` })); }
+  }, []);
+
   const applyEvent = useCallback((event: DiagnoseEvent) => {
     if (event.sessionId !== sessionRef.current || event.fileId !== uploadRef.current) return;
+    if (['finished', 'cancelled', 'error'].includes(event.kind)) void refreshReports(event.fileId);
     setState(s => {
       if (s.phase !== 'diagnosing') return s;
       const events = [...s.events, event].slice(-500);
       switch (event.kind) {
-        case 'chunk': return { ...s, events, streamedText: (s.streamedText + event.text).slice(-2 * 1024 * 1024) };
+        case 'chunk': return { ...s, events, streamedText: (s.streamedText + event.text) };
         case 'finished': return { ...s, events, phase: 'done' };
         case 'cancelled': return { ...s, events, phase: 'ready', sessionId: null };
         case 'error': return { ...s, events, phase: 'error', errorMessage: event.message };
         default: return { ...s, events };
       }
     });
-  }, []);
+  }, [refreshReports]);
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | undefined;
@@ -107,7 +121,7 @@ export function useDiagnose() {
   const handleFile = useCallback(async (filePath: string) => {
     releaseInput();
     const epoch = inputEpoch.current;
-    setState((s) => ({ ...s, phase: 'uploading', upload: null, snapshot: null, errorMessage: null }));
+    setState((s) => ({ ...s, phase: 'uploading', upload: null, snapshot: null, errorMessage: null, reports: [], sourceInfo: null, streamedText: '', events: [], sessionId: null, activeStage: 'performance' }));
     try {
       const upload = await uploadProfiler(filePath);
       if (epoch !== inputEpoch.current) { await releaseProfiler(upload.fileId); return; }
@@ -133,13 +147,15 @@ export function useDiagnose() {
   }, []);
 
   // 启动诊断
-  const startDiagnose = useCallback(async () => {
+  const startRun = useCallback(async (source?: { parentId: string; scopeId: string }) => {
     const { upload, snapshot, selectedAgent } = state;
-    if (!upload || !snapshot || !selectedAgent) return;
+    if (!upload || !snapshot || !selectedAgent || pendingSession.current) return;
+    reportEpoch.current++;
 
     setState((s) => ({
       ...s,
-      phase: 'diagnosing',
+      phase: 'diagnosing', activeStage: source ? 'source' : 'performance',
+      reports: source ? s.reports.filter(r => r.stage === 'performance') : [],
       streamedText: '',
       events: [],
       errorMessage: null,
@@ -151,9 +167,11 @@ export function useDiagnose() {
     pendingSession.current = pending;
     sessionRef.current = null;
     try {
-      const { sessionId } = await diagnose(upload.fileId, selectedAgent);
+      const { sessionId } = await (source ? diagnoseSource(upload.fileId, selectedAgent, source.parentId, source.scopeId) : diagnose(upload.fileId, selectedAgent));
       if (epoch !== inputEpoch.current || pendingSession.current !== pending) {
-        await cancelDiagnose(sessionId); return;
+        await cancelDiagnose(sessionId);
+        if (epoch === inputEpoch.current && uploadRef.current === upload.fileId) await refreshReports(upload.fileId);
+        return;
       }
       sessionRef.current = sessionId;
       pendingSession.current = null;
@@ -165,21 +183,45 @@ export function useDiagnose() {
       const message = err instanceof Error ? err.message : String(err);
       setState(s => ({ ...s, phase: 'error', errorMessage: message }));
     }
-  }, [state.upload, state.snapshot, state.selectedAgent, applyEvent]);
+  }, [state.upload, state.snapshot, state.selectedAgent, applyEvent, refreshReports]);
+
+  const startDiagnose = useCallback(() => startRun(), [startRun]);
+  const startSource = useCallback(async (root: string) => {
+    const parent = state.reports.find(r => r.stage === 'performance' && r.status === 'completed');
+    if (!parent || !state.upload || !root.trim() || ['diagnosing', 'preparing'].includes(state.phase)) return;
+    const epoch = inputEpoch.current; const preparation = ++prepareEpoch.current;
+    setState(s => ({ ...s, phase: 'preparing', errorMessage: null, sourceInfo: null }));
+    try {
+      const info = await prepareSource(parent.fileId, root.trim());
+      if (epoch !== inputEpoch.current || preparation !== prepareEpoch.current) return;
+      setState(s => ({ ...s, sourceInfo: info }));
+      await startRun({ parentId: parent.reportId, scopeId: info.scopeId });
+    } catch (e) { if (epoch === inputEpoch.current && preparation === prepareEpoch.current) setState(s => ({ ...s, phase: 'done', errorMessage: String(e) })); }
+  }, [state.reports, state.upload, state.phase, startRun]);
 
   const cancel = useCallback(async () => {
+    const epoch = inputEpoch.current;
+    const run = reportEpoch.current;
+    if (state.phase === 'preparing' && state.upload) {
+      const preparation = ++prepareEpoch.current;
+      try { await cancelSourcePreparation(state.upload.fileId); if (epoch === inputEpoch.current && preparation === prepareEpoch.current) setState(s => ({ ...s, phase: 'done' })); }
+      catch (e) { if (epoch === inputEpoch.current && preparation === prepareEpoch.current) setState(s => ({ ...s, errorMessage: String(e) })); }
+      return;
+    }
     const sessionId = sessionRef.current;
     pendingSession.current = null;
     try {
       if (sessionId) await cancelDiagnose(sessionId);
-      if (sessionRef.current === sessionId) {
+      if (epoch !== inputEpoch.current || run !== reportEpoch.current) return;
+      if (uploadRef.current) await refreshReports(uploadRef.current);
+      if (epoch === inputEpoch.current && run === reportEpoch.current && sessionRef.current === sessionId) {
         sessionRef.current = null;
         setState(s => ({ ...s, phase: s.snapshot ? 'ready' : 'idle', sessionId: null }));
       }
     } catch (err) {
-      setState(s => ({ ...s, errorMessage: String(err) }));
+      if (epoch === inputEpoch.current && run === reportEpoch.current) setState(s => ({ ...s, errorMessage: String(err) }));
     }
-  }, []);
+  }, [state.phase, state.upload, refreshReports]);
 
   // 重置
   const reset = useCallback(() => {
@@ -187,7 +229,7 @@ export function useDiagnose() {
     sessionRef.current = null;
     setState((s) => ({
       ...s,
-      phase: 'idle',
+      phase: 'idle', reports: [], sourceInfo: null, activeStage: 'performance',
       upload: null,
       snapshot: null,
       sessionId: null,
@@ -197,5 +239,5 @@ export function useDiagnose() {
     }));
   }, [releaseInput]);
 
-  return { state, handleFile, selectAgent: safeSelectAgent, startDiagnose, cancel, reset };
+  return { state, handleFile, selectAgent: safeSelectAgent, startDiagnose, startSource, cancel, reset };
 }

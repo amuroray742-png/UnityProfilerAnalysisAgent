@@ -506,3 +506,15 @@ html, body, #root {
   color: var(--text-tertiary);
   font-family: 'SF Mono', 'Consolas', monospace;
 }
+.report-actions { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin:16px 0; }
+.source-controls { margin:20px 0; padding:16px; border:1px solid var(--border, #343a43); border-radius:8px; }
+.source-controls input { width:min(620px, 80vw); padding:8px; margin:8px; }
+.source-controls button { margin:8px; }
+.source-warning { display:block; color:#d5ae5c; }
+.diagnosis-content table { border-collapse:collapse; max-width:100%; }
+.diagnosis-content th,.diagnosis-content td { border:1px solid #47505b; padding:6px; }
+.diagnosis-content pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+.diagnosis-content { white-space:normal; }
+.report-actions select, .source-controls input { background:var(--bg-secondary); color:var(--text-primary); border:1px solid var(--border); border-radius:4px; padding:8px; }
+.diagnosis-content p, .diagnosis-content pre, .diagnosis-content table { margin:10px 0; }
+.diagnosis-content ul, .diagnosis-content ol { padding-left:24px; margin:10px 0; }
