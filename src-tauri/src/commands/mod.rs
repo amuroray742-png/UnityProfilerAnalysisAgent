@@ -242,16 +242,25 @@ pub async fn diagnose(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<DiagnoseSession, CommandError> {
+    launch_diagnosis(file_id, agent_id, state.inner(), app, None).await
+}
+async fn launch_diagnosis(
+    file_id: String,
+    agent_id: String,
+    state: &AppState,
+    app: AppHandle,
+    source: Option<(String, String)>,
+) -> Result<DiagnoseSession, CommandError> {
     let preset = builtin_presets()
         .into_iter()
         .find(|p| p.id == agent_id)
         .ok_or_else(|| CommandError::AgentNotInstalled(agent_id.clone()))?;
     let executable = std::env::current_exe().map_err(|e| CommandError::Other(e.to_string()))?;
     let (session_id, session, mut event_rx) = state
-        .start_session(&file_id, preset, executable)
+        .start_report_session(&file_id, preset, executable, source)
         .await
         .map_err(|e| CommandError::Acp(e.to_string()))?;
-    let relay_state = state.inner().clone();
+    let relay_state = state.clone();
     let relay_id = session_id.clone();
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
@@ -299,4 +308,141 @@ pub async fn list_agents() -> Result<Vec<AgentPreset>, CommandError> {
 #[allow(dead_code)]
 fn _unused_arc() -> Arc<()> {
     Arc::new(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn list_reports(
+    file_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::reports::Report>, CommandError> {
+    let inner = state.0.lock().await;
+    if !inner.snapshots.contains_key(&file_id) {
+        return Err(CommandError::UnknownFileId(file_id));
+    }
+    let mut reports: Vec<_> = inner
+        .reports
+        .values()
+        .filter(|r| r.file_id == file_id)
+        .cloned()
+        .collect();
+    reports.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    Ok(reports)
+}
+#[tauri::command(rename_all = "camelCase")]
+pub async fn render_report_markdown(text: String) -> Result<String, CommandError> {
+    if text.len() > crate::reports::MAX_REPORT + 16384 {
+        return Err(CommandError::Other("正文过长".into()));
+    }
+    tokio::task::spawn_blocking(move || crate::reports::render_markdown(&text))
+        .await
+        .map_err(|e| CommandError::Other(e.to_string()))
+}
+#[tauri::command(rename_all = "camelCase")]
+pub async fn export_reports(
+    file_id: String,
+    report_ids: Vec<String>,
+    format: String,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    if !["markdown", "html"].contains(&format.as_str())
+        || report_ids.is_empty()
+        || report_ids.len() > 2
+    {
+        return Err(CommandError::Other("导出参数错误".into()));
+    }
+    let inner = state.0.lock().await;
+    let reports = crate::reports::select_reports(&inner.reports, &file_id, &report_ids)
+        .map_err(CommandError::Other)?;
+    drop(inner);
+    tokio::task::spawn_blocking(move || {
+        crate::reports::save_reports(&reports, &format, &PathBuf::from(path))
+    })
+    .await
+    .map_err(|e| CommandError::Other(e.to_string()))?
+    .map_err(CommandError::Other)
+}
+#[tauri::command(rename_all = "camelCase")]
+pub async fn prepare_source(
+    file_id: String,
+    root: String,
+    state: State<'_, AppState>,
+) -> Result<crate::source::SourceInfo, CommandError> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let flag = Arc::new(AtomicBool::new(false));
+    {
+        let mut inner = state.0.lock().await;
+        if !inner
+            .reports
+            .values()
+            .any(|r| r.file_id == file_id && r.stage == "performance" && r.status == "completed")
+        {
+            return Err(CommandError::Other("需要当前录制的完整首轮报告".into()));
+        }
+        if inner.active_sessions.values().any(|s| s.file_id == file_id)
+            || inner.preparations.contains_key(&file_id)
+        {
+            return Err(CommandError::Other("当前录制已有运行任务".into()));
+        }
+        inner.sources.retain(|_, s| {
+            if s.info.file_id == file_id {
+                s.cancelled.store(true, Ordering::Relaxed);
+                false
+            } else {
+                true
+            }
+        });
+        inner.preparations.insert(file_id.clone(), flag.clone());
+    }
+    let scan_flag = flag.clone();
+    let scan_id = file_id.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::source::SourceScope::prepare(scan_id, PathBuf::from(root), scan_flag)
+    })
+    .await;
+    let mut inner = state.0.lock().await;
+    if inner
+        .preparations
+        .get(&file_id)
+        .is_some_and(|f| Arc::ptr_eq(f, &flag))
+    {
+        inner.preparations.remove(&file_id);
+    }
+    if flag.load(Ordering::Relaxed) || !inner.snapshots.contains_key(&file_id) {
+        return Err(CommandError::Other("源码准备已取消".into()));
+    }
+    let scope = result
+        .map_err(|e| CommandError::Other(e.to_string()))?
+        .map_err(CommandError::Other)?;
+    let info = scope.info.clone();
+    inner.sources.insert(info.scope_id.clone(), Arc::new(scope));
+    Ok(info)
+}
+#[tauri::command(rename_all = "camelCase")]
+pub async fn cancel_source_preparation(
+    file_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    if let Some(flag) = state.0.lock().await.preparations.get(&file_id) {
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    Ok(())
+}
+#[tauri::command(rename_all = "camelCase")]
+pub async fn diagnose_source(
+    file_id: String,
+    agent_id: String,
+    parent_report_id: String,
+    scope_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<DiagnoseSession, CommandError> {
+    launch_diagnosis(
+        file_id,
+        agent_id,
+        state.inner(),
+        app,
+        Some((parent_report_id, scope_id)),
+    )
+    .await
 }

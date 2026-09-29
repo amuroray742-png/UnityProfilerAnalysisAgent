@@ -16,6 +16,8 @@ pub struct Peer<R, W> {
     next_id: u64,
     pub chunks: u64,
     cancelled: bool,
+    pub allow_source: bool,
+    report_bytes: usize,
 }
 impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Peer<R, W> {
     pub fn new(
@@ -33,6 +35,8 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Peer<R, W> {
             next_id: 0,
             chunks: 0,
             cancelled: false,
+            allow_source: false,
+            report_bytes: 0,
         }
     }
     async fn send(&mut self, value: Value) -> Result<(), AcpError> {
@@ -143,13 +147,21 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Peer<R, W> {
         if let Some(id) = message.get("id") {
             let response = if method == "session/request_permission" {
                 let title = params["toolCall"]["title"].as_str().unwrap_or("");
-                let trusted = crate::mcp::list_tool_schemas()["tools"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|tool| {
-                        title == format!("mcp__unity-profiler__{}", tool["name"].as_str().unwrap())
-                    });
+                let trusted = (self.allow_source
+                    && ["source_files", "source_search", "source_read"]
+                        .iter()
+                        .any(|n| title == format!("mcp__unity-profiler__{n}")))
+                    || crate::mcp::list_tool_schemas()["tools"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|tool| {
+                            title
+                                == format!(
+                                    "mcp__unity-profiler__{}",
+                                    tool["name"].as_str().unwrap()
+                                )
+                        });
                 let choice = if matching && !self.cancelled && trusted {
                     params["options"]
                         .as_array()
@@ -177,10 +189,23 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Peer<R, W> {
                 && update["content"]["type"] == "text"
             {
                 if let Some(text) = update["content"]["text"].as_str() {
+                    let remaining = crate::reports::MAX_REPORT - self.report_bytes;
+                    let mut end = text.len().min(remaining);
+                    while !text.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    let overflow = end < text.len();
+                    let text = &text[..end];
+                    self.report_bytes += text.len();
                     self.chunks += 1;
                     self.events
                         .send(DiagnoseEvent::Chunk { text: text.into() })
                         .map_err(|_| AcpError::Cancelled)?;
+                    if overflow {
+                        return Err(AcpError::Other(
+                            "REPORT_LIMIT: 正文达到 2 MiB，报告不完整".into(),
+                        ));
+                    }
                 }
             }
         }

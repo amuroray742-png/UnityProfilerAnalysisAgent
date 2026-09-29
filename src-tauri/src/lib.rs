@@ -6,6 +6,8 @@ pub mod errors;
 pub mod extractor;
 pub mod mcp;
 pub mod parser;
+pub mod reports;
+pub mod source;
 pub mod state;
 
 use state::AppState;
@@ -33,6 +35,12 @@ pub fn run() {
             commands::diagnose,
             commands::cancel_diagnose,
             commands::list_agents,
+            commands::list_reports,
+            commands::export_reports,
+            commands::render_report_markdown,
+            commands::prepare_source,
+            commands::cancel_source_preparation,
+            commands::diagnose_source,
         ])
         .run(tauri::generate_context!())
         .expect("Tauri 启动失败");

@@ -36,6 +36,12 @@ impl ServerHandler for ProfilerServer {
         }
         let mut tools: Vec<Tool> = serde_json::from_value(list_tool_schemas()["tools"].clone())
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        if self.store.source().await.is_some() {
+            let source_tools: Vec<Tool> =
+                serde_json::from_value(crate::source::schemas()["tools"].clone())
+                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+            tools.extend(source_tools);
+        }
         for tool in &mut tools {
             tool.annotations = Some(serde_json::from_value(json!({"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false})).unwrap());
         }
@@ -60,7 +66,9 @@ impl ServerHandler for ProfilerServer {
         }
         match result {
             Ok(value) => {
-                let mut result = CallToolResult::success(vec![Content::text(serde_json::to_string_pretty(&value).expect("JSON value serializes"))]);
+                let mut result = CallToolResult::success(vec![Content::text(
+                    serde_json::to_string_pretty(&value).expect("JSON value serializes"),
+                )]);
                 result.structured_content = Some(value);
                 Ok(result)
             }

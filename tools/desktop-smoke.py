@@ -35,7 +35,10 @@ def main():
     parser.add_argument('--render-input', type=Path, help='Validate rendering page on a local capture; never calls an Agent')
     parser.add_argument('--render-reference', type=Path, help='Editor counter reference for --render-input')
     parser.add_argument('--agent-id', choices=['claude-code', 'codex', 'gemini'], default='claude-code', help='Agent preset for explicit --real-agent validation')
+    parser.add_argument('--report-source', action='store_true', help='Real Agent report/export/C# workflow using public fixtures only')
     args = parser.parse_args()
+    if args.report_source and (args.ui or args.real_agent or args.measure_input or args.render_input):
+        parser.error('--report-source is a separate public real-Agent workflow')
     if bool(args.render_input) != bool(args.render_reference):
         parser.error('--render-input and --render-reference must be supplied together')
     if args.render_input and (args.ui or args.real_agent or args.measure_input):
@@ -62,7 +65,7 @@ def main():
     for path in (args.application, args.driver, args.native_driver):
         if not path.is_file():
             raise FileNotFoundError(path)
-    output = root / '.cache' / ('desktop-render' if args.render_input else 'desktop-memory' if args.measure_input else 'desktop-ui' if args.ui else 'desktop-smoke')
+    output = root / '.cache' / ('desktop-reports' if args.report_source else 'desktop-render' if args.render_input else 'desktop-memory' if args.measure_input else 'desktop-ui' if args.ui else 'desktop-smoke')
     output.mkdir(parents=True, exist_ok=True)
     def port():
         with socket.socket() as sock:
@@ -151,6 +154,10 @@ def main():
                 report['realAgentRequested'] = args.real_agent
                 report['agentId'] = args.agent_id if args.real_agent else None
                 run_ui(js, lambda method, path, body=None: request(method, f'/session/{session}' + path, body), root, output, report, args.real_agent, args.agent_id)
+            if args.report_source:
+                from desktop_report_checks import run_report_checks
+                report['scope'] = 'Release public real-Agent reports/source/export; native picker/save responses substituted'
+                run_report_checks(js, lambda method, path, body=None: request(method, f'/session/{session}' + path, body), root, output, report, args.agent_id)
             if args.render_input:
                 from desktop_render_checks import run_render_checks
                 report['scope'] = 'Release rendering page vs local Editor reference; native picker response substituted; excludes Agent'

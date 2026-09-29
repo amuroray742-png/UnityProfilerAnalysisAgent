@@ -50,7 +50,9 @@ struct Hotspots {
     #[serde(default = "hotspot_limit")]
     limit: usize,
 }
-fn hotspot_limit() -> usize { 10 }
+fn hotspot_limit() -> usize {
+    10
+}
 fn default_limit() -> usize {
     200
 }
@@ -71,6 +73,17 @@ pub async fn dispatch(
     name: &str,
     arguments: Value,
 ) -> Result<Value, McpToolError> {
+    if name.starts_with("source_") {
+        let scope = store
+            .source()
+            .await
+            .ok_or_else(|| McpToolError::BadArg("当前会话未授权源码范围".into()))?;
+        let name = name.to_owned();
+        return tokio::task::spawn_blocking(move || scope.query(&name, arguments))
+            .await
+            .map_err(|e| McpToolError::BadArg(e.to_string()))?
+            .map_err(McpToolError::BadArg);
+    }
     match name {
         "performance_session_summary" => {
             let _: Empty = args(arguments)?;
