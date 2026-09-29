@@ -41,6 +41,16 @@ struct Analysis {
     #[serde(default = "default_focus")]
     focus: String,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Hotspots {
+    area: String,
+    #[serde(default)]
+    start: usize,
+    #[serde(default = "hotspot_limit")]
+    limit: usize,
+}
+fn hotspot_limit() -> usize { 10 }
 fn default_limit() -> usize {
     200
 }
@@ -65,6 +75,14 @@ pub async fn dispatch(
         "performance_session_summary" => {
             let _: Empty = args(arguments)?;
             run_session_summary(store).await
+        }
+        "performance_metric_semantics" => {
+            let _: Empty = args(arguments)?;
+            Ok(metric_semantics())
+        }
+        "performance_hotspots" => {
+            let a: Hotspots = args(arguments)?;
+            run_hotspots(store, &a.area, a.start, a.limit).await
         }
         "performance_frames" => {
             let a: Frames = args(arguments)?;

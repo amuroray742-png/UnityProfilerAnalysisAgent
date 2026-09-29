@@ -297,6 +297,8 @@ async fn real_agent_investigates_isolated_cpu_and_gc_peak() {
     let result = tokio::time::timeout(Duration::from_secs(330), async {
         let mut analysis = false;
         let mut peak_tree = false;
+        let mut cpu_hotspots = false;
+        let mut gc_hotspots = false;
         let mut text = String::new();
         let mut terminal = None;
         while let Some(event) = rx.recv().await {
@@ -304,6 +306,8 @@ async fn real_agent_investigates_isolated_cpu_and_gc_peak() {
                 DiagnoseEvent::McpCall { tool, args } => {
                     println!("MCP {tool} {args}");
                     analysis |= tool == "performance_analysis";
+                    cpu_hotspots |= tool == "performance_hotspots" && args["area"] == "cpu";
+                    gc_hotspots |= tool == "performance_hotspots" && args["area"] == "gc";
                     peak_tree |= tool == "performance_cpu_hierarchy" && args["frame_index"] == 160;
                 }
                 DiagnoseEvent::Chunk { text: chunk } => text.push_str(&chunk),
@@ -313,6 +317,7 @@ async fn real_agent_investigates_isolated_cpu_and_gc_peak() {
         }
         println!("PUBLIC_FIXTURE_ANSWER_BEGIN\n{text}\nPUBLIC_FIXTURE_ANSWER_END");
         assert!(analysis, "Agent must query heuristic screening");
+        assert!(cpu_hotspots && gc_hotspots,"Agent must investigate both hotspot rankings");
         assert!(peak_tree, "Agent must inspect the original peak frame, not only summary numbers");
         assert!(!text.is_empty());
         assert!(matches!(terminal,Some(DiagnoseEvent::Finished{stop_reason,..}) if stop_reason=="end_turn"));

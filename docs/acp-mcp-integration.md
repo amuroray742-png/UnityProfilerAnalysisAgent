@@ -37,7 +37,9 @@ session/update 中的 agent_message_chunk 才作为回答正文；其他会话�
 
 | 工具 | 参数 | 语义 |
 |---|---|---|
-| performance_session_summary | 无 | 聚合指标、质量与 metricSemantics（分位数算法、inclusive CPU 和覆盖语义），省略逐帧时间线；不承诺固定字节大小 |
+| performance_session_summary | 无 | 紧凑指标、质量与 metricSemantics；省略完整热点及时间线，警告/原因最多各 5 项并声明总数和省略，长描述限 256 字符 |
+| performance_metric_semantics | 无 | 独立返回完整统计与 CPU/GC 解释规则，便于摘要截断时补读 |
+| performance_hotspots | area、start、limit | cpu/gc 累计热点排名，默认 10 项、最多 50 项；原样保留 marker、线程、调用次数及毫秒/字节，nextStart 续页 |
 | performance_frames | start、limit | 时间线数组偏移，limit 为 1–500，默认 200；返回原始帧号、主线程/录制帧时间与 gcAllocBytes（缺失为 null） |
 | performance_frame | frame_index、start、limit | 原始帧指标及线程分页，最多 128 个线程 |
 | performance_cpu_hierarchy | frame_index、thread_index、start、limit、max_depth | 原始前序树，最多 500 个样本、64 层；默认唯一 Main Thread |
@@ -72,6 +74,14 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked --offline --test acp_st
 
 `performance_analysis` 的 CPU/GC issues 区分 P95 超限与孤立峰值，附 `unit`、`affectedFrames`、`validFrames`、最多 5 项 `evidenceFrames` 和 `thresholdPolicy`。帧证据用原始帧号，需继续查询原始线程/样本解释原因。默认阈值仅用于筛查，不等于项目预算或已确认瓶颈；issues 为空不证明无性能问题。部分、估算或缺失的指标不触发确定性诊断。
 
+
+## 热点与优化建议诊断
+
+诊断先读取紧凑摘要、CPU/GC 热点榜与筛查结果，依据 `investigationFrames` 或 `evidenceFrames` 深入高耗时/高分配帧及普通帧的原始线程树。最高观测值候选在未超过默认阈值时也返回，避免空 issues 导致停止分析；排名和候选均不代表确认瓶颈。CPU 为累计 inclusive 耗时，GC 为最近非 GC.Alloc 父样本的字节归因，保留质量和覆盖率。
+
+报告以“先优化什么”为开头，列最多 5 项有证据的热点，注明帧号、线程、路径、耗时/字节、次数、尖峰/持续证据。每个值得处理的热点给出具体修改建议、适用条件及代价、A/B 验证指标。没有源码时只给条件式方案，不编造脚本行号、对象类型或已确认的 LINQ/装箱原因；几十字节的分配不机械推荐对象池。目标帧率和业务正确性需结合实际项目。
+
+`performance_session_summary` 不再重复携带完整热点数组；使用 `hotspotCounts` 和 `detailTools` 找到分页工具。完整精确热点名在热点页保留，摘要的长描述省略不会修改原始数据。MCP 文本内容改为多行 JSON，同时保留 structuredContent；独立语义工具避免依赖某个客户端显示完整大摘要。这不保证任意第三方客户端不会再次截断超长单个 marker 或原始树。
 ## Codex 适配器安装与检测
 
 界面中的 Codex 使用 `codex-acp` 命令，不是 `codex` 命令。仅安装 Codex CLI 或 Codex 桌面应用不会自动安装此适配器；“未检测到 ACP 适配器”表示当前应用进程的 PATH 中没有找到该命令，不代表 Codex CLI 未安装。

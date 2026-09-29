@@ -60,7 +60,7 @@ impl ServerHandler for ProfilerServer {
         }
         match result {
             Ok(value) => {
-                let mut result = CallToolResult::success(vec![Content::text(value.to_string())]);
+                let mut result = CallToolResult::success(vec![Content::text(serde_json::to_string_pretty(&value).expect("JSON value serializes"))]);
                 result.structured_content = Some(value);
                 Ok(result)
             }

@@ -105,7 +105,7 @@ async fn shipped_stdio_binary_serves_real_tree_and_validates_arguments() {
     let mut client = Client::connect(&server, server.token()).await;
     client.initialize().await;
     let list = client.request("tools/list", json!({})).await;
-    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 5);
+    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 7);
     let summary = client.call("performance_session_summary", json!({})).await;
     assert_eq!(
         summary["result"]["structuredContent"]["meta"]["frameCount"],
@@ -114,6 +114,16 @@ async fn shipped_stdio_binary_serves_real_tree_and_validates_arguments() {
     assert!(summary["result"]["structuredContent"]["cpu"]
         .get("frameTimeline")
         .is_none());
+    let semantics = client.call("performance_metric_semantics", json!({})).await;
+    assert_eq!(semantics["result"]["structuredContent"], summary["result"]["structuredContent"]["metricSemantics"]);
+    let hotspots = client.call("performance_hotspots", json!({"area":"gc","limit":1})).await;
+    let rows = &hotspots["result"]["structuredContent"];
+    assert_eq!(rows["rows"][0]["totalBytes"], 24);
+    assert_eq!(rows["nextStart"], 1);
+    let next = client.call("performance_hotspots", json!({"area":"gc","start":1})).await;
+    assert_eq!(next["result"]["structuredContent"]["rows"][0]["totalBytes"], 8);
+    assert!(client.call("performance_hotspots",json!({"area":"gc","limit":51})).await["error"].is_object());
+    assert!(summary["result"]["content"][0]["text"].as_str().unwrap().contains('\n'));
     let frames = client.call("performance_frames", json!({"start":0,"limit":2})).await;
     let frames = &frames["result"]["structuredContent"]["frames"];
     assert_eq!(frames[0]["frameIndex"], 10);
