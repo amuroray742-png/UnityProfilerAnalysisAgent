@@ -1,6 +1,6 @@
 //! Offline Unity project index and narrowly scoped Editor enrichment.
 pub mod editor;
-mod files;
+pub(crate) mod files;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
@@ -55,6 +55,8 @@ struct Entry {
 #[derive(Debug)]
 pub struct ProjectScope {
     pub info: ProjectInfo,
+    task_drafts: Mutex<Vec<crate::optimization::Task>>,
+    read_receipts: Mutex<BTreeMap<String, String>>,
     pub cancelled: Arc<AtomicBool>,
     root: PathBuf,
     entries: BTreeMap<String, Entry>,
@@ -142,6 +144,8 @@ impl ProjectScope {
             return Err("缺少 Unity 工程版本".into());
         }
         let mut scope = Self {
+            task_drafts: Mutex::new(vec![]),
+            read_receipts: Mutex::new(BTreeMap::new()),
             info: ProjectInfo {
                 scope_id: uuid::Uuid::new_v4().to_string(),
                 file_id,
@@ -414,7 +418,7 @@ impl ProjectScope {
         Ok(scope)
     }
     pub fn context(&self) -> Value {
-        json!({"project":self.info,"editor":*self.editor_status.lock().unwrap(),"editorAssetsRead":self.editor_hashes.lock().unwrap().len(),"editorEvidence":*self.editor_evidence.lock().unwrap(),"scope":"Assets、ProjectSettings、工程内嵌 Packages；名称/引用/Editor 当前状态不是录制当帧的因果证据"})
+        json!({"taskDrafts":*self.task_drafts.lock().unwrap(),"project":self.info,"editor":*self.editor_status.lock().unwrap(),"editorAssetsRead":self.editor_hashes.lock().unwrap().len(),"editorEvidence":*self.editor_evidence.lock().unwrap(),"scope":"Assets、ProjectSettings、工程内嵌 Packages；名称/引用/Editor 当前状态不是录制当帧的因果证据"})
     }
     fn verified(&self, path: &str) -> Result<(std::fs::File, &Entry), String> {
         files::check(&self.cancelled)?;
@@ -452,6 +456,32 @@ impl ProjectScope {
     }
     pub async fn query(self: &Arc<Self>, name: &str, args: Value) -> Result<Value, String> {
         files::check(&self.cancelled)?;
+        if name == "project_propose_tasks" {
+            let mut tasks: Vec<crate::optimization::Task> =
+                serde_json::from_value(args.get("tasks").cloned().ok_or("缺少 tasks")?)
+                    .map_err(|e| e.to_string())?;
+            if tasks.len() > 20 {
+                return Err("最多20项任务".into());
+            }
+            let receipts = self.read_receipts.lock().unwrap();
+            for t in &mut tasks {
+                t.selected = false;
+                if t.kind == "investigate" {
+                    t.files.clear();
+                    continue;
+                }
+                for (path, hash) in &t.files {
+                    if receipts.get(path) != Some(hash) {
+                        return Err("只能建议实际读取且指纹匹配的代码文件".into());
+                    }
+                }
+                crate::optimization::editing::validate_tasks(std::slice::from_ref(t), &self.root)?;
+            }
+            *self.task_drafts.lock().unwrap() = tasks;
+            return Ok(
+                json!({"saved":true,"authorized":false,"message":"候选任务已保存，需要用户选择并确认，当前会话不能写工程"}),
+            );
+        }
         let scope = self.clone();
         let tool = name.to_owned();
         let query = args.clone();
@@ -635,6 +665,10 @@ impl ProjectScope {
                 if files::hash(&mut f, limit(path), &self.cancelled)? != e.hash.clone().unwrap() {
                     return Err("读取期间文件已变化".into());
                 }
+                self.read_receipts
+                    .lock()
+                    .unwrap()
+                    .insert(path.into(), e.hash.clone().unwrap());
             }
             "project_search" => {
                 let q = args["query"]
@@ -771,5 +805,7 @@ pub fn schemas() -> Value {
         }
         json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})
     };
-    json!({"tools":[tool("project_summary","工程/Editor 身份、版本、采集范围与覆盖警告",json!({}),vec![]),tool("project_files","分页列出工程文件，不扫描外部包磁盘",json!({}),vec![]),tool("project_search","只读字面量搜索；名称匹配不是性能因果证明",json!({"query":{"type":"string"}}),vec!["query"]),tool("project_read","带行号、哈希读取文本；行从 1 开始，最多400行；检查nextStart和lineTruncated",json!({"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1,"maximum":400}}),vec!["path"]),tool("project_asset","资源序列化对象分页及 Editor 当前资源摘要；与录制当帧不同，检查缺失与变化",json!({"path":{"type":"string"}}),vec!["path"]),tool("project_references","离线原始引用分页，incoming/outgoing；覆盖始终 partial，不证明运行中加载",json!({"path":{"type":"string"},"direction":{"type":"string","enum":["incoming","outgoing"]}}),vec!["path"])]})
+    let mut result = json!({"tools":[tool("project_summary","工程/Editor 身份、版本、采集范围与覆盖警告",json!({}),vec![]),tool("project_files","分页列出工程文件，不扫描外部包磁盘",json!({}),vec![]),tool("project_search","只读字面量搜索；名称匹配不是性能因果证明",json!({"query":{"type":"string"}}),vec!["query"]),tool("project_read","带行号、哈希读取文本；行从 1 开始，最多400行；检查nextStart和lineTruncated",json!({"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1,"maximum":400}}),vec!["path"]),tool("project_asset","资源序列化对象分页及 Editor 当前资源摘要；与录制当帧不同，检查缺失与变化",json!({"path":{"type":"string"}}),vec!["path"]),tool("project_references","离线原始引用分页，incoming/outgoing；覆盖始终 partial，不证明运行中加载",json!({"path":{"type":"string"},"direction":{"type":"string","enum":["incoming","outgoing"]}}),vec!["path"])]});
+    result["tools"].as_array_mut().unwrap().push(json!({"name":"project_propose_tasks","description":"保存结构化候选任务，不授权编辑。仅 optimize/marker/investigate；文件映射必须来自 project_read 的真实 path/hash。用户后续选择任务及修改 Agent。", "inputSchema":{"type":"object","properties":{"tasks":{"type":"array","maxItems":20,"items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["optimize","marker","investigate"]},"title":{"type":"string"},"evidence":{"type":"string"},"files":{"type":"object","additionalProperties":{"type":"string"}},"instructions":{"type":"string"},"acceptance":{"type":"string"},"constraints":{"type":"string"},"selected":{"type":"boolean"}},"required":["id","kind","title","evidence","files","instructions","acceptance","constraints","selected"],"additionalProperties":false}}},"required":["tasks"],"additionalProperties":false}}));
+    result
 }

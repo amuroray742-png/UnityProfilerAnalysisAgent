@@ -39,7 +39,7 @@ def prepare_workload(js, request, input_path, inspect_heap=False, dom_control=Fa
       window.fetch=(url,options)=>{
         if(typeof url==='string' && new URL(url).hostname==='ipc.localhost'
           && decodeURIComponent(new URL(url).pathname)==='/plugin:dialog|open')
-          return Promise.resolve(new Response(JSON.stringify(window.__memoryInput),
+          return Promise.resolve(new Response(JSON.stringify(window.__optPickers?.length?window.__optPickers.shift():window.__memoryInput),
             {headers:{'Content-Type':'application/json','Tauri-Response':'ok'}}));
         return nativeFetch(url,options);
       };
@@ -47,7 +47,7 @@ def prepare_workload(js, request, input_path, inspect_heap=False, dom_control=Fa
       window.chrome.webview.postMessage=(raw)=>{
         let message; try {message=typeof raw==='string'?JSON.parse(raw):raw;} catch {}
         if(message?.cmd==='plugin:dialog|open') {
-          window.__TAURI_INTERNALS__.runCallback(message.callback,window.__memoryInput);
+          window.__TAURI_INTERNALS__.runCallback(message.callback,window.__optPickers?.length?window.__optPickers.shift():window.__memoryInput);
           return;
         }
         return nativePost(raw);

@@ -43,7 +43,7 @@ try {
     $env:UPAA_TEST_APP_EXE = $installedExe
     Push-Location $repo
     try {
-        & cargo test --manifest-path src-tauri/Cargo.toml --locked --offline --test mcp_wire --test acp_stdio_roundtrip *> (Join-Path $work 'protocol.log')
+        & cargo test --manifest-path src-tauri/Cargo.toml --locked --offline --test mcp_wire --test acp_stdio_roundtrip --test reports_source --test optimization *> (Join-Path $work 'protocol.log')
         if ($LASTEXITCODE -ne 0) { throw 'Installed binary protocol regression failed; see .cache/installer-smoke/protocol.log' }
         $result.protocolPassed = $true
         if ($DesktopSmoke -or $DesktopUi) {

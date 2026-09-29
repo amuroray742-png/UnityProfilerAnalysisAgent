@@ -14,6 +14,7 @@ pub struct MetricsStore {
 }
 #[derive(Default)]
 struct StoreData {
+    modification: Option<Arc<crate::optimization::session::EditScope>>,
     source: Option<Arc<crate::source::SourceScope>>,
     project: Option<Arc<crate::project::ProjectScope>>,
     snapshot: Option<MetricsSnapshot>,
@@ -35,6 +36,7 @@ impl MetricsStore {
         details: Option<Arc<crate::parser::detail::FrameStore>>,
     ) {
         *self.inner.lock().await = StoreData {
+            modification: None,
             source: None,
             project: None,
             snapshot: Some(snapshot),
@@ -52,6 +54,15 @@ impl MetricsStore {
     }
     pub async fn project(&self) -> Option<Arc<crate::project::ProjectScope>> {
         self.inner.lock().await.project.clone()
+    }
+    pub async fn set_modification(
+        &self,
+        scope: Option<Arc<crate::optimization::session::EditScope>>,
+    ) {
+        self.inner.lock().await.modification = scope;
+    }
+    pub async fn modification(&self) -> Option<Arc<crate::optimization::session::EditScope>> {
+        self.inner.lock().await.modification.clone()
     }
     pub async fn clear(&self) {
         *self.inner.lock().await = StoreData::default();

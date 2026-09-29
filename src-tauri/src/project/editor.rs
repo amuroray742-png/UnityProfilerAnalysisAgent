@@ -69,7 +69,15 @@ async fn invoke(
     mut request: Value,
     cancel: &AtomicBool,
 ) -> Result<Value, String> {
-    if !["upaa_context", "upaa_asset"].contains(&command) {
+    if ![
+        "upaa_context",
+        "upaa_asset",
+        "upaa_check_start",
+        "upaa_check_status",
+        "upaa_check_cancel",
+    ]
+    .contains(&command)
+    {
         return Err("Editor 命令未授权".into());
     }
     super::files::check(cancel)?;
@@ -155,7 +163,13 @@ async fn invoke(
             break;
         }
     }
-    validate(&data, root)?;
+    if command == "upaa_context" && data["status"] == "busy" {
+        let mut identity = data.clone();
+        identity["status"] = json!("ready");
+        validate(&identity, root)?;
+    } else {
+        validate(&data, root)?;
+    }
     Ok(data)
 }
 pub fn validate(data: &Value, root: &Path) -> Result<(), String> {
@@ -179,8 +193,8 @@ pub fn validate(data: &Value, root: &Path) -> Result<(), String> {
 pub async fn status(root: &Path, cancel: &AtomicBool) -> EditorStatus {
     match invoke(root, "upaa_context", json!({}), cancel).await {
         Ok(v) => EditorStatus {
-            status: "ready".into(),
-            reason: None,
+            status: v["status"].as_str().unwrap_or("unavailable").into(),
+            reason: v["reason"].as_str().map(Into::into),
             unity_version: v["unityVersion"].as_str().map(Into::into),
             target_platform: v["targetPlatform"].as_str().map(Into::into),
             sampled_at: v["sampledAt"].as_str().map(Into::into),
@@ -210,4 +224,64 @@ pub async fn inspect(
         return Err("Editor 返回了其他资源，拒绝使用".into());
     }
     super::bounded(v)
+}
+
+/// Checks are explicit capability additions; old plugins degrade without installing anything.
+pub async fn check_changes(
+    root: &Path,
+    paths: Vec<String>,
+    tests: Vec<String>,
+    cancel: &AtomicBool,
+) -> Result<Value, String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let start = invoke(
+        root,
+        "upaa_check_start",
+        json!({"checkId":id,"paths":paths,"tests":tests}),
+        cancel,
+    )
+    .await?;
+    if start["checkProtocolVersion"] != 1 {
+        return Err("Editor 检查协议不兼容；没有执行检查".into());
+    }
+    if start["check"]["id"] != id {
+        return Err(start["reason"]
+            .as_str()
+            .unwrap_or("Editor 未启动本次检查")
+            .into());
+    }
+    let result = async {
+        let mut last_error = String::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
+        while tokio::time::Instant::now() < deadline {
+            if super::files::check(cancel).is_err() {
+                return Err("检查已取消".into());
+            }
+            match invoke(root, "upaa_check_status", json!({"checkId":id}), cancel).await {
+                Ok(v) => {
+                    let c = &v["check"];
+                    if c["id"] != id {
+                        return Err("检查身份不匹配".into());
+                    }
+                    if c["phase"] == "finished" && v["journalDurable"] == true {
+                        return Ok(json!({"status":c["checkStatus"],"editor":v}));
+                    }
+                }
+                Err(e) => last_error = e,
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+        Err(format!("检查超时或域重载/断连未恢复：{last_error}"))
+    }
+    .await;
+    if result.is_err() {
+        let _ = invoke(
+            root,
+            "upaa_check_cancel",
+            json!({"checkId":id}),
+            &AtomicBool::new(false),
+        )
+        .await;
+    }
+    result
 }
