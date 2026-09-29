@@ -39,7 +39,7 @@ def main():
             prefix = '/session/' + session
             request('POST', prefix + '/url', {'url': args.html.resolve().as_uri()})
             state = request('POST', prefix + '/execute/sync', {'script': '''return {text:document.body.innerText,tables:document.querySelectorAll('table').length,code:document.querySelectorAll('pre code').length,unsafe:document.querySelectorAll('script,img,iframe,object').length,overflow:document.documentElement.scrollWidth>innerWidth}''', 'args': []})
-            assert '性能诊断报告' in state['text'] and 'C# 源码定位报告' in state['text']
+            assert '性能诊断报告' in state['text'] and ('C# 源码定位报告' in state['text'] or 'Unity 工程性能定位报告' in state['text'])
             assert state['tables'] and state['code'] and state['unsafe'] == 0 and not state['overflow']
             (output / 'html-reading.png').write_bytes(base64.b64decode(request('GET', prefix + '/screenshot')))
             pdf = base64.b64decode(request('POST', prefix + '/print', {'background': True, 'page': {'width': 21, 'height': 29.7}, 'margin': {'top': 1.5, 'bottom': 1.5, 'left': 1.5, 'right': 1.5}}))

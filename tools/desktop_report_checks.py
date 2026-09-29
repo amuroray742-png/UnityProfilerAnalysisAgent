@@ -1,18 +1,28 @@
 """Public fixture report/source workflow on the release desktop. Calls the selected real Agent."""
 import base64
+import json
 import time
 from desktop_memory_ui import prepare_workload
 
 
 def run_report_checks(js, request, root, output, report, agent_id):
     public_input = root / 'src-tauri/tests/fixtures/isolated-peak.json'
-    source_root = root / 'src-tauri/tests/fixtures/source-project'
+    source_root = root / '.cache/unity-project-public'
+    assert (source_root / '.upaa-public-fixture').is_file()
+    capture = json.loads(public_input.read_text(encoding='utf-8'))
+    for frame in capture['frames']:
+        for thread in frame['threads']:
+            for sample in thread['samples']:
+                if sample['marker_name'] == 'Update': sample['marker_name'] = 'AllocationWork.Update'
+                elif sample['marker_name'] == 'Work': sample['marker_name'] = 'Unmapped.Native'
+    public_input = output / 'public-project-peak.json'
+    public_input.write_text(json.dumps(capture), encoding='utf-8')
     prepare_workload(js, request, public_input)
     def click(selector, using='css selector'):
         node = request('POST', '/element', {'using': using, 'value': selector})
         request('POST', '/element/' + node['element-6066-11e4-a52e-4f735466cecf'] + '/click', {})
     def button(label): click(f'//button[normalize-space(.)="{label}"]', 'xpath')
-    def wait(script, timeout=420):
+    def wait(script, timeout=960):
         deadline = time.monotonic() + timeout
         while not js(script):
             error = js('return document.querySelector(".error-banner")?.innerText')
@@ -22,16 +32,21 @@ def run_report_checks(js, request, root, output, report, agent_id):
     click('.dropzone')
     wait('return document.body.innerText.includes("已就绪，等待 AI 诊断")', 30)
     click(f'.agent-selector select option[value="{agent_id}"]')
+    print('Starting real Agent performance diagnosis', flush=True)
     button('开始 AI 诊断')
     wait('return document.body.innerText.includes("AI 诊断中")', 15)
-    wait('return !![...document.querySelectorAll("button")].find(e=>e.textContent==="开始源码定位")')
+    wait('return !![...document.querySelectorAll("button")].find(e=>e.textContent==="开始工程联合定位")')
     assert js('return document.querySelectorAll(".diagnosis-content").length') >= 1
+    (output / 'performance-answer.txt').write_text(js('return document.querySelector(".diagnosis-content").innerText'), encoding='utf-8')
     js('window.__memoryInput=arguments[0]', str(source_root))
     button('选择目录')
-    wait('return document.querySelector("input[aria-label=源码目录]").value===window.__memoryInput', 5)
-    button('开始源码定位')
+    wait('return document.querySelector(`input[aria-label="Unity 工程目录"]`).value===window.__memoryInput', 5)
+    print('Starting real Agent Unity project diagnosis', flush=True)
+    button('开始工程联合定位')
     wait('return document.body.innerText.includes("AI 诊断中")', 20)
     wait('return document.querySelectorAll(".diagnosis-content").length===2 && document.body.innerText.includes("诊断完成")')
+    (output / 'project-answer.txt').write_text(js('return document.querySelectorAll(".diagnosis-content")[1].innerText'), encoding='utf-8')
+    print('Project answer completed; checking exports', flush=True)
     js('document.querySelectorAll(".diagnosis-content")[1].scrollIntoView()')
     (output / 'source-report.png').write_bytes(base64.b64decode(request('GET', '/screenshot')))
     # Only save dialog responses are replaced; export goes through the production command.
@@ -55,24 +70,37 @@ def run_report_checks(js, request, root, output, report, agent_id):
         click(f'select[aria-label=导出报告范围] option[value={scope}]')
         target = output / (scope + '.md')
         js('window.__reportSave=arguments[0]', str(target.resolve()))
-        button('导出报告')
+        button('导出定位报告' if scope == 'source' else '导出报告')
         wait('return document.body.innerText.includes("报告已导出")', 10)
         text = target.read_text(encoding='utf-8')
-        title = '# 性能诊断报告' if scope == 'performance' else '# C# 源码定位报告'
+        title = '# 性能诊断报告' if scope == 'performance' else '# Unity 工程性能定位报告'
         assert text.startswith(title)
     click('select[aria-label=导出报告范围] option[value=combined]')
     for fmt, suffix in [('markdown','md'),('html','html')]:
         target = output / ('combined.' + suffix)
         js('window.__reportSave=arguments[0]', str(target.resolve()))
         click(f'select[aria-label=导出格式] option[value={fmt}]')
-        button('导出报告')
+        button('合并导出')
         wait('return document.body.innerText.includes("报告已导出")', 10)
         text = target.read_text(encoding='utf-8')
-        assert '性能诊断报告' in text and 'C# 源码定位报告' in text and '覆盖率' in text
+        assert '性能诊断报告' in text and 'Unity 工程性能定位报告' in text and '覆盖率' in text
         assert 'AllocationWork' in text or 'OtherWork' in text
         if fmt == 'html': assert "default-src 'none'" in text and '@media print' in text and '<script' not in text
-    report['checks'].append('public real Agent: first report retained, directory picker, C# source follow-up, separate/combined exports, Markdown/HTML, save cancellation, failed write and retry')
+    final = (output / 'source.md').read_text(encoding='utf-8')
+    context = json.loads(final.split('## 工程采集范围与证据状态')[1].split('```json\n')[1].split('```')[0])
+    assert context['editorAssetsRead'] > 0, 'real Agent must query Editor asset evidence'
+    assert 'AllocationWork.cs' in final and 'Public.prefab' in final
+    # Retry against a different, unopened public project. Cancel after offline status is visible.
+    js('window.__memoryInput=arguments[0]', str(root / 'src-tauri/tests/fixtures/unity-project'))
+    button('选择目录'); button('开始工程联合定位')
+    wait('return document.body.innerText.includes("不可用，仅离线定位")', 30)
+    wait('return !![...document.querySelectorAll("button")].find(e=>e.textContent==="取消")', 20)
+    button('取消')
+    wait('return !document.body.innerText.includes("AI 诊断中")', 15)
+    assert '性能诊断报告' in js('return document.body.innerText')
+    report['checks'].append('offline Editor fallback, change-project retry, cancellation preserves first report')
+    report['checks'].append('public real Agent: first report retained, directory picker, Unity project follow-up, separate/combined exports, Markdown/HTML, save cancellation, failed write and retry')
     report['sourceOutputPublic'] = True
     button('重置')
     wait('return !!document.querySelector(".dropzone")', 5)
-    assert '源码定位报告' not in js('return document.body.innerText')
+    assert 'Unity 工程性能定位报告' not in js('return document.body.innerText')

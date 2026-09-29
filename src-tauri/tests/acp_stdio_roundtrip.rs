@@ -39,6 +39,7 @@ async fn launch_public_input(
     let handle = acp_client::start_diagnose(
         preset,
         DiagnoseRequest {
+        project: None,
             source: None,
             parent_report: None,
             file_id: "fixture".into(),

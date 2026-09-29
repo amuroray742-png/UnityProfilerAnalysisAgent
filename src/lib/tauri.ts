@@ -82,3 +82,7 @@ export const cancelSourcePreparation = (fileId: string) => invoke<void>('cancel_
 export const diagnoseSource = (fileId: string, agentId: string, parentReportId: string, scopeId: string) => invoke<{ sessionId: string }>('diagnose_source', { fileId, agentId, parentReportId, scopeId });
 export const exportReports = (fileId: string, reportIds: string[], format: 'markdown' | 'html', path: string) => invoke<void>('export_reports', { fileId, reportIds, format, path });
 export const renderReportMarkdown = (text: string) => invoke<string>('render_report_markdown', { text });
+
+export const prepareProject = (fileId: string, root: string) => invoke<import('../types').ProjectInfo>('prepare_project', { fileId, root });
+export const projectEditorStatus = (fileId: string, scopeId: string) => invoke<import('../types').EditorStatus>('project_editor_status', { fileId, scopeId });
+export const diagnoseProject = (fileId: string, agentId: string, parentReportId: string, scopeId: string) => invoke<{ sessionId: string }>('diagnose_project', { fileId, agentId, parentReportId, scopeId });

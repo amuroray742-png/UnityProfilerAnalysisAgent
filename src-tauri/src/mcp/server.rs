@@ -42,6 +42,12 @@ impl ServerHandler for ProfilerServer {
                     .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
             tools.extend(source_tools);
         }
+        if self.store.project().await.is_some() {
+            let project_tools: Vec<Tool> =
+                serde_json::from_value(crate::project::schemas()["tools"].clone())
+                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+            tools.extend(project_tools);
+        }
         for tool in &mut tools {
             tool.annotations = Some(serde_json::from_value(json!({"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false})).unwrap());
         }

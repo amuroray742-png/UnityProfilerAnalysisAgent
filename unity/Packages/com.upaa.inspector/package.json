@@ -1,0 +1,8 @@
+{
+  "name": "com.upaa.inspector",
+  "version": "0.1.0",
+  "displayName": "UPAA Read-only Project Inspector",
+  "description": "Bounded read-only resource evidence for Unity Profiler Analysis Agent.",
+  "unity": "6000.3",
+  "dependencies": { "com.unity.pipeline": "0.6.0-exp.1", "com.unity.nuget.newtonsoft-json": "3.2.2" }
+}

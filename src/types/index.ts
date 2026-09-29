@@ -122,8 +122,12 @@ export interface HierarchyPage {
   nextStart: number | null; maxDepth: number; depthTruncated: boolean;
 }
 export interface DiagnosisReport {
- reportId: string; fileId: string; sessionId: string; stage: 'performance' | 'source'; parentReportId: string | null;
+ reportId: string; fileId: string; sessionId: string; stage: 'performance' | 'source' | 'project'; parentReportId: string | null;
  text: string; createdAt: string; agentId: string; status: 'running' | 'completed' | 'cancelled' | 'failed' | 'incomplete';
+ projectContext?: unknown;
  incompleteReason: string | null; fileName: string; unityVersion: string | null; frameCount: number; coverage: string;
 }
 export interface SourceInfo { scopeId: string; fileId: string; root: string; fileCount: number; warnings: string[] }
+
+export interface EditorStatus { details?: Record<string, unknown> | null; status: string; reason: string | null; unityVersion: string | null; targetPlatform: string | null; sampledAt: string | null }
+export interface ProjectInfo { scopeId: string; fileId: string; root: string; unityVersion: string; fileCount: number; warnings: string[]; editor: EditorStatus }

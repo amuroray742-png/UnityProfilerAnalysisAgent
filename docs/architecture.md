@@ -82,3 +82,25 @@ MCP：rmcp 服务 → 会话专属本机认证通道 → 应用 --mcp-bridge →
 源码准备在可取消的阻塞任务中生成范围 ID、相对路径索引和文件哈希；源码 ACP 会话从后端取得完整首轮报告，并使用带该范围的独立 `MetricsStore`。只有这类会话的 MCP 工具列表包含源码查询工具。文件读取重新验证范围及哈希，Agent 临时工作目录不变。
 
 UI 和导出 HTML 使用同一个 `reports::render_markdown`，Markdown 导出保留正文。导出先校验录制和父子报告关系，再在阻塞任务中写同目录临时文件并替换目标。重置/切换录制释放报告、取消准备和源码范围，不删除用户已导出的文件。详细接口与限制见[报告与源码指南](reports-and-source.md)。
+
+
+## Unity 工程联合定位
+
+`project::ProjectScope` 在 `spawn_blocking` 中流式索引工程内文本，记录 GUID/fileID、原始 PPtr、哈希及覆盖缺口；`project::files` 负责规范路径、Windows 文件句柄和编码/大小校验。C# 旧范围不变。
+
+```mermaid
+flowchart LR
+  P[完整首轮报告] --> A[新工程 ACP 会话]
+  I[工程根目录] --> S[ProjectScope 离线索引]
+  A --> M[性能工具与 project_* MCP]
+  M --> S
+  M --> B[Rust 固定命令白名单]
+  B --> C[Unity CLI 显式工程路径]
+  C --> E[Editor-only UPAA 插件]
+  E --> V[身份 协议 指纹 平台校验]
+  V --> M
+  A --> R[后端工程报告与实际采集范围]
+  R --> X[单独或合并 MD/安全 HTML 导出]
+```
+
+只在工程会话注册六个 `project_*` 工具；AI 无权使用 CLI 的通用执行命令。Editor 插件按对象分批读取，取消是协作式批次检查，不可中断同步 Unity API。只采集已加载场景，外部包只返回当前工程解析的资源摘要。Editor 不可用仍可离线定位，报告明确缺少相关证据；不同平台/版本及变化的资源指纹拒绝混用。完整限制见[工程定位指南](project-diagnosis.md)。

@@ -35,3 +35,21 @@ it('accepts a directory picker and only allows source analysis after a complete 
  expect(screen.queryByText('开始源码定位')).not.toBeInTheDocument();
  expect(renderReportMarkdown).toBeDefined();
 });
+it('selects a Unity project, explains offline coverage and exports the final report directly', async () => {
+ const startProject = vi.fn(async () => {}); const current = state();
+ current.reports[1] = { ...current.reports[1], stage: 'project', reportId: 'project', projectContext: { editor: { status: 'unavailable' } } };
+ current.activeStage = 'project'; current.sessionId = 'project';
+ current.projectInfo = { scopeId: 'scope', fileId: 'f', root: 'C:/PublicProject', unityVersion: '6000.3', fileCount: 15, warnings: ['反向引用索引不完整'], editor: { status: 'unavailable', reason: '未安装插件', unityVersion: null, targetPlatform: null, sampledAt: null } };
+ render(<ReportPanel state={current} startSource={vi.fn()} startProject={startProject} />);
+ expect(screen.getByText(/不可用，仅离线定位：未安装插件/)).toBeInTheDocument();
+ expect(screen.getByText('反向引用索引不完整')).toBeInTheDocument();
+ vi.mocked(open).mockResolvedValue('C:/PublicProject'); fireEvent.click(screen.getByText('选择目录'));
+ await waitFor(() => expect(screen.getByLabelText('Unity 工程目录')).toHaveValue('C:/PublicProject'));
+ fireEvent.click(screen.getByText('开始工程联合定位')); expect(startProject).toHaveBeenCalledWith('C:/PublicProject');
+ vi.mocked(save).mockResolvedValue('C:/project.md'); fireEvent.click(screen.getByText('导出定位报告'));
+ await waitFor(() => expect(exportReports).toHaveBeenCalledWith('f', ['project'], 'markdown', 'C:/project.md'));
+ await waitFor(() => expect(screen.getByText('合并导出')).not.toBeDisabled());
+ fireEvent.change(screen.getByLabelText('定位报告格式'), { target: { value: 'html' } });
+ vi.mocked(save).mockResolvedValue('C:/combined.html'); fireEvent.click(screen.getByText('合并导出'));
+ await waitFor(() => expect(exportReports).toHaveBeenCalledWith('f', ['performance', 'project'], 'html', 'C:/combined.html'));
+});

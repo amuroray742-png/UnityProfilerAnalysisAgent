@@ -73,6 +73,16 @@ pub async fn dispatch(
     name: &str,
     arguments: Value,
 ) -> Result<Value, McpToolError> {
+    if name.starts_with("project_") {
+        let scope = store
+            .project()
+            .await
+            .ok_or_else(|| McpToolError::BadArg("当前会话未授权工程范围".into()))?;
+        return scope
+            .query(name, arguments)
+            .await
+            .map_err(McpToolError::BadArg);
+    }
     if name.starts_with("source_") {
         let scope = store
             .source()
