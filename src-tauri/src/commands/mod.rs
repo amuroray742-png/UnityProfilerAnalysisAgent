@@ -229,6 +229,52 @@ pub async fn cpu_hierarchy(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn frame_evidence(
+    file_id: String,
+    frame_index: usize,
+    start: usize,
+    limit: usize,
+    counters_only: bool,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, CommandError> {
+    let source = state
+        .get_details(&file_id)
+        .await
+        .ok_or_else(|| CommandError::Other("没有原始帧数据".into()))?;
+    tokio::task::spawn_blocking(move || source.evidence(frame_index, start, limit, counters_only))
+        .await
+        .map_err(|e| CommandError::Other(e.to_string()))?
+        .map_err(|e| CommandError::Other(e.to_string()))
+}
+#[tauri::command(rename_all = "camelCase")]
+pub async fn compare_frames(
+    file_id: String,
+    frame_index: usize,
+    baseline_frame_index: usize,
+    thread_index: Option<usize>,
+    start: usize,
+    limit: usize,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, CommandError> {
+    let source = state
+        .get_details(&file_id)
+        .await
+        .ok_or_else(|| CommandError::Other("没有原始帧数据".into()))?;
+    tokio::task::spawn_blocking(move || {
+        source.compare(
+            frame_index,
+            baseline_frame_index,
+            thread_index,
+            start,
+            limit,
+        )
+    })
+    .await
+    .map_err(|e| CommandError::Other(e.to_string()))?
+    .map_err(|e| CommandError::Other(e.to_string()))
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn release_file(file_id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
     state.release_file(&file_id).await;
     Ok(())

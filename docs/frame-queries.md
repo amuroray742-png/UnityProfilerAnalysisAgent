@@ -44,3 +44,5 @@ Tauri 新增命令（原有命令名称和参数保持不变）：
 现有 `cpu.frameTimeline` 作为共享帧序列，新增 `gcAllocBytes: number | null`；字段位置保持兼容，值来自帧 GC 校验结果，独立于 CPU 是否可用。MCP `performance_frames` 的有界分页同步返回该字段，session summary 仍不复制完整时间线。Tauri 命令名称与参数不变。
 
 单帧 `info.renderCounters` 以原始计数 marker 名提供有效观测值；缺失键表示不可用，零值保留。时间线增加可空 `drawCalls` / `setPassCalls`，供高计数帧定位。渲染统计及测试范围见[渲染验收](rendering-validation.md)。
+
+2026-09-29：原始树新增 selfMs/selfReason，另有有界 metadata/Counter 与显式对照帧调用路径查询，见 [data 证据指南](data-evidence.md)。

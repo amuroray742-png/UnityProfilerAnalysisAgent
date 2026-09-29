@@ -50,6 +50,29 @@ struct Hotspots {
     #[serde(default = "hotspot_limit")]
     limit: usize,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Evidence {
+    frame_index: usize,
+    #[serde(default)]
+    start: usize,
+    #[serde(default = "hotspot_limit")]
+    limit: usize,
+    #[serde(default)]
+    counters_only: bool,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Compare {
+    frame_index: usize,
+    baseline_frame_index: usize,
+    #[serde(default)]
+    thread_index: Option<usize>,
+    #[serde(default)]
+    start: usize,
+    #[serde(default = "hotspot_limit")]
+    limit: usize,
+}
 fn hotspot_limit() -> usize {
     10
 }
@@ -126,6 +149,32 @@ pub async fn dispatch(
                 a.max_depth,
             )
             .await
+        }
+        "performance_frame_evidence" => {
+            let a: Evidence = args(arguments)?;
+            let source = store.query_source().await?;
+            tokio::task::spawn_blocking(move || {
+                source.evidence(a.frame_index, a.start, a.limit, a.counters_only)
+            })
+            .await
+            .map_err(|e| McpToolError::BadArg(e.to_string()))?
+            .map_err(McpToolError::from)
+        }
+        "performance_compare_frames" => {
+            let a: Compare = args(arguments)?;
+            let source = store.query_source().await?;
+            tokio::task::spawn_blocking(move || {
+                source.compare(
+                    a.frame_index,
+                    a.baseline_frame_index,
+                    a.thread_index,
+                    a.start,
+                    a.limit,
+                )
+            })
+            .await
+            .map_err(|e| McpToolError::BadArg(e.to_string()))?
+            .map_err(McpToolError::from)
         }
         "performance_analysis" => {
             let a: Analysis = args(arguments)?;

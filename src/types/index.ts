@@ -113,6 +113,7 @@ export interface DetailSample {
   name: string; categoryIndex: number | null; totalMs: number; startMs: number;
   rawStartNs: string | null; rawDurationNs: number | null;
   childrenCount: number; metadataCount: number; gcAllocBytes: number | null;
+  selfMs?: number | null; selfReason?: string | null; isCounter?: boolean;
 }
 export interface FramePage {
   info: FrameInfo; threadCount: number; threads: ThreadInfo[]; nextStart: number | null;
@@ -131,3 +132,13 @@ export interface SourceInfo { scopeId: string; fileId: string; root: string; fil
 
 export interface EditorStatus { details?: Record<string, unknown> | null; status: string; reason: string | null; unityVersion: string | null; targetPlatform: string | null; sampledAt: string | null }
 export interface ProjectInfo { scopeId: string; fileId: string; root: string; unityVersion: string; fileCount: number; warnings: string[]; editor: EditorStatus }
+
+export interface MetadataValue {
+ fieldIndex: number; definition: { descriptor: number; name: string; nameTruncated?: boolean } | null;
+ payloadType: number; byteLength: number; value: string | null; unit: string | null;
+ status: string; reason: string | null; rawHex: string; rawTruncated?: boolean;
+}
+export interface EvidenceRow { threadIndex: number; threadId: string; thread: string; sampleIndex: number; markerId: number; marker: string; isCounter: boolean; metadataCount: number; metadata: MetadataValue[]; metadataTruncated: boolean; metadataReason?: string | null }
+export interface EvidencePage { frameIndex: number; source: string; rows: EvidenceRow[]; total: number; nextStart: number | null; scope: string }
+export interface PathTotals { calls: number; inclusiveMs: number; selfMs: number | null; selfValidSamples: number; gcBytes: string | null }
+export interface ComparePage { frameIndex: number; baselineFrameIndex: number; thread: ThreadInfo; rows: { path: string[]; baseline: PathTotals; current: PathTotals; inclusiveDeltaMs: number; selfDeltaMs: number | null; gcDeltaBytes: string | null }[]; total: number; nextStart: number | null; interpretation: string }

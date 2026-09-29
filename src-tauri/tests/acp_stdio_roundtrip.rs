@@ -39,7 +39,7 @@ async fn launch_public_input(
     let handle = acp_client::start_diagnose(
         preset,
         DiagnoseRequest {
-        project: None,
+            project: None,
             source: None,
             parent_report: None,
             file_id: "fixture".into(),
@@ -305,6 +305,7 @@ async fn real_agent_investigates_isolated_cpu_and_gc_peak() {
     let result = tokio::time::timeout(Duration::from_secs(330), async {
         let mut analysis = false;
         let mut peak_tree = false;
+        let mut comparison = false;
         let mut cpu_hotspots = false;
         let mut gc_hotspots = false;
         let mut text = String::new();
@@ -317,6 +318,7 @@ async fn real_agent_investigates_isolated_cpu_and_gc_peak() {
                     cpu_hotspots |= tool == "performance_hotspots" && args["area"] == "cpu";
                     gc_hotspots |= tool == "performance_hotspots" && args["area"] == "gc";
                     peak_tree |= tool == "performance_cpu_hierarchy" && args["frame_index"] == 160;
+                    comparison |= tool == "performance_compare_frames" && args["frame_index"] == 160;
                 }
                 DiagnoseEvent::Chunk { text: chunk } => text.push_str(&chunk),
                 event if event.terminal() => terminal = Some(event),
@@ -327,6 +329,7 @@ async fn real_agent_investigates_isolated_cpu_and_gc_peak() {
         assert!(analysis, "Agent must query heuristic screening");
         assert!(cpu_hotspots && gc_hotspots,"Agent must investigate both hotspot rankings");
         assert!(peak_tree, "Agent must inspect the original peak frame, not only summary numbers");
+        assert!(comparison, "Agent must compare original call paths against an explicit baseline");
         assert!(!text.is_empty());
         assert!(matches!(terminal,Some(DiagnoseEvent::Finished{stop_reason,..}) if stop_reason=="end_turn"));
     }).await;

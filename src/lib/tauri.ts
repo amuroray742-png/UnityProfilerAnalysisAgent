@@ -86,3 +86,10 @@ export const renderReportMarkdown = (text: string) => invoke<string>('render_rep
 export const prepareProject = (fileId: string, root: string) => invoke<import('../types').ProjectInfo>('prepare_project', { fileId, root });
 export const projectEditorStatus = (fileId: string, scopeId: string) => invoke<import('../types').EditorStatus>('project_editor_status', { fileId, scopeId });
 export const diagnoseProject = (fileId: string, agentId: string, parentReportId: string, scopeId: string) => invoke<{ sessionId: string }>('diagnose_project', { fileId, agentId, parentReportId, scopeId });
+
+export function getFrameEvidence(fileId: string, frameIndex: number, start = 0, countersOnly = false): Promise<import('../types').EvidencePage> {
+ return invoke('frame_evidence', { fileId, frameIndex, start, limit: 20, countersOnly });
+}
+export function compareFrames(fileId: string, frameIndex: number, baselineFrameIndex: number, threadIndex: number | null, start = 0): Promise<import('../types').ComparePage> {
+ return invoke('compare_frames', { fileId, frameIndex, baselineFrameIndex, threadIndex, start, limit: 20 });
+}

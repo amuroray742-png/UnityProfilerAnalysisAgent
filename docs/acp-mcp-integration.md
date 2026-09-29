@@ -110,3 +110,5 @@ codex-acp --version
 
 
 工程定位另用 `project` 报告阶段和独立 ACP 会话，注册 `project_summary`、`project_files`、`project_search`、`project_read`、`project_asset`、`project_references`；旧 `source_*` 仍仅限 C#。普通诊断不能访问工程工具，工程会话不能访问终端或 Unity eval。Editor 查询由 Rust 白名单桥接，固定协议与路径校验，取消仅针对对应 requestId。整体工程诊断 900 秒上限，单次 Editor 查询另有短超时；详情见[工程定位指南](project-diagnosis.md)。
+
+2026-09-29 增量：新增两个性能证据工具，默认性能工具总数为 9；Self 通过原始完整树区间校验后提供，不通过全局热点相减推断。详见 [data 证据查询](data-evidence.md)。前述“未提供 Self”为历史状态。

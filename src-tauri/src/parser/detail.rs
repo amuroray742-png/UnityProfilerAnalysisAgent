@@ -106,6 +106,14 @@ pub struct DetailSample {
     pub metadata_count: usize,
     /// None for non-allocation samples or invalid/missing GC metadata.
     pub gc_alloc_bytes: Option<u64>,
+    #[serde(default)]
+    pub self_ms: Option<f64>,
+    #[serde(default)]
+    pub self_reason: Option<String>,
+    #[serde(default)]
+    pub is_counter: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub metadata: Vec<super::data::unity6_structured::MetadataValue>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -164,6 +172,10 @@ impl DetailFrame {
                         children_count: s.children as usize,
                         metadata_count: s.metadata_count as usize,
                         gc_alloc_bytes: s.gc_bytes,
+                        self_ms: None,
+                        self_reason: None,
+                        is_counter: s.is_counter,
+                        metadata: s.metadata,
                     });
                 }
                 DetailThread { info, samples }
@@ -427,11 +439,15 @@ impl FrameStore {
             }
             main[0].info.thread_index
         };
-        let thread = frame
+        let mut thread = frame
             .threads
             .into_iter()
             .find(|t| t.info.thread_index == chosen)
             .ok_or(QueryError::ThreadNotFound(chosen))?;
+        super::evidence::calculate_self(&mut thread.samples);
+        for sample in &mut thread.samples {
+            sample.metadata.clear();
+        }
         if start > thread.samples.len() {
             return Err(QueryError::BadArg("样本起点超出范围".into()));
         }

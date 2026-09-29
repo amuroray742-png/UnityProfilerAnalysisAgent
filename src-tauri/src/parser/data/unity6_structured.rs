@@ -17,6 +17,7 @@ use crate::parser::{AllocSite, Frame, FrameQuality, ParseError, Sample as Summar
 pub struct Decoder {
     markers: Arc<HashMap<u32, MarkerInfo>>,
     counter_markers: Arc<HashSet<u32>>,
+    metadata_definitions: Arc<HashMap<u32, Vec<MetadataDefinition>>>,
 }
 
 pub const RENDER_COUNTER_NAMES: [&str; 5] = [
@@ -34,6 +35,147 @@ impl Decoder {
             self.markers.len(),
             self.markers.values().map(|m| m.name.len()).sum(),
         )
+    }
+}
+
+/// Capture metadata definitions, independent of the host Editor's enums.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetadataDefinition {
+    pub descriptor: u32,
+    pub name: String,
+    pub name_truncated: bool,
+}
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetadataValue {
+    pub field_index: usize,
+    pub definition: Option<MetadataDefinition>,
+    pub payload_type: u32,
+    pub byte_length: usize,
+    pub value: Option<String>,
+    pub unit: Option<String>,
+    pub status: String,
+    pub reason: Option<String>,
+    pub raw_hex: String,
+    pub raw_truncated: bool,
+}
+fn metadata_value(
+    r: &mut Reader<'_>,
+    tag: u32,
+    size: usize,
+    field_index: usize,
+    definition: Option<MetadataDefinition>,
+    _gc: bool,
+) -> MetadataValue {
+    let start = r.pos() as usize;
+    let bytes = &r.inner.get_ref()[start..start + size];
+    // Decimal strings preserve UInt64 precision. GC's compact payload is
+    // independently validated against the indexed allocation record.
+    let value = match (tag, size) {
+        (1, 4) => Some(i32::from_le_bytes(bytes.try_into().unwrap()).to_string()),
+        (2, 4) => Some(i32::from_le_bytes(bytes.try_into().unwrap()).to_string()),
+        (3, 4) => Some(u32::from_le_bytes(bytes.try_into().unwrap()).to_string()),
+        (4, 8) => Some(i64::from_le_bytes(bytes.try_into().unwrap()).to_string()),
+        (5, 8) => Some(u64::from_le_bytes(bytes.try_into().unwrap()).to_string()),
+        (6, 4) => {
+            let v = f32::from_le_bytes(bytes.try_into().unwrap());
+            v.is_finite().then(|| v.to_string())
+        }
+        (7, 8) => {
+            let v = f64::from_le_bytes(bytes.try_into().unwrap());
+            v.is_finite().then(|| v.to_string())
+        }
+        (8, _) if size <= 512 => std::str::from_utf8(bytes)
+            .ok()
+            .filter(|s| {
+                !s.chars()
+                    .any(|c| c.is_control() && !['\n', '\r', '\t'].contains(&c))
+            })
+            .map(str::to_owned),
+        (9, _) if size <= 512 && size % 2 == 0 => String::from_utf16(
+            &bytes
+                .chunks_exact(2)
+                .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                .collect::<Vec<_>>(),
+        )
+        .ok(),
+        _ => None,
+    };
+    let unit = definition
+        .as_ref()
+        .and_then(|d| match (d.descriptor >> 8) & 255 {
+            1 => Some("nanoseconds"),
+            2 => Some("bytes"),
+            3 => Some("count"),
+            4 => Some("percent"),
+            5 => Some("hertz"),
+            _ => None,
+        })
+        .map(str::to_owned);
+    let reason = value
+        .is_none()
+        .then(|| "尚未验证该 payload 类型/尺寸；保留原始字节，不作指标解释".to_owned());
+    let raw_hex = bytes.iter().take(64).map(|b| format!("{b:02x}")).collect();
+    r.skip(size);
+    MetadataValue {
+        field_index,
+        definition,
+        payload_type: tag,
+        byte_length: size,
+        status: if value.is_some() {
+            "available"
+        } else {
+            "unavailable"
+        }
+        .into(),
+        value,
+        unit,
+        reason,
+        raw_hex,
+        raw_truncated: size > 64,
+    }
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+    #[test]
+    fn values_preserve_precision_sign_units_and_unknown_bytes() {
+        let cases = [
+            (2, (-7i32).to_le_bytes().to_vec(), Some("-7")),
+            (3, u32::MAX.to_le_bytes().to_vec(), Some("4294967295")),
+            (4, (-9i64).to_le_bytes().to_vec(), Some("-9")),
+            (
+                5,
+                u64::MAX.to_le_bytes().to_vec(),
+                Some("18446744073709551615"),
+            ),
+            (6, f32::NAN.to_le_bytes().to_vec(), None),
+            (6, 1.5f32.to_le_bytes().to_vec(), Some("1.5")),
+            (7, 2.5f64.to_le_bytes().to_vec(), Some("2.5")),
+            (8, "资源".as_bytes().to_vec(), Some("资源")),
+            (8, vec![0, 1, 2, 3], None),
+            (88, vec![7; 80], None),
+        ];
+        for (tag, b, expected) in cases {
+            let v = metadata_value(
+                &mut Reader::new(&b),
+                tag,
+                b.len(),
+                0,
+                Some(MetadataDefinition {
+                    descriptor: 0x204,
+                    name: "Size".into(),
+                    name_truncated: false,
+                }),
+                false,
+            );
+            assert_eq!(v.value.as_deref(), expected);
+            assert_eq!(v.unit.as_deref(), Some("bytes"));
+            assert_eq!(v.raw_hex.len(), b.len().min(64) * 2);
+            assert_eq!(v.reason.is_some(), expected.is_none());
+        }
     }
 }
 
@@ -69,6 +211,7 @@ pub struct Sample {
     pub gc_bytes: Option<u64>,
     pub counter_value: Option<u64>,
     pub is_counter: bool,
+    pub metadata: Vec<MetadataValue>,
 }
 
 impl Sample {
@@ -107,7 +250,7 @@ impl DecodedFrame {
                 let reason = if values.is_empty() {
                     "未记录该计数"
                 } else if values.iter().any(Option::is_none) {
-                    "计数 metadata 缺失或未识别"
+                    "计数 metadata 缺失、未识别或为负值"
                 } else {
                     "同帧多个观测值冲突"
                 };
@@ -284,10 +427,17 @@ impl Decoder {
             if !updated.insert(id) {
                 return Err(error(&r, "duplicate marker definition"));
             }
+            let mut definitions = Vec::with_capacity(metadata);
             for _ in 0..metadata {
-                r.u32();
-                r.str();
+                let descriptor = r.u32();
+                let name = r.str();
+                definitions.push(MetadataDefinition {
+                    descriptor,
+                    name_truncated: name.chars().count() > 128,
+                    name: name.chars().take(128).collect(),
+                });
             }
+            Arc::make_mut(&mut self.metadata_definitions).insert(id, definitions);
             check(&r, "marker definition")?;
             Arc::make_mut(&mut self.markers).insert(
                 id,
@@ -307,9 +457,10 @@ impl Decoder {
         }
         let mut threads = Vec::with_capacity(n);
         let mut ids = HashSet::new();
+        let mut metadata_budget = 100_000usize;
         for index in 0..n {
             let thread = self
-                .thread(&mut r)
+                .thread(&mut r, &mut metadata_budget)
                 .map_err(|e| ParseError::Other(format!("thread[{index}]: {e}")))?;
             if !ids.insert(thread.id) {
                 return Err(error(&r, "duplicate thread ID"));
@@ -324,7 +475,11 @@ impl Decoder {
         })
     }
 
-    fn thread(&self, r: &mut Reader<'_>) -> Result<Thread, ParseError> {
+    fn thread(
+        &self,
+        r: &mut Reader<'_>,
+        metadata_budget: &mut usize,
+    ) -> Result<Thread, ParseError> {
         let id = r.u64();
         let group = r.str();
         let name = r.str();
@@ -369,6 +524,7 @@ impl Decoder {
                 gc_bytes: None,
                 counter_value: None,
                 is_counter: self.counter_markers.contains(&marker_id),
+                metadata: Vec::new(),
             });
             if children > 0 {
                 stack.push((index, children));
@@ -441,9 +597,10 @@ impl Decoder {
                 return Err(error(r, "duplicate general metadata"));
             }
             sample.metadata_count = fields as u32;
-            for _ in 0..fields {
+            for field_index in 0..fields {
                 let tag = r.u32();
                 let size = count(r, 1, r.remaining(), "metadata payload")?;
+                let payload_start = r.pos();
                 if let Some(gc_bytes) = sample.gc_bytes {
                     if fields != 1 || tag != 3 || size != 4 {
                         return Err(error(r, "unsupported GC metadata payload"));
@@ -459,13 +616,30 @@ impl Decoder {
                             return Err(error(r, "render counter metadata duplicate/arity"));
                         }
                         sample.counter_value = match (tag, size) {
-                            (2, 4) => Some(r.u32() as u64),
-                            (4, 8) => Some(r.u64()),
+                            (2, 4) => u64::try_from(r.i32()).ok(),
+                            (4, 8) => u64::try_from(r.i64()).ok(),
                             _ => return Err(error(r, "unsupported render counter metadata type")),
                         };
                     } else {
                         r.skip(size);
                     }
+                }
+                if field_index < 16 && *metadata_budget > 0 {
+                    *metadata_budget -= 1;
+                    r.inner.set_position(payload_start);
+                    let definition = self
+                        .metadata_definitions
+                        .get(&sample.marker_id)
+                        .and_then(|d| d.get(field_index))
+                        .cloned();
+                    sample.metadata.push(metadata_value(
+                        r,
+                        tag,
+                        size,
+                        field_index,
+                        definition,
+                        sample.gc_bytes.is_some(),
+                    ));
                 }
                 r.skip((4 - size % 4) % 4);
                 check(r, "metadata payload")?;

@@ -26,7 +26,7 @@ async function query() {
   await request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'acp-fixture', version: '1' } });
   notify('notifications/initialized', {});
   const list = await request('tools/list', {});
-  if (list.tools.length !== (mode === 'project' ? 13 : mode === 'source' ? 10 : 7)) throw new Error('tools missing');
+  if (list.tools.length !== (mode === 'project' ? 15 : mode === 'source' ? 12 : 9)) throw new Error('tools missing');
   const data = await request('tools/call', { name: 'performance_cpu_hierarchy', arguments: { frame_index: 10, start: 2, limit: 2, max_depth: 64 } });
   if (data.structuredContent.samples[0].gcAllocBytes !== 20) throw new Error('wrong data');
   if (mode === 'project') {

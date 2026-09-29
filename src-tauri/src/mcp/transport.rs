@@ -83,7 +83,7 @@ pub fn metric_semantics() -> Value {
         },
         "cpu": {
             "sampleTime": "inclusive：包含子样本；可信 dump/data 主路径的帧 CPU 取唯一主线程根样本，其他 JSON 显式值或估算必须结合 source 和 quality 解读",
-            "exclusiveTime": "未提供已验证的 self/exclusive CPU 耗时；不能把父子样本相加或用热点列表相减来推断剩余、未解释或未采样 CPU 时间",
+            "exclusiveTime": "原始树 selfMs 为父区间减直属子样本耗时，仅在区间包含、不重叠和数量校验通过时提供；null 时查看 selfReason。Self 包含等待与未细分工作，不是纯 CPU。不可通过全局热点相减推断 Self。",
             "frameTimeDifference": "录制帧时间与主线程根样本耗时是不同观测口径；相减不能证明差额属于未采样 CPU、GPU、等待或任何具体工作。需要独立线程、时间区间和相关计数证据，不要给差额归因",
             "coverage": "调用树无分页/深度截断仅代表已导出样本读取完整，不证明所有运行工作都被 instrumentation 覆盖"
         },

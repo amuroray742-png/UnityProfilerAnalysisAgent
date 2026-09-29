@@ -48,5 +48,21 @@ def run_render_checks(js, request, input_path, reference_path, output, report):
     (output / 'rendering.png').write_bytes(base64.b64decode(request('GET', '/screenshot')))
     report['renderCards'] = counters
     report['checks'].append('render page five counter p95/max/coverage match local Editor reference; GPU/SRP not fabricated')
+    click('//button[normalize-space(.)="CPU"]', 'xpath')
+    deadline = time.monotonic() + 30
+    while not js('return !!document.querySelector("table[aria-label=调用树样本]")'):
+        if time.monotonic() > deadline: raise TimeoutError('CPU tree')
+        time.sleep(.1)
+    click('details > summary')
+    click('//button[normalize-space(.)="读取帧证据"]', 'xpath')
+    deadline = time.monotonic() + 30
+    while not js('return !!document.querySelector("table[aria-label=帧证据]")'):
+        if time.monotonic() > deadline: raise TimeoutError('Counter evidence')
+        time.sleep(.1)
+    assert js('return document.querySelectorAll("table[aria-label=帧证据] tbody tr").length') > 0
+    assert 'bytes' in js('return document.querySelector("table[aria-label=帧证据]").innerText')
+    js('document.querySelector("table[aria-label=帧证据]").scrollIntoView({block:"start"})')
+    (output / 'counter-evidence.png').write_bytes(base64.b64decode(request('GET', '/screenshot')))
+    report['checks'].append('real capture metadata/counters shown with typed byte units through release UI')
     click('//button[normalize-space(.)="重置"]', 'xpath')
     assert js('return !!document.querySelector(".dropzone")')
