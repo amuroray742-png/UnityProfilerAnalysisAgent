@@ -12,6 +12,8 @@
 
 报告正文由后端保存，上限 2 MiB UTF-8，超限停止并明确标记不完整；有正文的取消/失败报告仍可导出。重置、切换录制和退出释放内存报告，已导出的文件保留。
 
+报告还会按需提供[具体 Marker 补点方案](marker-guidance.md#第二阶段确认具体补点方案)：依据实际读取的代码说明文件、行号、同步范围、固定名称和重录指标，并修正或撤回首轮不合适的方向。由程序手动添加，不自动修改工程；代码位置能确认不代表热点因果已证实。
+
 ## 首次安装 Editor 插件
 
 先安装 Unity CLI。在**目标工程**的 Package Manager 中使用 “Install package from disk”，选择仓库的 [`unity/Packages/com.upaa.inspector/package.json`](../unity/Packages/com.upaa.inspector/package.json)，等待 Pipeline 及 Newtonsoft 依赖解析和编译完成。不会自动安装到用户工程、修改 manifest 或升级 Editor。适配版本和限制见[插件说明](../unity/Packages/com.upaa.inspector/README.md)。

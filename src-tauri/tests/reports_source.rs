@@ -448,6 +448,16 @@ async fn source_session_uses_new_protocol_context_and_preserves_parent_report() 
 #[tokio::test]
 #[ignore = "requires UPAA_REAL_AGENT; sends only public synthetic profiler data and public C# fixtures"]
 async fn real_agent_locates_public_csharp_with_evidence() {
+    real_localization(false).await;
+}
+
+#[tokio::test]
+#[ignore = "requires UPAA_REAL_AGENT; public offline Unity project and synthetic capture only"]
+async fn real_agent_project_marker_guidance() {
+    real_localization(true).await;
+}
+
+async fn real_localization(project_mode: bool) {
     use unity_profiler_analysis_agent_lib::acp_client::{
         self, agents::AgentPreset, DiagnoseRequest,
     };
@@ -469,24 +479,25 @@ async fn real_agent_locates_public_csharp_with_evidence() {
     let profile = parser::json::parse(&data, "public-source-peak.json", data.len() as u64)
         .await
         .unwrap();
+    let fixture_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(if project_mode { "tests/fixtures/unity-project" } else { "tests/fixtures/source-project" });
+    let project = if project_mode { Some(Arc::new(unity_profiler_analysis_agent_lib::project::ProjectScope::prepare("public".into(),fixture_root.clone(),Arc::new(AtomicBool::new(false))).unwrap())) } else { None };
     let source = Arc::new(
         SourceScope::prepare(
             "public".into(),
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/source-project"),
+            fixture_root.clone(),
             Arc::new(AtomicBool::new(false)),
         )
         .unwrap(),
     );
     let before = std::fs::read(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/source-project/Assets/AllocationWork.cs"),
+        fixture_root.join("Assets/AllocationWork.cs"),
     )
     .unwrap();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let handle=acp_client::start_diagnose(AgentPreset{id:"real-source-test".into(),label:"real".into(),command,args:vec![],description:"public C# validation".into(),available:true},DiagnoseRequest{file_id:"public".into(),agent_id:"real-source-test".into(),snapshot:extractor::extract(&profile),details:profile.details,bridge_executable:std::env::var_os("UPAA_TEST_APP_EXE").map(PathBuf::from).unwrap_or_else(||bridge_executable()),event_tx:tx,source:Some(source),project:None,parent_report:Some("首轮诊断：公开合成录制帧 160 有 40 ms 主线程峰值与 8 MiB GC 分配，需要定位 AllocationWork.Update 的分配；Unmapped.Native 也需核对。帧 100 可作普通帧参考。不能从名称推断具体源码或版本一致性。".into())}).await.unwrap();
+    let handle=acp_client::start_diagnose(AgentPreset{id:"real-source-test".into(),label:"real".into(),command,args:vec![],description:"public C# validation".into(),available:true},DiagnoseRequest{file_id:"public".into(),agent_id:"real-source-test".into(),snapshot:extractor::extract(&profile),details:profile.details,bridge_executable:std::env::var_os("UPAA_TEST_APP_EXE").map(PathBuf::from).unwrap_or_else(||bridge_executable()),event_tx:tx,source:if project_mode { None } else { Some(source) },project,parent_report:Some("首轮诊断：公开合成录制帧 160 有 40 ms 主线程峰值与 8 MiB GC 分配，需要定位 AllocationWork.Update 的分配；Unmapped.Native 也需核对。帧 100 可作普通帧参考。不能从名称推断具体源码或版本一致性。首轮补点方向：Update 尚未细分的业务区间可考虑 Perf.Update.BusinessScope，待源码确认；请核对是否重复采样或应撤回。".into())}).await.unwrap();
     let result=tokio::time::timeout(std::time::Duration::from_secs(420),async{
   let mut read=false;let mut performance=false;let mut text=String::new();let mut terminal=None;
-  while let Some(event)=rx.recv().await{match event{DiagnoseEvent::McpCall{tool,args}=>{println!("MCP {tool} {args}");read|=tool=="source_read" && args["path"]=="Assets/AllocationWork.cs";performance|=tool.starts_with("performance_");},DiagnoseEvent::Chunk{text:t}=>text.push_str(&t),e if e.terminal()=>terminal=Some(e),_=>{}}}
+  while let Some(event)=rx.recv().await{match event{DiagnoseEvent::McpCall{tool,args}=>{println!("MCP {tool} {args}");read|=tool==if project_mode { "project_read" } else { "source_read" } && args["path"]=="Assets/AllocationWork.cs";performance|=tool.starts_with("performance_");},DiagnoseEvent::Chunk{text:t}=>text.push_str(&t),e if e.terminal()=>terminal=Some(e),_=>{}}}
   println!("PUBLIC_SOURCE_ANSWER_BEGIN\n{text}\nPUBLIC_SOURCE_ANSWER_END\n{terminal:?}");
   assert!(read && performance,"must read original code and performance evidence");assert!(text.contains("AllocationWork.cs"));assert!(matches!(terminal,Some(DiagnoseEvent::Finished{stop_reason,..}) if stop_reason=="end_turn"));
  }).await;
@@ -495,8 +506,7 @@ async fn real_agent_locates_public_csharp_with_evidence() {
     assert_eq!(
         before,
         std::fs::read(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures/source-project/Assets/AllocationWork.cs")
+            fixture_root.join("Assets/AllocationWork.cs")
         )
         .unwrap()
     );

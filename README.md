@@ -8,7 +8,7 @@ CPU/GC 与诊断之后，新增 Unity 6000.3.9f1 渲染计数对照与展示，�
 
 ## 文档导航
 
-- [手动 Marker 补点建议](docs/marker-guidance.md)：首轮诊断指出哪里值得增加采样，由程序确认位置并手动添加后重新录制。
+- [手动 Marker 补点建议](docs/marker-guidance.md)：首轮指出采样缺口，第二阶段根据实际代码给出具体补点方案，由程序手动添加后重新录制。
 
 - [Flow 解码与跨线程查询](docs/flow-decoding.md)：事件 ID、样本关联、相邻帧查询和证据边界。
 
