@@ -196,6 +196,16 @@ pub struct Thread {
     pub gc_bytes: u64,
     /// Counted sample indices between GC and general metadata; meaning unknown.
     pub post_gc_sample_indices: Vec<u32>,
+    pub flow_events: Vec<FlowEvent>,
+}
+
+/// Unity 6000.3 thread-tail records, verified against RawFrameDataView.GetFlowEvents.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowEvent {
+    pub sample_index: i32,
+    pub flow_id: u32,
+    pub event_type: u32,
 }
 
 #[derive(Debug)]
@@ -660,7 +670,20 @@ impl Decoder {
         r.u32();
         r.u32();
         let trailing_count = count(r, 12, 1_000_000, "thread trailing records")?;
-        r.skip(trailing_count * 12);
+        let mut flow_events = Vec::with_capacity(trailing_count);
+        for _ in 0..trailing_count {
+            let sample_index = r.i32();
+            let flow_id = r.u32();
+            let event_type = r.u32();
+            if sample_index < -1 || sample_index >= n as i32 {
+                return Err(error(r, "Flow sample index boundary"));
+            }
+            flow_events.push(FlowEvent {
+                sample_index,
+                flow_id,
+                event_type,
+            });
+        }
         check(r, "thread end")?;
         let gc_bytes = samples.iter().filter_map(|s| s.gc_bytes).sum();
         Ok(Thread {
@@ -670,6 +693,7 @@ impl Decoder {
             samples,
             gc_bytes,
             post_gc_sample_indices,
+            flow_events,
         })
     }
 }

@@ -26,7 +26,7 @@ Counter 是样本观测，不自动转换成帧总量或全录制内存曲线。
 
 保留现有命令。新增 Tauri `frame_evidence(fileId, frameIndex, start, limit, countersOnly)` 和 `compare_frames(fileId, frameIndex, baselineFrameIndex, threadIndex, start, limit)`。
 
-MCP 增加 `performance_frame_evidence`、`performance_compare_frames`，参数使用 snake_case；均受录制会话范围限制。普通诊断现有 9 个性能工具。调用树增加 `selfMs` / `selfReason` / `isCounter`，通用 payload 单独分页读取，避免把树响应膨胀。首轮、源码和工程定位提示词均接入新证据。报告原有导出保持兼容。
+MCP 增加 `performance_frame_evidence`、`performance_compare_frames`，参数使用 snake_case；均受录制会话范围限制。加入 [Flow 查询](flow-decoding.md)后普通诊断现有 10 个性能工具。调用树增加 `selfMs` / `selfReason` / `isCounter`，通用 payload 单独分页读取，避免把树响应膨胀。首轮、源码和工程定位提示词均接入新证据。报告原有导出保持兼容。
 
 ## Editor 对照与复现
 
@@ -45,6 +45,6 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked --offline --test frame_
 
 本机两份录制对照：6000.3.9f1（391868208 字节）7 帧、30860 样本、9893 metadata 字段通过（首次约 34.85 秒）；6000.3.23f1（445696628 字节）7 帧、31929 样本、10876 字段通过（约 44.04 秒）。耗时包括生产导入和反复分页解码，不是性能或内存上限承诺。
 
-6000.3.9f1 全文件 Editor 盘点：2000 帧、277215 个帧内线程条目、9800223 样本、3170479 个带 metadata 样本、121 种 Counter、1147984 个 Flow 事件；完整调用栈样本为 0。该结论只针对这份录制。Flow 的二进制解码仍是后续工作，不能把未知辅助记录直接认作 Flow。GPU 仍未新增可信指标。
+6000.3.9f1 全文件 Editor 盘点：2000 帧、277215 个帧内线程条目、9800223 样本、3170479 个带 metadata 样本、121 种 Counter、1147984 个 Flow 事件；完整调用栈样本为 0。该结论只针对这份录制。后续已实现 [Flow 解码](flow-decoding.md)，确认位于线程末尾记录，样本表后另一段辅助记录仍未知。GPU 仍未新增可信指标。
 
 最终自动验证：Rust 112 项、前端 31 项、Python 8 项通过；Release 构建和 18 项协议回归通过；公开/私有桌面检查分别 11/7 组通过（替代原生选择框返回值）。真实 Codex 公开样例报告见 [记录](evidence/public-data-evidence-report.md)。

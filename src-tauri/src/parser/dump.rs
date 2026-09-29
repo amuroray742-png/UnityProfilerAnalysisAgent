@@ -286,7 +286,11 @@ pub fn parse(bytes: &[u8], name: &str, size: u64) -> Result<ParsedProfile, Parse
                     metadata: vec![],
                 });
             }
-            threads.push(DetailThread { info, samples });
+            threads.push(DetailThread {
+                info,
+                samples,
+                flow_events: None,
+            });
         }
         details.write_frame(&DetailFrame {
             info: FrameInfo::summary(&frame),

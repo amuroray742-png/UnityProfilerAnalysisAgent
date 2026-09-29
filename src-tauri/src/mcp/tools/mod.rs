@@ -63,6 +63,17 @@ struct Evidence {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct Flows {
+    frame_index: usize,
+    end_frame_index: Option<usize>,
+    flow_id: Option<u32>,
+    #[serde(default)]
+    start: usize,
+    #[serde(default = "hotspot_limit")]
+    limit: usize,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Compare {
     frame_index: usize,
     baseline_frame_index: usize,
@@ -149,6 +160,22 @@ pub async fn dispatch(
                 a.max_depth,
             )
             .await
+        }
+        "performance_flow_events" => {
+            let a: Flows = args(arguments)?;
+            let source = store.query_source().await?;
+            tokio::task::spawn_blocking(move || {
+                source.flows(
+                    a.frame_index,
+                    a.end_frame_index.unwrap_or(a.frame_index),
+                    a.flow_id,
+                    a.start,
+                    a.limit,
+                )
+            })
+            .await
+            .map_err(|e| McpToolError::BadArg(e.to_string()))?
+            .map_err(McpToolError::from)
         }
         "performance_frame_evidence" => {
             let a: Evidence = args(arguments)?;

@@ -120,6 +120,8 @@ pub struct DetailSample {
 pub struct DetailThread {
     pub info: ThreadInfo,
     pub samples: Vec<DetailSample>,
+    #[serde(default)]
+    pub flow_events: Option<Vec<super::data::unity6_structured::FlowEvent>>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DetailFrame {
@@ -178,7 +180,11 @@ impl DetailFrame {
                         metadata: s.metadata,
                     });
                 }
-                DetailThread { info, samples }
+                DetailThread {
+                    info,
+                    samples,
+                    flow_events: Some(t.flow_events),
+                }
             })
             .collect();
         Self { info, threads }

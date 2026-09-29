@@ -142,3 +142,18 @@ export interface EvidenceRow { threadIndex: number; threadId: string; thread: st
 export interface EvidencePage { frameIndex: number; source: string; rows: EvidenceRow[]; total: number; nextStart: number | null; scope: string }
 export interface PathTotals { calls: number; inclusiveMs: number; selfMs: number | null; selfValidSamples: number; gcBytes: string | null }
 export interface ComparePage { frameIndex: number; baselineFrameIndex: number; thread: ThreadInfo; rows: { path: string[]; baseline: PathTotals; current: PathTotals; inclusiveDeltaMs: number; selfDeltaMs: number | null; gcDeltaBytes: string | null }[]; total: number; nextStart: number | null; interpretation: string }
+export interface FlowPage {
+  available: boolean;
+  frameIndex: number;
+  endFrameIndex: number;
+  flowId: number | null;
+  total: number;
+  nextStart: number | null;
+  unknownTypes: number;
+  beginCount: number;
+  endCount: number;
+  scope: string;
+  rows: { frameIndex: number; threadIndex: number; threadId: string; thread: string; eventIndex: number;
+    sampleIndex: number; flowId: number; eventType: number; kind: string; marker: string | null;
+    sampleStartNs: string | null; sampleDurationMs: number | null }[];
+}
