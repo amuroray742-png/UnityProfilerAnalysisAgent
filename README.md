@@ -1,6 +1,6 @@
 # Unity Profiler Analysis Agent
 
-当前主流程：**新建／打开优化项目 → 导入 A → 一键诊断并定位 → 选择修改 AI → 开始优化 → 手动重录 B → 对比 → 接受或回退 → 下一轮**。每轮报告和修改记录自动存档，重开项目可继续。参见[简单使用说明](docs/optimization-loop.md)。
+当前主流程：**新建／打开优化项目 → 导入 A → 一键诊断并定位 → 选择修改 AI → 开始优化 → 手动重录 B → 对比 → 接受或回退 → 下一轮**。每轮报告和修改记录自动存档，重开项目可继续。首次使用请看[非程序员简单使用说明](docs/quick-start.md)，更多细节见[完整使用说明](docs/optimization-loop.md)。
 
 面向 Unity Profiler 离线录制的本地桌面分析原型，使用 Tauri 2、React / TypeScript 和 Rust。首要目标是 **Windows 上的 Unity 6000.3 可信分析**，通过 ACP Agent 与 MCP 数据查询辅助诊断。
 
