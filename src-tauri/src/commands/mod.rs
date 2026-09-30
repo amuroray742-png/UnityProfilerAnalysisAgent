@@ -11,7 +11,7 @@ use crate::acp_client::agents::{builtin_presets, probe_available, AgentPreset};
 
 use crate::extractor::{extract, MetricsSnapshot};
 use crate::parser;
-use crate::parser::data::parse_path_with_progress;
+use crate::parser::data::parse_path_cancel;
 use crate::state::{generate_file_id, AppState, UploadEntry};
 
 #[derive(Debug, Error)]
@@ -128,73 +128,136 @@ pub async fn analyze(
         .await
         .ok_or_else(|| CommandError::UnknownFileId(file_id.clone()))?;
 
-    if state.0.lock().await.reports.values().any(|r|r.file_id==file_id) {return Err(CommandError::Other("该录制已有报告，请重新导入后解析".into()));}
-    let hash_path=entry.file_path.clone();
-    let hash=tokio::task::spawn_blocking(move||crate::optimization::storage::file_hash(&hash_path,&std::sync::atomic::AtomicBool::new(false))).await.map_err(|e|CommandError::Other(e.to_string()))?.map_err(CommandError::Other)?;
-    let verify_path=entry.file_path.clone();
-    // 解析：根据扩展名分发；`.data` 走流式路径带进度
-    let file_ext = entry
-        .file_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-
-    let profile = if file_ext == "data" {
-        let app_for_progress = app.clone();
-        let file_id_for_progress = file_id.clone();
-        tokio::task::spawn_blocking(move || {
-            parse_path_with_progress(&entry.file_path, &mut |done, total| {
-                // 当前 frame 数 = done_bytes / avg_body_size（粗略估计）
-                // 简化：只发 done/total，让前端算百分比
-                let _ = app_for_progress.emit(
-                    "parse-progress",
-                    ParseProgress {
-                        file_id: file_id_for_progress.clone(),
-                        done_bytes: done,
-                        total_bytes: total,
-                        current_frame: 0, // parser 暂不报具体 frame index
-                    },
-                );
-            })
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let mut s = state.0.lock().await;
+        if s.parses.contains_key(&file_id) {
+            return Err(CommandError::Other("该录制正在解析".into()));
+        }
+        s.parses.insert(file_id.clone(), cancel.clone());
+    }
+    let result = async {
+        if state
+            .0
+            .lock()
+            .await
+            .reports
+            .values()
+            .any(|r| r.file_id == file_id)
+        {
+            return Err(CommandError::Other(
+                "该录制已有报告，请重新导入后解析".into(),
+            ));
+        }
+        let hash_cancel = cancel.clone();
+        let hash_path = entry.file_path.clone();
+        let hash = tokio::task::spawn_blocking(move || {
+            crate::optimization::storage::file_hash(&hash_path, &hash_cancel)
         })
         .await
-        .map_err(|e| CommandError::Parse(e.to_string()))?
-        .map_err(|e| CommandError::Parse(e.to_string()))?
-    } else {
-        parser::parse_file(&entry.file_path)
+        .map_err(|e| CommandError::Other(e.to_string()))?
+        .map_err(CommandError::Other)?;
+        let verify_path = entry.file_path.clone();
+        // 解析：根据扩展名分发；`.data` 走流式路径带进度
+        let file_ext = entry
+            .file_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        let profile = if file_ext == "data" {
+            let app_for_progress = app.clone();
+            let file_id_for_progress = file_id.clone();
+            let parse_cancel = cancel.clone();
+            let progress_cancel = cancel.clone();
+            tokio::task::spawn_blocking(move || {
+                parse_path_cancel(
+                    &entry.file_path,
+                    &mut |done, total| {
+                        // 当前 frame 数 = done_bytes / avg_body_size（粗略估计）
+                        // 简化：只发 done/total，让前端算百分比
+                        if progress_cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                            return;
+                        }
+                        let _ = app_for_progress.emit(
+                            "parse-progress",
+                            ParseProgress {
+                                file_id: file_id_for_progress.clone(),
+                                done_bytes: done,
+                                total_bytes: total,
+                                current_frame: 0, // parser 暂不报具体 frame index
+                            },
+                        );
+                    },
+                    parse_cancel,
+                )
+            })
             .await
             .map_err(|e| CommandError::Parse(e.to_string()))?
-    };
+            .map_err(|e| CommandError::Parse(e.to_string()))?
+        } else {
+            parser::parse_file_cancel(&entry.file_path, |_, _| {}, cancel.clone())
+                .await
+                .map_err(|e| CommandError::Parse(e.to_string()))?
+        };
 
-    let after=tokio::task::spawn_blocking(move||crate::optimization::storage::file_hash(&verify_path,&std::sync::atomic::AtomicBool::new(false))).await.map_err(|e|CommandError::Other(e.to_string()))?.map_err(CommandError::Other)?;
-    if hash!=after{return Err(CommandError::Other("解析期间录制发生变化，请重试".into()));}
-    let total_bytes = profile.meta.file_size_bytes;
-    let frame_count = profile.frames.len();
-    let details = profile.details.clone();
-    let snapshot = tokio::task::spawn_blocking(move || extract(&profile))
+        let verify_cancel = cancel.clone();
+        let after = tokio::task::spawn_blocking(move || {
+            crate::optimization::storage::file_hash(&verify_path, &verify_cancel)
+        })
         .await
-        .map_err(|e| CommandError::Other(e.to_string()))?;
-    if !state
-        .put_analysis(file_id.clone(), snapshot.clone(), details)
-        .await
-    {
-        return Err(CommandError::UnknownFileId(file_id));
+        .map_err(|e| CommandError::Other(e.to_string()))?
+        .map_err(CommandError::Other)?;
+        if hash != after {
+            return Err(CommandError::Other("解析期间录制发生变化，请重试".into()));
+        }
+        let total_bytes = profile.meta.file_size_bytes;
+        let frame_count = profile.frames.len();
+        let details = profile.details.clone();
+        let snapshot = tokio::task::spawn_blocking(move || extract(&profile))
+            .await
+            .map_err(|e| CommandError::Other(e.to_string()))?;
+        {
+            let mut s = state.0.lock().await;
+            if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(CommandError::Parse("解析已取消".into()));
+            }
+            if !s.uploads.contains_key(&file_id) {
+                return Err(CommandError::UnknownFileId(file_id.clone()));
+            }
+            s.snapshots.insert(file_id.clone(), snapshot.clone());
+            s.details.remove(&file_id);
+            if let Some(details) = details {
+                s.details.insert(file_id.clone(), details);
+            }
+            s.capture_hashes.insert(file_id.clone(), hash);
+            s.parses.remove(&file_id);
+        }
+        // 完成后发 100% 事件
+        let _ = app.emit(
+            "parse-progress",
+            ParseProgress {
+                file_id: file_id.clone(),
+                done_bytes: total_bytes,
+                total_bytes,
+                current_frame: frame_count,
+            },
+        );
+
+        Ok(snapshot)
     }
-
-    {let mut s=state.0.lock().await;if s.uploads.contains_key(&file_id){s.capture_hashes.insert(file_id.clone(),hash);}else{return Err(CommandError::UnknownFileId(file_id));}}
-    // 完成后发 100% 事件
-    let _ = app.emit(
-        "parse-progress",
-        ParseProgress {
-            file_id: file_id.clone(),
-            done_bytes: total_bytes,
-            total_bytes,
-            current_frame: frame_count,
-        },
-    );
-
-    Ok(snapshot)
+    .await;
+    {
+        let mut s = state.0.lock().await;
+        if s.parses
+            .get(&file_id)
+            .is_some_and(|p| Arc::ptr_eq(p, &cancel))
+        {
+            s.parses.remove(&file_id);
+        }
+    }
+    result
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -632,4 +695,47 @@ pub async fn diagnose_project(
         Some((parent_report_id, scope_id)),
     )
     .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn memory_series(
+    file_id: String,
+    name: String,
+    start: usize,
+    limit: usize,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, CommandError> {
+    let inner = state.0.lock().await;
+    let s = inner
+        .snapshots
+        .get(&file_id)
+        .ok_or_else(|| CommandError::UnknownFileId(file_id.clone()))?;
+    s.memory
+        .page(&name, start, limit)
+        .map_err(|e| CommandError::Other(e.to_string()))
+}
+#[tauri::command(rename_all = "camelCase")]
+pub async fn frame_sections(
+    file_id: String,
+    frame_index: usize,
+    start: usize,
+    limit: usize,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, CommandError> {
+    let source = state
+        .get_details(&file_id)
+        .await
+        .ok_or_else(|| CommandError::UnknownFileId(file_id))?;
+    tokio::task::spawn_blocking(move || source.sections(frame_index, start, limit))
+        .await
+        .map_err(|e| CommandError::Other(e.to_string()))?
+        .map_err(|e| CommandError::Other(e.to_string()))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn cancel_parse(file_id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    if let Some(flag) = state.0.lock().await.parses.get(&file_id) {
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    Ok(())
 }

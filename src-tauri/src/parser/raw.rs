@@ -82,6 +82,7 @@ pub async fn parse(
             file_size_bytes,
         },
         frames: vec![Frame {
+            memory: Default::default(),
             quality: super::FrameQuality {
                 estimated: true,
                 ..super::FrameQuality::missing("raw-estimate")

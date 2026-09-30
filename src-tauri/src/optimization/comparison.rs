@@ -12,7 +12,7 @@ pub const METRICS: [&str; 8] = [
     "Vertices Count",
 ];
 fn value(f: &Frame, key: &str) -> Option<f64> {
-    if f.quality.estimated {
+    if f.quality.estimated || f.quality.version_verified == Some(false) {
         return None;
     }
     match key {
@@ -35,7 +35,7 @@ fn stats(frames: &[&Frame], key: &str) -> Value {
             Some(values[((values.len() - 1) as f64 * q).round() as usize])
         }
     };
-    json!({"validFrames":values.len(),"totalFrames":frames.len(),"p50":p(0.5),"p95":p(0.95),"p99":p(0.99),"max":values.last(),"mean":(!values.is_empty()).then(||values.iter().sum::<f64>()/values.len() as f64),"estimatedExcluded":frames.iter().filter(|f|f.quality.estimated).count()})
+    json!({"validFrames":values.len(),"totalFrames":frames.len(),"p50":p(0.5),"p95":p(0.95),"p99":p(0.99),"max":values.last(),"mean":(!values.is_empty()).then(||values.iter().sum::<f64>()/values.len() as f64),"unverifiedExcluded":frames.iter().filter(|f|f.quality.version_verified==Some(false)).count(),"estimatedExcluded":frames.iter().filter(|f|f.quality.estimated).count()})
 }
 pub fn compare(
     a: &Capture,
@@ -229,10 +229,10 @@ pub async fn paths(
         let total=indices.len();let mut output:BTreeMap<String,Acc>=BTreeMap::new();
         for index in indices {
             let frame=store.load(index).map_err(|e|e.to_string())?;let mut seen=std::collections::HashSet::new();
-            for thread in frame.threads {
+            for thread in &frame.threads {
                 let role=if thread.info.name.starts_with("Job.Worker") {"Job.Worker".to_string()}else{thread.info.name.clone()};
                 let mut stack:Vec<String>=vec![];
-                for sample in thread.samples {
+                for sample in &thread.samples {
                     if sample.depth>64{return Err("调用树超过 64 层，停止完整路径关联".into());}
                     if sample.depth>stack.len(){return Err("样本路径结构不完整".into());}
                     stack.truncate(sample.depth);stack.push(sample.name.clone());

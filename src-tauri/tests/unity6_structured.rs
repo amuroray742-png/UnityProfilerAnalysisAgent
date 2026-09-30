@@ -216,6 +216,7 @@ async fn production_file_and_bytes_paths_share_capture_state_and_reject_truncati
     for definitions in [true, false] {
         let mut body = body(definitions);
         if !definitions {
+            body[..4].copy_from_slice(&1u32.to_le_bytes());
             body[8..16].copy_from_slice(&1_250_000u64.to_le_bytes());
         }
         for value in [0x20220328, body.len() as u32, 6000, 3, 23, 2, 1] {
@@ -693,15 +694,33 @@ fn additional_capture_structure_only() {
 }
 
 #[tokio::test]
-async fn file_progress_reports_actual_monotonic_bytes(){
-    use std::sync::{Arc,Mutex};
+async fn file_progress_reports_actual_monotonic_bytes() {
+    use std::sync::{Arc, Mutex};
     use unity_profiler_analysis_agent_lib::parser;
-    let path=std::env::temp_dir().join(format!("upaa-progress-{}.data",uuid::Uuid::new_v4()));
-    let mut bytes=Vec::new();
-    for _ in 0..512{let b=body(true);for v in [0x20220328,b.len() as u32,6000,3,23,2,1]{word(&mut bytes,v);}bytes.extend(b);}
-    word(&mut bytes,0xDEADFEED);std::fs::write(&path,&bytes).unwrap();
-    let progress=Arc::new(Mutex::new(Vec::new()));let out=progress.clone();
-    let parsed=parser::parse_file_with_progress(&path,move|done,total|out.lock().unwrap().push((done,total))).await;
-    std::fs::remove_file(path).unwrap();assert_eq!(parsed.unwrap().frames.len(),512);
-    let rows=progress.lock().unwrap();assert_eq!(rows.len(),512);assert!(rows.windows(2).all(|w|w[0].0<w[1].0));assert!(rows.iter().all(|(done,total)|*total==bytes.len() as u64&&done<=total));
+    let path = std::env::temp_dir().join(format!("upaa-progress-{}.data", uuid::Uuid::new_v4()));
+    let mut bytes = Vec::new();
+    for _ in 0..512 {
+        let b = body(true);
+        for v in [0x20220328, b.len() as u32, 6000, 3, 23, 2, 1] {
+            word(&mut bytes, v);
+        }
+        bytes.extend(b);
+    }
+    word(&mut bytes, 0xDEADFEED);
+    std::fs::write(&path, &bytes).unwrap();
+    let progress = Arc::new(Mutex::new(Vec::new()));
+    let out = progress.clone();
+    let parsed = parser::parse_file_with_progress(&path, move |done, total| {
+        out.lock().unwrap().push((done, total))
+    })
+    .await;
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(parsed.unwrap().frames.len(), 512);
+    let rows = progress.lock().unwrap();
+    assert_eq!(rows.len(), 513);
+    assert_eq!(rows.last().unwrap().0, bytes.len() as u64);
+    assert!(rows.windows(2).all(|w| w[0].0 < w[1].0));
+    assert!(rows
+        .iter()
+        .all(|(done, total)| *total == bytes.len() as u64 && done <= total));
 }

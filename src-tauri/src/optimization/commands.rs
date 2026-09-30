@@ -325,8 +325,12 @@ pub async fn optimization_command(
         }));
     }
     if matches!(action, Action::Cancel) {
+        // Serialize cancellation with the final capture commit. Once committed,
+        // cancellation applies to subsequent work rather than undoing that import.
+        {let _commit=w.data.lock().unwrap();
         w.cancel_epoch.fetch_add(1, Ordering::SeqCst);
-        w.cancelled.store(true, Ordering::SeqCst);
+        w.cancelled.store(true, Ordering::SeqCst);}
+
         if let Some(h) = state.active.lock().await.clone() {
             h.cancel().await;
         }
@@ -1054,4 +1058,21 @@ pub async fn optimization_command(
         _ => return Err("操作无效".into()),
     }
     Ok(view(&w))
+}
+
+#[cfg(test)]
+mod import_tests {
+ use super::*;
+ #[tokio::test]
+ async fn cancelled_observed_capture_does_not_replace_workspace_and_can_retry(){
+  let base=std::env::temp_dir().join(format!("upaa-observed-{}",id()));let root=base.join("project");let dir=base.join("records");
+  for part in ["Assets","Packages","ProjectSettings"]{std::fs::create_dir_all(root.join(part)).unwrap();}std::fs::create_dir_all(&dir).unwrap();
+  let w=Arc::new(Workspace::create(dir,root,"test".into()).unwrap());let before=serde_json::to_value(&*w.data.lock().unwrap()).unwrap();
+  let path=base.join("capture.json");std::fs::write(&path,r#"{"frames":[{"cpuMs":1,"gcAllocBytes":136}]}"#).unwrap();
+  let progress=observation::ParseProgress::new(w.clone(),"".into(),id());w.cancelled.store(true,Ordering::SeqCst);
+  let result=capture_observed(path.clone(),Conditions::default(),Some(progress.clone())).await;assert!(result.is_err());progress.fail("cancelled");assert_eq!(w.observation.lock().unwrap().progress.as_ref().unwrap()["status"],"cancelled");assert_eq!(serde_json::to_value(&*w.data.lock().unwrap()).unwrap(),before);
+  w.cancelled.store(false,Ordering::SeqCst);let capture=capture_observed(path,Conditions::default(),Some(progress)).await.unwrap();assert_eq!(capture.frames[0].gc_alloc_bytes,136);drop(w);
+  // Test-created absolute directory only.
+  std::fs::remove_dir_all(base).unwrap();
+ }
 }

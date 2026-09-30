@@ -215,6 +215,7 @@ export function useDiagnose() {
   const cancel = useCallback(async () => {
     const epoch = inputEpoch.current;
     const run = reportEpoch.current;
+    if (state.phase === 'analyzing' || state.phase === 'uploading') {releaseInput();setState(s=>({...s,phase:'idle',upload:null,snapshot:null}));return;}
     if (state.phase === 'preparing' && state.upload) {
       const preparation = ++prepareEpoch.current;
       try { await cancelSourcePreparation(state.upload.fileId); if (epoch === inputEpoch.current && preparation === prepareEpoch.current) setState(s => ({ ...s, phase: 'done' })); }

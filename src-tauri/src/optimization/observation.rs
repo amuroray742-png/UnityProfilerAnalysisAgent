@@ -240,6 +240,7 @@ impl ParseProgress {
         status: &str,
         reason: Option<String>,
     ) {
+        if status=="running" && self.workspace.cancelled.load(std::sync::atomic::Ordering::SeqCst){return;}
         let mut last = self.last.lock().unwrap();
         let mut obs = self.workspace.observation.lock().unwrap();
         let same = obs.progress.as_ref().is_some_and(|v| {
@@ -271,7 +272,21 @@ impl ParseProgress {
             .and_then(|v| v["stage"].as_str())
             .unwrap_or("verify")
             .to_owned();
-        self.update(&stage, None, None, "failed", Some(error.into()));
+        self.update(
+            &stage,
+            None,
+            None,
+            if self
+                .workspace
+                .cancelled
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                "cancelled"
+            } else {
+                "failed"
+            },
+            Some(error.into()),
+        );
     }
     pub async fn hash(&self, path: PathBuf) -> Result<String, String> {
         let p = self.clone();
@@ -285,6 +300,8 @@ impl ParseProgress {
             let mut done = 0;
             p.update("verify", Some(0), Some(total), "running", None);
             loop {
+                crate::parser::data::cancelled(&p.workspace.cancelled)
+                    .map_err(|e| e.to_string())?;
                 let n = f.read(&mut b).map_err(|e| e.to_string())?;
                 if n == 0 {
                     break;
@@ -301,9 +318,19 @@ impl ParseProgress {
     pub async fn parse(&self, path: PathBuf) -> Result<crate::parser::ParsedProfile, String> {
         self.update("parse", None, None, "running", None);
         let p = self.clone();
-        let parsed = crate::parser::parse_file_with_progress(&path, move |done, total| {
-            p.update("parse", Some(done), Some(total), "running", None)
-        })
+        let parsed = crate::parser::parse_file_cancel(
+            &path,
+            move |done, total| {
+                if !p
+                    .workspace
+                    .cancelled
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    p.update("parse", Some(done), Some(total), "running", None)
+                }
+            },
+            self.workspace.cancelled.clone(),
+        )
         .await
         .map_err(|e| e.to_string())?;
         if parsed.meta.format == crate::parser::ProfilerFormat::Data {

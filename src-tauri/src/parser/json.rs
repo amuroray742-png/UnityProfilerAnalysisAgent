@@ -266,6 +266,7 @@ fn build_from_samples_v2(
     warnings.push("JSON 格式为扁平 sample 数组，按单帧聚合（精度有限）".to_string());
 
     let frame = Frame {
+        memory: Default::default(),
         quality: super::FrameQuality {
             duration: header.duration_ms.or(header.total_time_ms).is_some(),
             cpu: !samples.is_empty() && samples.iter().all(|s| s.total_ms.is_some()),
@@ -327,6 +328,7 @@ fn convert_frame(index: usize, jf: JsonFrame, _warnings: &mut Vec<String>) -> Fr
     }
 
     Frame {
+        memory: Default::default(),
         quality: super::FrameQuality {
             duration: jf.duration_ms.is_some(),
             cpu: jf.cpu_ms.is_some(),

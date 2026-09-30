@@ -175,3 +175,15 @@ it('preserves the complete first report when project diagnosis fails and rejects
   expect(hook.result.current.state.phase).toBe('error');
   expect(hook.result.current.state.streamedText).toBe('');
 });
+
+it('cancels an import by releasing its registered source and ignores late analysis', async () => {
+ let resolve!: (s:MetricsSnapshot)=>void;
+ vi.mocked(analyzeProfiler).mockImplementationOnce(()=>new Promise(r=>{resolve=r;}));
+ const {result}=renderHook(()=>useDiagnose());
+ act(()=>{void result.current.handleFile('recording.data');});
+ await waitFor(()=>expect(result.current.state.phase).toBe('analyzing'));
+ await act(async()=>{await result.current.cancel();});
+ expect(releaseProfiler).toHaveBeenCalledWith('a');
+ await act(async()=>{resolve({} as MetricsSnapshot);});
+ expect(result.current.state.phase).toBe('idle');expect(result.current.state.snapshot).toBeNull();
+});

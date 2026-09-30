@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { compareFrames, getFrameEvidence } from '../lib/tauri';
 import type { ComparePage, EvidencePage } from '../types';
+import { FrameSections } from './FrameSections';
 import { FlowEvents } from './FlowEvents';
 
 export function FrameEvidence({ fileId, frame, thread, frames }: {
@@ -29,6 +30,7 @@ export function FrameEvidence({ fileId, frame, thread, frames }: {
     finally { if (id === generation.current) setBusy(false); }
   }
   return <details><summary>帧证据与调用路径对比</summary>
+    <FrameSections key={`sections:${fileId}:${frame}`} fileId={fileId} frame={frame} />
     <FlowEvents key={`${fileId}:${frame}`} fileId={fileId} frame={frame} frames={frames} />
     <p>按需读取当前帧的全部已导出线程。整数以十进制字符串保留精度；未知类型只显示原始字节。对象 ID 不能直接对应当前 Editor 对象。</p>
     <label><input type="checkbox" checked={counters} disabled={busy} onChange={e => { setCounters(e.target.checked); setEvidence(null); }} />仅 Counter</label>{' '}

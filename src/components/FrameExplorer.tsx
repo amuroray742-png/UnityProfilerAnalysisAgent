@@ -3,8 +3,8 @@ import { getFrameDetails, getCpuHierarchy } from '../lib/tauri';
 import { FrameEvidence } from './FrameEvidence';
 import type { CpuMetrics, FramePage, HierarchyPage } from '../types';
 
-export function FrameExplorer({ fileId, frames, quality, mode = 'cpu' }: { fileId: string; frames: Array<Pick<CpuMetrics['frameTimeline'][number], 'frameIndex' | 'ms' | 'frameTimeMs' | 'gcAllocBytes'>>; quality: CpuMetrics['mainThreadMs']['quality']; mode?: 'cpu' | 'gc' }) {
-  const [frame, setFrame] = useState(frames[0]?.frameIndex ?? 0);
+export function FrameExplorer({ fileId, frames, quality, initialFrame, mode = 'cpu' }: { fileId: string; frames: Array<Pick<CpuMetrics['frameTimeline'][number], 'frameIndex' | 'ms' | 'frameTimeMs' | 'gcAllocBytes'>>; quality: CpuMetrics['mainThreadMs']['quality']; initialFrame?:number; mode?: 'cpu' | 'gc' }) {
+  const [frame, setFrame] = useState(initialFrame ?? frames[0]?.frameIndex ?? 0);
   const [thread, setThread] = useState<number | null>(null);
   const [depth, setDepth] = useState(8);
   const [threadStart, setThreadStart] = useState(0);
@@ -37,6 +37,7 @@ export function FrameExplorer({ fileId, frames, quality, mode = 'cpu' }: { fileI
   return <section className="section" aria-label="原始调用树">
     <h3>{isGc ? '高分配帧定位' : '慢帧定位'}</h3>
     <p>按{isGc ? 'GC 分配字节' : '主线程耗时'}降序显示最多 20 帧，可查看 {availableFrames.length}/{frames.length} 帧。{isGc ? 'GC 合计覆盖全部已导出线程；进入调用树后可切换线程核对分配。' : '录制帧时间单独展示，不用于主线程排序。'}</p>
+    {quality.status === 'unverified' && <p>版本待验证，观测不能用于确定性达标结论。</p>}
     {quality.status === 'estimated' && <p>{isGc ? 'GC 分配为估算值，不能据此确定分配问题。' : '主线程时间为估算值，不能据此确定 CPU 瓶颈。'}</p>}
     {quality.status === 'partial' && <p>仅对有{isGc ? '有效 GC 分配' : '主线程时间'}的帧排序，缺失帧不按零值处理。</p>}
     {slowFrames.length === 0 ? <p>{isGc ? '没有可用于排序的有效 GC 分配数据。' : '没有可用于慢帧排序的主线程时间。'}</p> : <div style={{ overflowX: 'auto' }}>

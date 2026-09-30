@@ -1,6 +1,6 @@
 //! Sequential Unity 6000.3 decoding. No offset search or reference dump input.
 //! Marker definitions are capture state and must survive empty per-frame tables.
-//! Unknown post-sample sections fail explicitly. The frame trailer is not decoded.
+//! Counted unknown sections and opaque frame trailers retain bounded byte evidence.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -15,6 +15,9 @@ use crate::parser::{AllocSite, Frame, FrameQuality, ParseError, Sample as Summar
 
 #[derive(Debug, Default, Clone)]
 pub struct Decoder {
+    legacy: bool,
+    verification: Option<bool>,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
     markers: Arc<HashMap<u32, MarkerInfo>>,
     counter_markers: Arc<HashSet<u32>>,
     metadata_definitions: Arc<HashMap<u32, Vec<MetadataDefinition>>>,
@@ -29,6 +32,26 @@ pub const RENDER_COUNTER_NAMES: [&str; 5] = [
 ];
 
 impl Decoder {
+    pub fn configured(
+        legacy: bool,
+        verified: bool,
+        cancel: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        Self {
+            legacy,
+            verification: Some(verified),
+            cancel,
+            ..Self::default()
+        }
+    }
+    pub fn checkpoint(&self) -> Self {
+        let mut copy = self.clone();
+        copy.cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        copy
+    }
+    pub fn verified(&self) -> bool {
+        self.verification.unwrap_or(true)
+    }
     pub(crate) fn marker_storage(&self) -> (usize, usize, usize) {
         (
             Arc::as_ptr(&self.markers) as usize,
@@ -179,8 +202,69 @@ mod metadata_tests {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpaqueSection {
+    pub name: String,
+    pub thread_index: Option<usize>,
+    pub offset: usize,
+    pub byte_length: usize,
+    pub count: Option<usize>,
+    pub raw_hex: String,
+    pub raw_truncated: bool,
+    pub semantic_status: String,
+}
+fn section(
+    r: &Reader<'_>,
+    start: usize,
+    name: &str,
+    thread_index: Option<usize>,
+    count: Option<usize>,
+) -> OpaqueSection {
+    let end = r.pos() as usize;
+    let bytes = &r.inner.get_ref()[start..end];
+    OpaqueSection {
+        name: name.into(),
+        thread_index,
+        offset: start,
+        byte_length: bytes.len(),
+        count,
+        raw_hex: bytes.iter().take(64).map(|b| format!("{b:02x}")).collect(),
+        raw_truncated: bytes.len() > 64,
+        semantic_status: "unknown".into(),
+    }
+}
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryObservation {
+    pub value: Option<String>,
+    pub reason: Option<String>,
+    pub sources: Vec<MemorySource>,
+    pub source_count: usize,
+}
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySource {
+    pub thread_id: String,
+    pub sample_index: usize,
+    pub marker_id: u32,
+}
+pub const MEMORY_COUNTER_NAMES: [&str; 8] = [
+    "Total Used Memory",
+    "Total Reserved Memory",
+    "GC Used Memory",
+    "GC Reserved Memory",
+    "Gfx Used Memory",
+    "Profiler Used Memory",
+    "Profiler Reserved Memory",
+    "System Used Memory",
+];
 #[derive(Debug)]
 pub struct DecodedFrame {
+    pub legacy: bool,
+    pub verified: bool,
+    pub skipped: bool,
+    pub sections: Vec<OpaqueSection>,
     pub header: FrameHeader,
     pub threads: Vec<Thread>,
     pub thread_section_offset: usize,
@@ -237,9 +321,86 @@ impl DecodedFrame {
     /// Adapt verified samples to the current summary contract. Keep the raw
     /// header/threads in DecodedFrame for structural queries and verification.
     pub fn summary(&self, index: usize) -> Frame {
-        let mut quality = FrameQuality::missing("unity6000.3-data-structured");
-        quality.gc = true;
-        quality.sites = true;
+        let mut quality = FrameQuality::missing(if self.legacy {
+            "unity2022.3-data-structured"
+        } else {
+            "unity6000.3-data-structured"
+        });
+        quality.version_verified = Some(self.verified);
+        if !self.verified {
+            quality
+                .reasons
+                .push("版本待验证；禁止确定性达标结论".into());
+        }
+        if self.skipped {
+            quality.source.push_str("-skipped");
+            quality
+                .reasons
+                .push("未采集帧：保留原始块位置，指标不可用".into());
+        }
+        let mut memory = std::collections::BTreeMap::new();
+        for name in MEMORY_COUNTER_NAMES {
+            let mut values = Vec::new();
+            let mut sources = Vec::new();
+            let mut reason = None;
+            for t in &self.threads {
+                for (sample_index, s) in
+                    t.samples.iter().enumerate().filter(|(_, s)| s.name == name)
+                {
+                    let value = if !s.is_counter {
+                        reason = Some("缺少 Counter 标志");
+                        None
+                    } else if s.metadata_count != 1 || s.metadata.len() != 1 {
+                        reason = Some("metadata 缺失或字段数量不符");
+                        None
+                    } else {
+                        let m = &s.metadata[0];
+                        if m.unit.as_deref() != Some("bytes") {
+                            reason = Some("单位不是 bytes");
+                            None
+                        } else if !matches!(m.payload_type, 2 | 3 | 4 | 5) {
+                            reason = Some("非整数内存 payload");
+                            None
+                        } else {
+                            let v = m.value.as_ref().and_then(|v| v.parse::<u64>().ok());
+                            if v.is_none() {
+                                reason = Some("负值或无效整数");
+                            }
+                            v
+                        }
+                    };
+                    values.push(value);
+                    if sources.len() < 16 {
+                        sources.push(MemorySource {
+                            thread_id: t.id.to_string(),
+                            sample_index,
+                            marker_id: s.marker_id,
+                        });
+                    }
+                }
+            }
+            let value = values
+                .first()
+                .copied()
+                .flatten()
+                .filter(|v| values.iter().all(|x| *x == Some(*v)));
+            if values.is_empty() {
+                reason = Some("未记录该 Counter");
+            } else if value.is_none() && reason.is_none() {
+                reason = Some("同帧观测冲突");
+            }
+            memory.insert(
+                name.into(),
+                MemoryObservation {
+                    value: value.map(|v| v.to_string()),
+                    reason: reason.map(str::to_owned),
+                    sources,
+                    source_count: values.len(),
+                },
+            );
+        }
+        quality.gc = !self.skipped;
+        quality.sites = !self.skipped;
         let mut render_counters = std::collections::BTreeMap::new();
         for counter in RENDER_COUNTER_NAMES {
             let values: Vec<_> = self
@@ -362,6 +523,7 @@ impl DecodedFrame {
             }
         }
         Frame {
+            memory,
             quality,
             index,
             duration_ms: 0.0,
@@ -379,7 +541,7 @@ impl DecodedFrame {
 
 fn error(r: &Reader<'_>, field: &str) -> ParseError {
     ParseError::Other(format!(
-        "Unity 6000.3 body offset {}: {}{}",
+        "counted .data body offset {}: {}{}",
         r.pos(),
         field,
         r.err().map(|e| format!(": {e}")).unwrap_or_default()
@@ -412,19 +574,34 @@ impl Decoder {
     pub fn decode(&mut self, body: &[u8]) -> Result<DecodedFrame, ParseError> {
         if body.len() < 32 || body[body.len() - 4..] != 0xAFAFAFAFu32.to_le_bytes() {
             return Err(ParseError::Truncated(
-                "Unity 6000.3 frame/end marker".into(),
+                "counted .data frame/end marker".into(),
             ));
         }
         let mut r = Reader::new(&body[..body.len() - 4]);
+        r.cancel = Some(self.cancel.clone());
         let header = read_frame_header(&mut r);
         if header.cpu_us < 0 || header.gpu_us < 0 {
             return Err(error(&r, "negative frame duration"));
+        }
+        super::cancelled(&self.cancel)?;
+        if self.legacy && header.gathered_data == 0 && header.cpu_us == 0 && body.len() == 32 {
+            return Ok(DecodedFrame {
+                header,
+                threads: vec![],
+                thread_section_offset: 28,
+                trailer_offset: 28,
+                legacy: true,
+                verified: false,
+                skipped: true,
+                sections: vec![],
+            });
         }
         read_stats(&mut r)?;
         check(&r, "stats")?;
         let n = count(&mut r, 16, 100_000, "marker definitions")?;
         let mut updated = HashSet::new();
         for _ in 0..n {
+            super::cancelled(&self.cancel)?;
             let id = r.u32();
             let name = r.str();
             let flags = r.u32();
@@ -468,20 +645,38 @@ impl Decoder {
         let mut threads = Vec::with_capacity(n);
         let mut ids = HashSet::new();
         let mut metadata_budget = 100_000usize;
+        let mut allocation_budget = 256usize * 1024 * 1024;
+        let mut sections = Vec::new();
         for index in 0..n {
             let thread = self
-                .thread(&mut r, &mut metadata_budget)
+                .thread(
+                    &mut r,
+                    &mut metadata_budget,
+                    index,
+                    &mut sections,
+                    &mut allocation_budget,
+                )
                 .map_err(|e| ParseError::Other(format!("thread[{index}]: {e}")))?;
             if !ids.insert(thread.id) {
                 return Err(error(&r, "duplicate thread ID"));
             }
             threads.push(thread);
         }
+        let trailer_offset = r.pos() as usize;
+        if r.remaining() > 0 {
+            let n = r.remaining();
+            r.skip(n);
+            sections.push(section(&r, trailer_offset, "frame trailer", None, None));
+        }
         Ok(DecodedFrame {
+            legacy: self.legacy,
+            verified: self.verified(),
+            skipped: false,
+            sections,
             header,
             threads,
             thread_section_offset,
-            trailer_offset: r.pos() as usize,
+            trailer_offset,
         })
     }
 
@@ -489,14 +684,26 @@ impl Decoder {
         &self,
         r: &mut Reader<'_>,
         metadata_budget: &mut usize,
+        thread_index: usize,
+        sections: &mut Vec<OpaqueSection>,
+        allocation_budget: &mut usize,
     ) -> Result<Thread, ParseError> {
         let id = r.u64();
         let group = r.str();
         let name = r.str();
         let n = count(r, 20, 1_000_000, "samples")?;
+        let cost = n
+            .checked_mul(std::mem::size_of::<Sample>() + 32)
+            .ok_or_else(|| error(r, "sample allocation overflow"))?;
+        *allocation_budget = allocation_budget
+            .checked_sub(cost)
+            .ok_or_else(|| error(r, "decoded frame exceeds 256 MiB allocation budget"))?;
         let mut samples = Vec::with_capacity(n);
         let mut stack: Vec<(usize, u32)> = Vec::new();
         for index in 0..n {
+            if index % 1024 == 0 {
+                super::cancelled(&self.cancel)?;
+            }
             while stack.last().is_some_and(|(_, left)| *left == 0) {
                 stack.pop();
             }
@@ -520,6 +727,9 @@ impl Decoder {
                 let marker = self.markers.get(&marker_id).ok_or_else(|| {
                     error(r, &format!("sample[{index}] undefined marker {marker_id}"))
                 })?;
+                *allocation_budget = allocation_budget
+                    .checked_sub(marker.name.len())
+                    .ok_or_else(|| error(r, "sample names exceed decoded frame budget"))?;
                 (marker.name.clone(), marker.category_id)
             };
             samples.push(Sample {
@@ -545,6 +755,7 @@ impl Decoder {
         }
         // Counted 12-byte auxiliary records precede indexed/GC metadata in
         // 6000.3.9f1. Semantics are not exposed as performance metrics.
+        let section_start = r.pos() as usize;
         let auxiliary_count = count(r, 12, 1_000_000, "sample auxiliary records")?;
         for _ in 0..auxiliary_count {
             r.u32();
@@ -554,6 +765,16 @@ impl Decoder {
                 return Err(error(r, "auxiliary sample index"));
             }
         }
+        if auxiliary_count > 0 {
+            sections.push(section(
+                r,
+                section_start,
+                "sample auxiliary records",
+                Some(thread_index),
+                Some(auxiliary_count),
+            ));
+        }
+        let section_start = r.pos() as usize;
         let indexed_count = count(r, 8, n, "indexed records")?;
         let mut indexed = HashSet::new();
         for _ in 0..indexed_count {
@@ -562,6 +783,15 @@ impl Decoder {
             if index >= n || !indexed.insert(index) {
                 return Err(error(r, "indexed record sample index"));
             }
+        }
+        if indexed_count > 0 {
+            sections.push(section(
+                r,
+                section_start,
+                "indexed records",
+                Some(thread_index),
+                Some(indexed_count),
+            ));
         }
         let gc_count = count(r, 8, n, "GC records")?;
         for _ in 0..gc_count {
@@ -580,6 +810,7 @@ impl Decoder {
         {
             return Err(error(r, "GC record missing"));
         }
+        let section_start = r.pos() as usize;
         let post_gc_count = count(r, 4, n, "post-GC sample indices")?;
         let mut post_gc_sample_indices = Vec::with_capacity(post_gc_count);
         for _ in 0..post_gc_count {
@@ -589,9 +820,19 @@ impl Decoder {
             }
             post_gc_sample_indices.push(index);
         }
+        if post_gc_count > 0 {
+            sections.push(section(
+                r,
+                section_start,
+                "post-GC sample indices",
+                Some(thread_index),
+                Some(post_gc_count),
+            ));
+        }
         let metadata_count = count(r, 8, 1_000_000, "general metadata")?;
         let mut seen = HashSet::new();
         for _ in 0..metadata_count {
+            super::cancelled(&self.cancel)?;
             let index = r.u32() as usize;
             let fields = count(r, 8, 100_000, "metadata fields")?;
             let sample = samples
@@ -635,6 +876,9 @@ impl Decoder {
                     }
                 }
                 if field_index < 16 && *metadata_budget > 0 {
+                    *allocation_budget = allocation_budget
+                        .checked_sub(1536)
+                        .ok_or_else(|| error(r, "metadata exceeds decoded frame budget"))?;
                     *metadata_budget -= 1;
                     r.inner.set_position(payload_start);
                     let definition = self
@@ -661,15 +905,38 @@ impl Decoder {
         {
             return Err(error(r, "GC general metadata missing"));
         }
+        let section_start = r.pos() as usize;
         let index_count = count(r, 4, n, "sample index list")?;
         for _ in 0..index_count {
             if r.u32() as usize >= n {
                 return Err(error(r, "sample index list boundary"));
             }
         }
+        if index_count > 0 {
+            sections.push(section(
+                r,
+                section_start,
+                "sample index list",
+                Some(thread_index),
+                Some(index_count),
+            ));
+        }
+        let scalar_start = r.pos() as usize;
         r.u32();
         r.u32();
+        check(r, "thread scalars")?;
+        sections.push(section(
+            r,
+            scalar_start,
+            "thread scalars",
+            Some(thread_index),
+            Some(2),
+        ));
+        let trailing_start = r.pos() as usize;
         let trailing_count = count(r, 12, 1_000_000, "thread trailing records")?;
+        *allocation_budget = allocation_budget
+            .checked_sub(trailing_count * std::mem::size_of::<FlowEvent>())
+            .ok_or_else(|| error(r, "Flow exceeds decoded frame budget"))?;
         let mut flow_events = Vec::with_capacity(trailing_count);
         for _ in 0..trailing_count {
             let sample_index = r.i32();
@@ -685,6 +952,15 @@ impl Decoder {
             });
         }
         check(r, "thread end")?;
+        if self.legacy && trailing_count > 0 {
+            sections.push(section(
+                r,
+                trailing_start,
+                "legacy thread trailing records",
+                Some(thread_index),
+                Some(trailing_count),
+            ));
+        }
         let gc_bytes = samples.iter().filter_map(|s| s.gc_bytes).sum();
         Ok(Thread {
             id,

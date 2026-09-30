@@ -14,3 +14,5 @@
 Flow 调查：当热点涉及 Job/Worker、调度或等待时，按需调用 performance_flow_events，先查目标帧再按 flow_id 查最多 8 帧窗口。沿 nextStart 分页；区分 unavailable 与零事件。只陈述录制的 Begin/ParallelNext/End/Next、所属样本与跨线程同 ID 观测；未知类型不解释。窗口不代表完整生命周期，ID 可能复用；样本起止时间不是事件精确时刻，不能凭重叠、事件枚举顺序或样本时长推断完整依赖方向、等待时长或关键路径。缺起点/终点和重复 Begin 必须说明不足。
 
 报告完成前调用 project_propose_tasks 保存最多 5 项候选任务：kind 为 optimize、marker 或 investigate。证据字段写明帧/线程/完整 Marker 路径、真实源码行号及不确定性；files 为实际 project_read 返回的相对路径到 hash 映射，instructions 写具体目标，constraints 写禁止改变的行为，acceptance 写编译/测试/同场景重录验收，selected=false。无充分源码依据或超出已有代码范围时只提交 investigate，files={}。这不会授权修改；用户会在独立页面选择任务和修改 Agent，再启动新会话。不要生成补丁。
+
+内存与解析验证：performance_memory 提供 bytes 字符串、峰值、首末变化、覆盖率和原始样本来源，validation=pending-editor-comparison 时只陈述观测，不判定泄漏或达标。versionVerified=false、quality.status=unverified 的版本尚未通过真实录制对照；partial 也要检查版本验证原因。performance_frame_sections 可查看尚未解释的辅助段/帧尾，unknown 不用于推断调用栈、GPU 或等待。内存缺失点不是零，整数不得转为丢失精度的浮点数。

@@ -25,6 +25,7 @@ pub async fn run_session_summary(store: &MetricsStore) -> Result<Value, McpToolE
     let snapshot = store.get().await.ok_or(McpToolError::NoSnapshot)?;
     let mut value =
         serde_json::to_value(&snapshot).map_err(|e| McpToolError::BadArg(e.to_string()))?;
+    value["memory"].as_object_mut().unwrap().remove("frames");
     // Full timelines are delivered by performance_frames, not duplicated here.
     value["cpu"]
         .as_object_mut()
@@ -74,6 +75,7 @@ fn compact_descriptions(value: &mut Value) {
 
 pub fn metric_semantics() -> Value {
     json!({
+        "validation":"unverified / versionVerified=false 表示版本待真实录制对照。memory.validation=pending-editor-comparison 仅供观测，不作泄漏或达标结论；未知区段不是调用栈或 GPU 证据。",
         "percentiles": {
             "population": "仅该指标的有效帧；真实零值参与排序，缺失值不参与",
             "method": "按升序排序，取零起始索引 round((n-1)*q)，半整数向上取整，不插值",

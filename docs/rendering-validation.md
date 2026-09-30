@@ -1,5 +1,7 @@
 # 渲染计数解析与对照验收
 
+2026-09-30 增量以[当前 .data 解析契约](data-parser-current.md)为准，包含版本待验证状态、内存/未知区段查询、缓存与取消；下文真实录制验收保留原限定范围。
+
 更新：2026-09-28。当前新增 `.data` 的 Draw Call、SetPass、Batches、Triangles、Vertices 及渲染 CPU marker。GPU 时间、SRP Batcher 节省、Overdraw、材质/对象归因仍不可用，不由现有计数推算。
 
 ## 来源与边界

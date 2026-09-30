@@ -12,7 +12,7 @@ use std::{
     fs::{File, OpenOptions},
     hash::{Hash, Hasher},
     io::{Read, Seek, SeekFrom, Write},
-    sync::Mutex,
+    sync::{Arc, Mutex, OnceLock, Weak},
 };
 
 const MAX_FRAME_BYTES: usize = 128 << 20;
@@ -20,7 +20,7 @@ pub const MAX_NODES: usize = 500;
 pub const MAX_DEPTH: usize = 64;
 pub const MAX_THREADS: usize = 128;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum QueryError {
     #[error("该输入没有可用的原始调用树")]
     Unavailable,
@@ -43,6 +43,10 @@ pub enum QueryError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FrameInfo {
+    #[serde(default)]
+    pub version_verified: Option<bool>,
+    #[serde(default)]
+    pub unknown_section_count: usize,
     pub frame_index: usize,
     pub raw_frame_id: Option<i32>,
     pub raw_duplicate_id: Option<i32>,
@@ -64,6 +68,8 @@ impl FrameInfo {
             render_counters.insert("SetPass Calls Count".into(), frame.set_pass_calls as u64);
         }
         Self {
+            version_verified: frame.quality.version_verified,
+            unknown_section_count: 0,
             frame_index: frame.index,
             raw_frame_id: None,
             raw_duplicate_id: None,
@@ -125,6 +131,8 @@ pub struct DetailThread {
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DetailFrame {
+    #[serde(default)]
+    pub sections: Vec<super::data::unity6_structured::OpaqueSection>,
     pub info: FrameInfo,
     pub threads: Vec<DetailThread>,
 }
@@ -140,9 +148,12 @@ impl DetailFrame {
                 .retain(|r| r != "录制帧时间缺少下一帧起始时间戳");
         }
         let mut info = FrameInfo::summary(&summary);
+        info.unknown_section_count = decoded.sections.len();
         info.raw_frame_id = Some(decoded.header.frame_id);
         info.raw_duplicate_id = Some(decoded.header.duplicate_id);
         info.start_ns = Some(decoded.header.start_ns.to_string());
+        let legacy = decoded.legacy;
+        let sections = decoded.sections;
         let threads = decoded
             .threads
             .into_iter()
@@ -183,11 +194,15 @@ impl DetailFrame {
                 DetailThread {
                     info,
                     samples,
-                    flow_events: Some(t.flow_events),
+                    flow_events: if legacy { None } else { Some(t.flow_events) },
                 }
             })
             .collect();
-        Self { info, threads }
+        Self {
+            info,
+            threads,
+            sections,
+        }
     }
 }
 
@@ -230,7 +245,28 @@ enum Location {
     },
 }
 #[derive(Debug)]
+struct FrameCache {
+    rows: std::collections::VecDeque<(usize, usize, Arc<DetailFrame>)>,
+    bytes: usize,
+    decodes: usize,
+    budget: usize,
+}
+impl Default for FrameCache {
+    fn default() -> Self {
+        Self {
+            rows: Default::default(),
+            bytes: 0,
+            decodes: 0,
+            budget: 64 * 1024 * 1024,
+        }
+    }
+}
+type InFlight = OnceLock<Result<Arc<DetailFrame>, QueryError>>;
+
+#[derive(Debug)]
 pub struct FrameStore {
+    inflight: Mutex<BTreeMap<usize, Weak<InFlight>>>,
+    cache: Mutex<FrameCache>,
     backing: Backing,
     frames: BTreeMap<usize, Location>,
 }
@@ -286,12 +322,16 @@ impl FrameStore {
                 size,
             },
             frames: BTreeMap::new(),
+            cache: Mutex::new(FrameCache::default()),
+            inflight: Mutex::new(BTreeMap::new()),
         })
     }
     pub fn binary_bytes(bytes: Bytes) -> Self {
         Self {
             backing: Backing::Memory(bytes),
             frames: BTreeMap::new(),
+            cache: Mutex::new(FrameCache::default()),
+            inflight: Mutex::new(BTreeMap::new()),
         }
     }
     pub fn spool() -> std::io::Result<Self> {
@@ -304,7 +344,7 @@ impl FrameStore {
                 offset,
                 size: body.len(),
                 hash: fingerprint(body),
-                before,
+                before: before.checkpoint(),
                 duration: None,
             },
         );
@@ -339,7 +379,24 @@ impl FrameStore {
     pub fn is_empty(&self) -> bool {
         self.frames.is_empty()
     }
-    pub fn load(&self, index: usize) -> Result<DetailFrame, QueryError> {
+    pub fn load(&self, index: usize) -> Result<Arc<DetailFrame>, QueryError> {
+        // Only active callers retain the single-flight result. This also shares
+        // oversized frames without keeping them in the bounded LRU cache.
+        let flight = {
+            let mut active = self
+                .inflight
+                .lock()
+                .map_err(|e| QueryError::Read(e.to_string()))?;
+            active.retain(|_, value| value.strong_count() > 0);
+            if let Some(value) = active.get(&index).and_then(Weak::upgrade) {
+                value
+            } else {
+                let value = Arc::new(OnceLock::new());
+                active.insert(index, Arc::downgrade(&value));
+                value
+            }
+        };
+        // Every caller verifies source bytes, even when joining an active decode.
         let location = self
             .frames
             .get(&index)
@@ -379,26 +436,83 @@ impl FrameStore {
                 .ok_or(QueryError::SourceChanged)?
                 .to_vec(),
         };
-        match location {
-            Location::Spool { .. } => {
-                serde_json::from_slice(&bytes).map_err(|e| QueryError::Read(e.to_string()))
-            }
-            Location::Binary {
-                hash,
-                before,
-                duration,
-                ..
-            } => {
-                if fingerprint(&bytes) != *hash {
-                    return Err(QueryError::SourceChanged);
-                }
-                let decoded = before
-                    .clone()
-                    .decode(&bytes)
-                    .map_err(|e| QueryError::Read(e.to_string()))?;
-                Ok(DetailFrame::binary(decoded, index, *duration))
+        if let Location::Binary { hash, .. } = location {
+            if fingerprint(&bytes) != *hash {
+                return Err(QueryError::SourceChanged);
             }
         }
+        flight
+            .get_or_init(|| self.materialize(index, location, &bytes))
+            .clone()
+    }
+    fn materialize(
+        &self,
+        index: usize,
+        location: &Location,
+        bytes: &[u8],
+    ) -> Result<Arc<DetailFrame>, QueryError> {
+        let mut cache = self
+            .cache
+            .lock()
+            .map_err(|e| QueryError::Read(e.to_string()))?;
+        if let Some(pos) = cache.rows.iter().position(|r| r.0 == index) {
+            let row = cache.rows.remove(pos).unwrap();
+            let frame = row.2.clone();
+            cache.rows.push_back(row);
+            return Ok(frame);
+        }
+        let mut frame = match location {
+            Location::Spool { .. } => serde_json::from_slice::<DetailFrame>(bytes)
+                .map_err(|e| QueryError::Read(e.to_string()))?,
+            Location::Binary {
+                before, duration, ..
+            } => DetailFrame::binary(
+                before
+                    .clone()
+                    .decode(bytes)
+                    .map_err(|e| QueryError::Read(e.to_string()))?,
+                index,
+                *duration,
+            ),
+        };
+        for t in &mut frame.threads {
+            super::evidence::calculate_self(&mut t.samples);
+        }
+        let cost = frame_cost(&frame);
+        let frame = Arc::new(frame);
+        cache.decodes += 1;
+        if cost <= cache.budget {
+            while cache.rows.len() >= 4 || cache.bytes + cost > cache.budget {
+                if let Some((_, n, _)) = cache.rows.pop_front() {
+                    cache.bytes -= n;
+                } else {
+                    break;
+                }
+            }
+            cache.bytes += cost;
+            cache.rows.push_back((index, cost, frame.clone()));
+        }
+        Ok(frame)
+    }
+    pub fn cache_counts(&self) -> serde_json::Value {
+        let c = self.cache.lock().unwrap();
+        serde_json::json!({"frames":c.rows.len(),"bytes":c.bytes,"decodes":c.decodes})
+    }
+    pub fn sections(
+        &self,
+        index: usize,
+        start: usize,
+        limit: usize,
+    ) -> Result<serde_json::Value, QueryError> {
+        validate_limit(limit, 50)?;
+        let f = self.load(index)?;
+        if start > f.sections.len() {
+            return Err(QueryError::BadArg("区段起点超出范围".into()));
+        }
+        let end = start.saturating_add(limit).min(f.sections.len());
+        Ok(
+            serde_json::json!({"frameIndex":index,"rows":&f.sections[start..end],"total":f.sections.len(),"nextStart":(end<f.sections.len()).then_some(end),"scope":"offset 相对帧体；unknown 仅验证结构或保留字节，不解释业务含义。帧尾允许 opaque 数据。"}),
+        )
     }
     pub fn frame(&self, index: usize, start: usize, limit: usize) -> Result<FramePage, QueryError> {
         validate_limit(limit, MAX_THREADS)?;
@@ -409,14 +523,14 @@ impl FrameStore {
         let count = frame.threads.len();
         let end = start.saturating_add(limit).min(count);
         Ok(FramePage {
-            info: frame.info,
+            info: frame.info.clone(),
             thread_count: count,
             threads: frame
                 .threads
-                .into_iter()
+                .iter()
                 .skip(start)
                 .take(limit)
-                .map(|t| t.info)
+                .map(|t| t.info.clone())
                 .collect(),
             next_start: (end < count).then_some(end),
         })
@@ -445,24 +559,25 @@ impl FrameStore {
             }
             main[0].info.thread_index
         };
-        let mut thread = frame
+        let thread = frame
             .threads
-            .into_iter()
+            .iter()
             .find(|t| t.info.thread_index == chosen)
             .ok_or(QueryError::ThreadNotFound(chosen))?;
-        super::evidence::calculate_self(&mut thread.samples);
-        for sample in &mut thread.samples {
-            sample.metadata.clear();
-        }
         if start > thread.samples.len() {
             return Err(QueryError::BadArg("样本起点超出范围".into()));
         }
         let depth_truncated = thread.samples.iter().any(|s| s.depth >= max_depth);
         let mut samples: Vec<_> = thread
             .samples
-            .into_iter()
+            .iter()
             .filter(|s| s.sample_index >= start && s.depth < max_depth)
             .take(limit + 1)
+            .map(|s| {
+                let mut s = s.clone();
+                s.metadata.clear();
+                s
+            })
             .collect();
         let next_start = if samples.len() > limit {
             samples.pop().map(|s| s.sample_index)
@@ -470,8 +585,8 @@ impl FrameStore {
             None
         };
         Ok(HierarchyPage {
-            info: frame.info,
-            thread: thread.info,
+            info: frame.info.clone(),
+            thread: thread.info.clone(),
             samples,
             next_start,
             max_depth,
@@ -484,5 +599,129 @@ fn validate_limit(value: usize, max: usize) -> Result<(), QueryError> {
         Err(QueryError::BadArg(format!("数量/深度必须在 1..={max}")))
     } else {
         Ok(())
+    }
+}
+
+// Capacity-based retained heap accounting, including nested metadata buffers.
+fn frame_cost(f: &DetailFrame) -> usize {
+    use std::mem::size_of;
+    fn text(s: &String) -> usize {
+        s.capacity()
+    }
+    let mut n = size_of::<DetailFrame>()
+        + f.threads.capacity() * size_of::<DetailThread>()
+        + f.sections.capacity() * size_of::<super::data::unity6_structured::OpaqueSection>();
+    n += f.info.source.capacity()
+        + f.info.start_ns.as_ref().map_or(0, text)
+        + f.info.warnings.capacity() * size_of::<String>()
+        + f.info.warnings.iter().map(text).sum::<usize>();
+    n += f
+        .info
+        .render_counters
+        .iter()
+        .map(|(k, _)| k.capacity() + 96)
+        .sum::<usize>();
+    for s in &f.sections {
+        n += text(&s.name) + text(&s.raw_hex) + text(&s.semantic_status);
+    }
+    for t in &f.threads {
+        n += text(&t.info.thread_id)
+            + text(&t.info.name)
+            + t.info.group.as_ref().map_or(0, text)
+            + t.samples.capacity() * size_of::<DetailSample>();
+        n += t.flow_events.as_ref().map_or(0, |v| {
+            v.capacity() * size_of::<super::data::unity6_structured::FlowEvent>()
+        });
+        for s in &t.samples {
+            n += text(&s.name)
+                + s.raw_start_ns.as_ref().map_or(0, text)
+                + s.self_reason.as_ref().map_or(0, text)
+                + s.metadata.capacity()
+                    * size_of::<super::data::unity6_structured::MetadataValue>();
+            for m in &s.metadata {
+                n += text(&m.status)
+                    + text(&m.raw_hex)
+                    + m.value.as_ref().map_or(0, text)
+                    + m.unit.as_ref().map_or(0, text)
+                    + m.reason.as_ref().map_or(0, text)
+                    + m.definition.as_ref().map_or(0, |d| text(&d.name));
+            }
+        }
+    }
+    n
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    fn frame() -> DetailFrame {
+        serde_json::from_value(serde_json::json!({"info":{"frameIndex":0,"rawFrameId":null,"rawDuplicateId":null,"startNs":null,"source":"fixture","cpuMs":null,"frameTimeMs":null,"gcAllocBytes":null,"renderCounters":{},"warnings":[]},"threads":[]})).unwrap()
+    }
+    #[test]
+    fn oversize_bypasses_cache_and_capacities_count() {
+        let mut f = frame();
+        let initial = frame_cost(&f);
+        f.info.source.reserve(4096);
+        assert!(frame_cost(&f) >= initial + 4000);
+        let mut s = FrameStore::spool().unwrap();
+        s.write_frame(&f).unwrap();
+        s.cache.lock().unwrap().budget = 1;
+        s.load(0).unwrap();
+        s.load(0).unwrap();
+        assert_eq!(s.cache_counts()["frames"], 0);
+        assert_eq!(s.cache_counts()["decodes"], 2);
+    }
+    #[test]
+    fn active_oversize_queries_share_without_retaining_result() {
+        let mut store = FrameStore::spool().unwrap();
+        store.write_frame(&frame()).unwrap();
+        store.cache.lock().unwrap().budget = 1;
+        let store = Arc::new(store);
+        // Hold the request group open deterministically, including callers that
+        // the scheduler starts after the tiny fixture has already decoded.
+        let flight = Arc::new(OnceLock::new());
+        store
+            .inflight
+            .lock()
+            .unwrap()
+            .insert(0, Arc::downgrade(&flight));
+        let callers: Vec<_> = (0..8)
+            .map(|_| {
+                let store = store.clone();
+                std::thread::spawn(move || store.load(0).unwrap())
+            })
+            .collect();
+        let results: Vec<_> = callers.into_iter().map(|t| t.join().unwrap()).collect();
+        assert!(results.iter().all(|v| Arc::ptr_eq(v, &results[0])));
+        assert_eq!(store.cache_counts()["decodes"], 1);
+        assert_eq!(store.cache_counts()["frames"], 0);
+        let weak = Arc::downgrade(&results[0]);
+        drop(results);
+        drop(flight);
+        assert!(weak.upgrade().is_none());
+        store.load(0).unwrap();
+        assert_eq!(store.cache_counts()["decodes"], 2);
+    }
+    #[test]
+    fn budget_eviction_and_release() {
+        let f = frame();
+        let cost = frame_cost(&f);
+        let mut s = FrameStore::spool().unwrap();
+        s.write_frame(&f).unwrap();
+        let mut f = frame();
+        f.info.frame_index = 1;
+        s.write_frame(&f).unwrap();
+        s.cache.lock().unwrap().budget = cost + 32;
+        let f = s.load(0).unwrap();
+        let weak = Arc::downgrade(&f);
+        drop(f);
+        s.load(1).unwrap();
+        assert!(weak.upgrade().is_none());
+        assert_eq!(s.cache_counts()["frames"], 1);
+        let f = s.load(1).unwrap();
+        let weak = Arc::downgrade(&f);
+        drop(f);
+        drop(s);
+        assert!(weak.upgrade().is_none());
     }
 }
