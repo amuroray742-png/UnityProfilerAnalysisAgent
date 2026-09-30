@@ -87,6 +87,7 @@ export type DiagnoseEvent = {sessionId: string; fileId: string} & (
   | { kind: 'session-created'; acpSessionId: string }
   | { kind: 'started'; agentId: string }
   | { kind: 'chunk'; text: string }
+  | { kind: 'tool-activity'; callId:string; tool:string; status:string; args:unknown; error:string|null }
   | { kind: 'mcp-call'; tool: string; args: unknown }
   | { kind: 'mcp-result'; tool: string; result: unknown }
   | { kind: 'finished'; totalChunks: number; stopReason: string }

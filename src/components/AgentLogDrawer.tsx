@@ -10,6 +10,7 @@ function roleClass(event: DiagnoseEvent): string {
     case 'chunk':
     case 'log':
       return 'role-info';
+    case 'tool-activity':
     case 'mcp-call':
     case 'mcp-result':
       return 'role-tool';
@@ -25,6 +26,7 @@ function roleClass(event: DiagnoseEvent): string {
 
 function eventLabel(event: DiagnoseEvent): string {
   switch (event.kind) {
+    case 'tool-activity': return `[${event.tool}] ${event.status}`;
     case 'session-created': return `[ACP session] ${event.acpSessionId}`;
     case 'started':
       return `[started] ${event.agentId}`;

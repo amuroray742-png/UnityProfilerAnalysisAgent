@@ -41,6 +41,10 @@ def main():
     parser.add_argument('--project-workflow', action='store_true')
     parser.add_argument('--workflow-saved', type=Path)
     parser.add_argument('--workflow-resume', type=Path)
+    parser.add_argument('--history-replay', type=Path)
+    parser.add_argument('--history-progress', action='store_true')
+    parser.add_argument('--history-activity', action='store_true')
+    parser.add_argument('--history-records', type=Path)
     args = parser.parse_args()
     # Keep optimization acceptance entrypoints usable after the project-first UI.
     if args.optimization_loop:
@@ -79,7 +83,7 @@ def main():
     for path in (args.application, args.driver, args.native_driver):
         if not path.is_file():
             raise FileNotFoundError(path)
-    output = root / '.cache' / ('desktop-workflow-saved' if args.workflow_saved else 'desktop-workflow' if args.project_workflow else 'desktop-optimization-saved' if args.optimization_saved else 'desktop-optimization' if args.optimization_loop else 'desktop-reports' if args.report_source else 'desktop-render' if args.render_input else 'desktop-memory' if args.measure_input else 'desktop-ui' if args.ui else 'desktop-smoke')
+    output = root / '.cache' / ('desktop-history-replay' if args.history_replay else 'desktop-progress' if args.history_progress else 'desktop-history' if args.history_activity else 'desktop-workflow-saved' if args.workflow_saved else 'desktop-workflow' if args.project_workflow else 'desktop-optimization-saved' if args.optimization_saved else 'desktop-optimization' if args.optimization_loop else 'desktop-reports' if args.report_source else 'desktop-render' if args.render_input else 'desktop-memory' if args.measure_input else 'desktop-ui' if args.ui else 'desktop-smoke')
     output.mkdir(parents=True, exist_ok=True)
     def port():
         with socket.socket() as sock:
@@ -93,7 +97,7 @@ def main():
         raw = None if body is None else json.dumps(body).encode()
         req = urllib.request.Request(base + path, data=raw, method=method, headers={'Content-Type': 'application/json'})
         try:
-            with urllib.request.urlopen(req, timeout=960 if (args.optimization_loop or args.project_workflow) and path.endswith('/execute/async') else 45) as response:
+            with urllib.request.urlopen(req, timeout=960 if (args.optimization_loop or args.project_workflow or args.history_activity) and path.endswith('/execute/async') else 45) as response:
                 value = json.load(response)['value']
         except urllib.error.HTTPError as error:
             raise RuntimeError(error.read().decode()) from error
@@ -168,6 +172,15 @@ def main():
                 report['realAgentRequested'] = args.real_agent
                 report['agentId'] = args.agent_id if args.real_agent else None
                 run_ui(js, lambda method, path, body=None: request(method, f'/session/{session}' + path, body), root, output, report, args.real_agent, args.agent_id)
+            if args.history_replay:
+                from desktop_history_checks import run_replay
+                run_replay(js,lambda method,path,body=None: request(method,f'/session/{session}'+path,body),root,output,report,args.history_replay)
+            if args.history_progress:
+                from desktop_history_checks import run_progress
+                run_progress(js,lambda method,path,body=None: request(method,f'/session/{session}'+path,body),root,output,report)
+            if args.history_activity:
+                from desktop_history_checks import run_history_activity
+                run_history_activity(js,lambda method,path,body=None: request(method,f'/session/{session}'+path,body),root,output,report,args.history_records)
             if args.project_workflow or args.workflow_saved:
                 from desktop_workflow_checks import run_workflow
                 run_workflow(js,lambda method,path,body=None: request(method,f'/session/{session}'+path,body),root,output,report,args.workflow_saved,args.workflow_resume)

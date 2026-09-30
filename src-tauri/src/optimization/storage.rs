@@ -137,6 +137,7 @@ impl Workspace {
             rounds: vec![],
         };
         let s = Self {
+            observation: Mutex::new(Default::default()),
             directory,
             save_error: Mutex::new(None),
             _lease: lease,
@@ -301,6 +302,7 @@ impl Workspace {
             }
         }
         let s = Self {
+            observation: Mutex::new(Default::default()),
             directory,
             save_error: Mutex::new(None),
             _lease: lease,

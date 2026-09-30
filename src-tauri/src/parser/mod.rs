@@ -173,6 +173,13 @@ impl From<prost::DecodeError> for ParseError {
 
 /// 按扩展名自动分派
 pub async fn parse_file(path: &Path) -> Result<ParsedProfile, ParseError> {
+    parse_file_with_progress(path, |_, _| {}).await
+}
+
+pub async fn parse_file_with_progress(
+    path: &Path,
+    mut progress: impl FnMut(u64, u64) + Send + 'static,
+) -> Result<ParsedProfile, ParseError> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -202,9 +209,11 @@ pub async fn parse_file(path: &Path) -> Result<ParsedProfile, ParseError> {
         }
         ProfilerFormat::Data => {
             let path = path.to_owned();
-            tokio::task::spawn_blocking(move || data::parse_path(&path))
-                .await
-                .map_err(|e| ParseError::Other(e.to_string()))??
+            tokio::task::spawn_blocking(move || {
+                data::parse_path_with_progress(&path, &mut progress)
+            })
+            .await
+            .map_err(|e| ParseError::Other(e.to_string()))??
         }
         ProfilerFormat::Pd3u => {
             let bytes = Bytes::from(tokio::fs::read(path).await?);

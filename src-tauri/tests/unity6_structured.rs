@@ -691,3 +691,17 @@ fn additional_capture_structure_only() {
     assert_eq!(frames, 2000);
     println!("additional capture: structured frames={frames}, samples={samples}, elapsed={:?}; no metric ground truth", started.elapsed());
 }
+
+#[tokio::test]
+async fn file_progress_reports_actual_monotonic_bytes(){
+    use std::sync::{Arc,Mutex};
+    use unity_profiler_analysis_agent_lib::parser;
+    let path=std::env::temp_dir().join(format!("upaa-progress-{}.data",uuid::Uuid::new_v4()));
+    let mut bytes=Vec::new();
+    for _ in 0..512{let b=body(true);for v in [0x20220328,b.len() as u32,6000,3,23,2,1]{word(&mut bytes,v);}bytes.extend(b);}
+    word(&mut bytes,0xDEADFEED);std::fs::write(&path,&bytes).unwrap();
+    let progress=Arc::new(Mutex::new(Vec::new()));let out=progress.clone();
+    let parsed=parser::parse_file_with_progress(&path,move|done,total|out.lock().unwrap().push((done,total))).await;
+    std::fs::remove_file(path).unwrap();assert_eq!(parsed.unwrap().frames.len(),512);
+    let rows=progress.lock().unwrap();assert_eq!(rows.len(),512);assert!(rows.windows(2).all(|w|w[0].0<w[1].0));assert!(rows.iter().all(|(done,total)|*total==bytes.len() as u64&&done<=total));
+}
