@@ -10,6 +10,10 @@
 | Release EXE | 同次最终 EXE 的协议回归、历史重开、导出与真实字节进度验收；Claude／Codex 的公开样例真实会话另有各自程序哈希 | 详见[历史与实时工作证据](evidence/history-activity-validation.md)，不把不同构建混为同一产物 |
 | MSI／NSIS | 历史构建、CI 静默安装／协议／卸载及维护者交互人工确认 | 上述 EXE 增量未重新验收安装包；历史结论不自动覆盖新安装包 |
 
+### 内置 Unity 插件
+
+构建脚本将 `unity/Packages/com.upaa.inspector` 的文件、现有 `.meta` 和 SHA-256 清单编入程序；Release EXE 和安装包内的程序使用同一资源，无运行时开发机路径回退。缺少包清单会使构建失败，安装前核对内置字节。更新插件文件后必须重新构建程序；只复制旧 EXE 不会携带新插件。安装验收记录见[插件团队共享验收](evidence/plugin-install-validation.md)。
+
 ### 构建与分发
 
 仓库根目录执行 `npm ci`（首次或依赖变化时），再执行 `npm run tauri:build`。MSI 输出到 `src-tauri/target/release/bundle/msi/`，EXE 安装包输出到 `src-tauri/target/release/bundle/nsis/`；仅需后者可用 `npm run tauri:build -- --bundles nsis`。

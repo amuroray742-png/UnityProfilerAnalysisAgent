@@ -12,3 +12,9 @@ export interface Project {parseProgress?:ParseProgress|null;version?:number;root
 export interface ParseProgress {projectId:string;roundId:string;operationId:string;stage:string;done:number|null;total:number|null;status:string;reason?:string|null}
 export interface ActivityRow {projectId:string;roundId:string;runId:string;sequence:number;nextCursor:number;time:string;event:{kind:string;text?:string;agentId?:string;sessionId?:string;callId?:string;tool?:string;status?:string;args?:Record<string,unknown>;error?:string;message?:string}}
 export interface ActivityPage {available:boolean;rows:ActivityRow[];nextCursor:number;hasMore:boolean;limited?:boolean}
+
+export interface UnityPluginStatus {
+ state:'missing'|'installed'|'migrate'|'conflict'|'interrupted'; reason:string; version:string; bundleHash:string;
+ lockWarning:string|null; record:{id:string;status:string;reason:string|null;bundleHash:string}|null;
+ editor?:{status:string;reason?:string|null};
+}

@@ -4,7 +4,7 @@
 
 已由 Unity 6000.3.23f1 生成的公共资源副本位于 `src-tauri/tests/fixtures/unity-project`。这是合成性能 fixture 的关联候选工程，不是产生该录制的实测游戏；不能将静态资产属性等同为录制中的开销。缺失引用、损坏对象和重复 GUID 的回归由 `tests/project_scope.rs` 构造，避免把损坏样例误当成正常工程。
 
-真实 Editor 验收：使用独立测试工程，放入两个业务样例脚本及 `Editor/UPAAFixture.cs`，手动通过 UPM 安装仓库 `unity/Packages/com.upaa.inspector/package.json`，运行 `UPAAFixture.Build`。不要把生成器安装进业务工程。
+真实 Editor 验收：使用独立测试工程，放入两个业务样例脚本及 `Editor/UPAAFixture.cs`，通过分析工具将随程序交付的插件安装到测试工程 `Packages/com.upaa.inspector`（或手动复制完整包），运行 `UPAAFixture.Build`。不要把生成器安装进业务工程。
 
 ```powershell
 $env:UPAA_PUBLIC_UNITY_PROJECT = 'C:/path/to/public-test-project'

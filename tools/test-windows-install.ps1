@@ -4,7 +4,8 @@
 param(
     [string]$Installer = "$PSScriptRoot/../src-tauri/target/release/bundle/nsis/Unity Profiler Analysis Agent_0.1.0_x64-setup.exe",
     [switch]$DesktopSmoke,
-    [switch]$DesktopUi
+    [switch]$DesktopUi,
+    [switch]$PluginInstall
 )
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath("$PSScriptRoot/..")
@@ -46,12 +47,14 @@ try {
         & cargo test --manifest-path src-tauri/Cargo.toml --locked --offline --test mcp_wire --test acp_stdio_roundtrip --test reports_source --test optimization *> (Join-Path $work 'protocol.log')
         if ($LASTEXITCODE -ne 0) { throw 'Installed binary protocol regression failed; see .cache/installer-smoke/protocol.log' }
         $result.protocolPassed = $true
-        if ($DesktopSmoke -or $DesktopUi) {
+        if ($DesktopSmoke -or $DesktopUi -or $PluginInstall) {
             $desktopArguments = @((Join-Path $PSScriptRoot 'desktop-smoke.py'), '--application', $installedExe)
             if ($DesktopUi) { $desktopArguments += '--ui' }
+            if ($PluginInstall) { $desktopArguments += '--plugin-install' }
             & python @desktopArguments *> (Join-Path $work 'desktop.log')
             if ($LASTEXITCODE -ne 0) { throw 'Installed WebView/IPC smoke failed; see .cache/installer-smoke/desktop.log' }
             $result.desktopIpcPassed = $true
+            if ($PluginInstall) { $result.scope += '; installed application embedded plugin migration and UI verified' }
             if ($DesktopUi) { $result.desktopUiPassed = $true; $result.scope += '; rendered UI checked with native picker response substituted' }
         }
     } finally { Pop-Location }

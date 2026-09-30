@@ -21,6 +21,7 @@ import urllib.error
 def main():
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser()
+    parser.add_argument('--plugin-install', action='store_true', help='Public embedded plugin install and migration')
     parser.add_argument('--application', type=Path, default=root / 'src-tauri/target/release/unity-profiler-analysis-agent.exe')
     parser.add_argument('--driver', type=Path, default=root / '.cache/webdriver/bin/tauri-driver.exe')
     parser.add_argument('--native-driver', type=Path, default=root / '.cache/webdriver/edge/msedgedriver.exe')
@@ -83,7 +84,7 @@ def main():
     for path in (args.application, args.driver, args.native_driver):
         if not path.is_file():
             raise FileNotFoundError(path)
-    output = root / '.cache' / ('desktop-history-replay' if args.history_replay else 'desktop-progress' if args.history_progress else 'desktop-history' if args.history_activity else 'desktop-workflow-saved' if args.workflow_saved else 'desktop-workflow' if args.project_workflow else 'desktop-optimization-saved' if args.optimization_saved else 'desktop-optimization' if args.optimization_loop else 'desktop-reports' if args.report_source else 'desktop-render' if args.render_input else 'desktop-memory' if args.measure_input else 'desktop-ui' if args.ui else 'desktop-smoke')
+    output = root / '.cache' / ('desktop-plugin' if args.plugin_install else 'desktop-history-replay' if args.history_replay else 'desktop-progress' if args.history_progress else 'desktop-history' if args.history_activity else 'desktop-workflow-saved' if args.workflow_saved else 'desktop-workflow' if args.project_workflow else 'desktop-optimization-saved' if args.optimization_saved else 'desktop-optimization' if args.optimization_loop else 'desktop-reports' if args.report_source else 'desktop-render' if args.render_input else 'desktop-memory' if args.measure_input else 'desktop-ui' if args.ui else 'desktop-smoke')
     output.mkdir(parents=True, exist_ok=True)
     def port():
         with socket.socket() as sock:
@@ -172,6 +173,9 @@ def main():
                 report['realAgentRequested'] = args.real_agent
                 report['agentId'] = args.agent_id if args.real_agent else None
                 run_ui(js, lambda method, path, body=None: request(method, f'/session/{session}' + path, body), root, output, report, args.real_agent, args.agent_id)
+            if args.plugin_install:
+                from desktop_plugin_checks import run_plugin
+                run_plugin(js,lambda method,path,body=None: request(method,f'/session/{session}'+path,body),root,output,report)
             if args.history_replay:
                 from desktop_history_checks import run_replay
                 run_replay(js,lambda method,path,body=None: request(method,f'/session/{session}'+path,body),root,output,report,args.history_replay)

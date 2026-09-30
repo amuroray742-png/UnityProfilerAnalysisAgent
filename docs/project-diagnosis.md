@@ -16,7 +16,9 @@
 
 ## 首次安装 Editor 插件
 
-先安装 Unity CLI。在**目标工程**的 Package Manager 中使用 “Install package from disk”，选择仓库的 [`unity/Packages/com.upaa.inspector/package.json`](../unity/Packages/com.upaa.inspector/package.json)，等待 Pipeline 及 Newtonsoft 依赖解析和编译完成。不会自动安装到用户工程、修改 manifest 或升级 Editor。适配版本和限制见[插件说明](../unity/Packages/com.upaa.inspector/README.md)。
+在项目页面“Unity 插件”区域点击“重新检查”，关闭目标工程的 Unity Editor 后点击“安装到工程”或“迁移到工程内”。插件随应用安装到 `Packages/com.upaa.inspector`，不依赖本工具仓库的个人目录；安装完成后重新打开 Unity 等待依赖解析与编译。将插件目录、变更后的 manifest 和 Unity 更新的 lock 文件一起提交。Unity CLI 仍需单独安装。
+
+文件安装状态与 Editor 连接状态分别显示；不安装也可以离线定位。仅用户点击安装才写入插件；AI 和只读诊断没有安装权限。已有不同内容不会被覆盖，旧外部路径的迁移与恢复边界见[插件说明](../unity/Packages/com.upaa.inspector/README.md)。
 
 插件提供固定 `upaa_context`、`upaa_asset`、`upaa_cancel` 命令。后端调用显式工程路径并检查协议 1 和规范化路径；Agent 无权调用 Unity CLI、`eval`、终端、保存、写入、重导入或构建。取消只针对本次采集请求，不退出 Editor。工程 AI 会话整体上限为 900 秒（普通首轮仍为 300 秒）；超时报告标为失败/不完整，已有正文仍可导出。
 

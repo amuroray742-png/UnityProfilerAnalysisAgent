@@ -150,3 +150,11 @@ Unity 固定检查协议与只读采集协议分开版本化。编译、相关 S
 公开 AI 活动写入 `activity/<运行或报告 ID>.jsonl` 并同步后，通过 `workflow-activity` 通知。序号是提交记录的字节起点，`nextCursor` 只允许记录边界；读取按轮次校验所属报告／运行，分批最多 100 条。界面用游标补读和去重，事件只是唤醒提示。每次日志上限 10 MiB，预留明确的上限记录；正文保持原报告日志与 2 MiB 上限，工具摘要不改变执行授权。
 
 核心工作区通过可选通知回调与 Tauri 解耦，使解析、存档和恢复测试无需加载 Windows GUI 运行时。工具活动只采集实际 MCP 调用的开始和结果状态；不把 ACP 私有推理或工具返回全文加入活动记录。
+
+## 项目绑定的插件安装
+
+`workflow_command` 的 `pluginStatus`、`pluginInstall`、`pluginRecords` 使用当前项目 ID，不接受前端提供安装路径。安装与工作流运行互斥，使用工程／存档租约和 Windows 目录句柄，要求目标 Editor 关闭；安装期间独占 UnityLockfile。不经 MCP 开放，代码优化也不能修改本插件。
+
+构建阶段将插件字节与 SHA-256 清单编入程序，安装前校验；以工程内嵌包部署并保留 meta。首次写入前将 manifest 原始／目标字节及工程身份保存到独立 `plugin-install.json`，校验暂存目录后发布，最后仅移除插件的旧 `file:` 依赖项。失败保留中断记录，继续安装核对原始／目标指纹；已有不同内容、Git／registry 来源及外部变动不会被覆盖。lock 文件只检查、不重写，由 Unity 解析。
+
+内嵌包状态与 Editor ready 状态独立；程序不自动安装 CLI、升级 Unity 或修改其他依赖。团队共享验收见[插件验收](evidence/plugin-install-validation.md)。
