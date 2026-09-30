@@ -1,5 +1,6 @@
 //! Persistent optimization workspaces. No Agent owns the edit/rollback ledger.
 pub mod archive;
+pub mod observation;
 pub mod automatic;
 pub mod commands;
 pub mod comparison;
@@ -159,6 +160,7 @@ pub struct Project {
 }
 #[derive(Debug)]
 pub struct Workspace {
+    pub observation: Mutex<observation::Observation>,
     pub directory: PathBuf,
     pub save_error: Mutex<Option<String>>,
     pub data: Mutex<Project>,

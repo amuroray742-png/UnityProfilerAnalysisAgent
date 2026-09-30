@@ -3,7 +3,7 @@ use super::*;
 use crate::acp_client::{self, DiagnoseEvent, DiagnoseRequest};
 use serde_json::{json, Value};
 use std::{fs, path::Path, sync::atomic::Ordering};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -114,6 +114,22 @@ pub fn next_round(w: &Workspace) -> Result<(), String> {
 )]
 pub enum Action {
     Recent,
+    Activity {
+        round_id: String,
+        run_id: String,
+        cursor: u64,
+    },
+    RunText {
+        round_id: String,
+        run_id: String,
+        start: usize,
+    },
+    Change {
+        round_id: String,
+        run_id: String,
+        index: usize,
+        start: usize,
+    },
     Create {
         root: PathBuf,
         name: String,
@@ -125,6 +141,7 @@ pub enum Action {
     Bind {
         path: PathBuf,
         role: String,
+        operation_id: Option<String>,
     },
     Analyze {
         round_id: String,
@@ -232,6 +249,97 @@ pub async fn workflow_command(
         .await
         .clone()
         .ok_or("请先新建或打开优化项目")?;
+    {
+        let app = app.clone();
+        w.observation.lock().unwrap().notify = Some(Arc::new(move |name, value| {
+            let _ = app.emit(name, value);
+        }));
+    }
+    if let Action::Activity {
+        round_id,
+        run_id,
+        cursor,
+    } = &action
+    {
+        {
+            let d = w.data.lock().unwrap();
+            let r = d
+                .rounds
+                .iter()
+                .find(|r| r.id == *round_id)
+                .ok_or("轮次不存在")?;
+            if !r.reports.iter().any(|p| p.report_id == *run_id)
+                && !r.runs.iter().any(|p| p.id == *run_id)
+            {
+                return Err("工作记录不属于此轮次".into());
+            }
+        }
+        let page = observation::read(&w.directory, run_id, *cursor)?;
+        let pid = w.data.lock().unwrap().id.clone();
+        if page["rows"].as_array().is_some_and(|rows| {
+            rows.iter().any(|r| {
+                r["projectId"] != pid || r["roundId"] != *round_id || r["runId"] != *run_id
+            })
+        }) {
+            return Err("活动日志身份不匹配".into());
+        }
+        return Ok(page);
+    }
+    if let Action::RunText {
+        round_id,
+        run_id,
+        start,
+    } = &action
+    {
+        let d = w.data.lock().unwrap();
+        let r = d
+            .rounds
+            .iter()
+            .find(|r| r.id == *round_id)
+            .ok_or("轮次不存在")?;
+        let run = r
+            .runs
+            .iter()
+            .find(|r| r.id == *run_id)
+            .ok_or("修改运行不存在")?;
+        let chars: Vec<_> = run.text.chars().collect();
+        if *start > chars.len() {
+            return Err("分页越界".into());
+        }
+        let end = (*start + 12000).min(chars.len());
+        return Ok(
+            json!({"text":chars[*start..end].iter().collect::<String>(),"nextStart":(end<chars.len()).then_some(end),"total":chars.len()}),
+        );
+    }
+    if let Action::Change {
+        round_id,
+        run_id,
+        index,
+        start,
+    } = &action
+    {
+        let d = w.data.lock().unwrap();
+        let r = d
+            .rounds
+            .iter()
+            .find(|r| r.id == *round_id)
+            .ok_or("轮次不存在")?;
+        let run = r
+            .runs
+            .iter()
+            .find(|r| r.id == *run_id)
+            .ok_or("修改运行不存在")?;
+        let c = run.changes.get(*index).ok_or("文件变更不存在")?;
+        let text = editing::diff(c)?;
+        let chars: Vec<_> = text.chars().collect();
+        if *start > chars.len() {
+            return Err("分页越界".into());
+        }
+        let end = (*start + 12000).min(chars.len());
+        return Ok(
+            json!({"text":chars[*start..end].iter().collect::<String>(),"nextStart":(end<chars.len()).then_some(end),"total":chars.len()}),
+        );
+    }
     if let Action::Snapshot { capture_id } = action {
         let d = w.data.lock().unwrap();
         return Ok(json!(
@@ -338,7 +446,11 @@ pub async fn workflow_command(
         return Err("任务正在运行，请先停止".into());
     }
     match action {
-        Action::Bind { path, role } => {
+        Action::Bind {
+            path,
+            role,
+            operation_id,
+        } => {
             if !["a", "b"].contains(&role.as_str()) {
                 return Err("录制角色无效".into());
             }
@@ -358,8 +470,32 @@ pub async fn workflow_command(
                     return Err("请先导入 A".into());
                 }
             }
-            let c = commands::capture(path, Conditions::default()).await?;
-            let mut d = w.data.lock().unwrap();
+            let rid = w
+                .data
+                .lock()
+                .unwrap()
+                .rounds
+                .last()
+                .map(|r| r.id.clone())
+                .unwrap_or_default();
+            let progress =
+                observation::ParseProgress::new(w.clone(), rid, operation_id.unwrap_or_else(id));
+            let c = match commands::capture_observed(
+                path,
+                Conditions::default(),
+                Some(progress.clone()),
+            )
+            .await
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    progress.fail(&e);
+                    return Err(e);
+                }
+            };
+            progress.update("save", None, None, "running", None);
+            let mut saved = w.data.lock().unwrap();
+            let mut d = saved.clone();
             let cid = c.id.clone();
             d.captures.push(c);
             if role == "a" {
@@ -373,7 +509,12 @@ pub async fn workflow_command(
                 r.candidate = Some(cid);
                 r.comparison = None;
             }
-            w.save(&d)?;
+            if let Err(e) = w.save(&d) {
+                progress.fail(&e);
+                return Err(e);
+            }
+            *saved = d;
+            progress.update("save", Some(1), Some(1), "completed", None);
         }
         Action::Analyze {
             round_id,
@@ -519,28 +660,27 @@ pub async fn execute(
             parent,
         )
     };
-    let verify = path.clone();
-    let expected2 = expected.clone();
-    tokio::task::spawn_blocking(move || {
-        if storage::file_hash(&verify, &AtomicBool::new(false))? != expected2 {
+    let parse_progress = observation::ParseProgress::new(w.clone(), rid.clone(), id());
+    let parsed: Result<crate::parser::ParsedProfile, String> = async {
+        if parse_progress.hash(path.clone()).await? != expected {
             return Err("原录制已变化，请重新定位同指纹文件".into());
         }
-        Ok::<_, String>(())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    w.check()?;
-    let profile = crate::parser::parse_file(&path)
-        .await
-        .map_err(|e| e.to_string())?;
-    let verify = path.clone();
-    if tokio::task::spawn_blocking(move || storage::file_hash(&verify, &AtomicBool::new(false)))
-        .await
-        .map_err(|e| e.to_string())??
-        != expected
-    {
-        return Err("解析期间录制发生变化".into());
+        w.check()?;
+        let p = parse_progress.parse(path.clone()).await?;
+        if parse_progress.hash(path).await? != expected {
+            return Err("解析期间录制发生变化".into());
+        }
+        Ok(p)
     }
+    .await;
+    let profile = match parsed {
+        Ok(p) => p,
+        Err(e) => {
+            parse_progress.fail(&e);
+            return Err(e);
+        }
+    };
+    parse_progress.update("parse", None, None, "completed", None);
     let file_id = id();
     let details = profile.details;
     let parent = match parent {
@@ -571,7 +711,10 @@ pub async fn execute(
     w.check()?;
     let status = crate::project::editor::status(Path::new(&project.info.root), &w.cancelled).await;
     *project.editor_status.lock().unwrap() = status.clone();
-    let offline_reason=(status.status!="ready").then(||"已完成离线工程定位；未取得 Editor 实时场景、资源和导入信息，详见报告中的证据范围。".to_string());
+    let offline_reason = (status.status != "ready").then(|| {
+        "已完成离线工程定位；未取得 Editor 实时场景、资源和导入信息，详见报告中的证据范围。"
+            .to_string()
+    });
     project.info.editor = status;
     // ACP closing its read scope must not cancel the workflow's own flag.
     project.cancelled = Arc::new(AtomicBool::new(false));
@@ -683,6 +826,7 @@ fn record_event(
     event: DiagnoseEvent,
     context: Option<Value>,
 ) -> Result<(), String> {
+    let pid = w.data.lock().unwrap().id.clone();
     if !matches!(
         event,
         DiagnoseEvent::Chunk { .. }
@@ -691,7 +835,7 @@ fn record_event(
             | DiagnoseEvent::Cancelled
             | DiagnoseEvent::Error { .. }
     ) {
-        return Ok(());
+        return w.activity(&pid, rid, &report.report_id, &event);
     }
     // Commit the event before exposing its contents to any polling client.
     let mut entry = json!({"event":event,"offset":report.text.len()});
@@ -702,6 +846,7 @@ fn record_event(
         *w.save_error.lock().unwrap() = Some(e.clone());
         return Err(e);
     }
+    w.activity(&pid, rid, &report.report_id, &event)?;
     report.apply(&event);
     if let DiagnoseEvent::SessionCreated { acp_session_id } = &event {
         report.session_id = acp_session_id.clone();

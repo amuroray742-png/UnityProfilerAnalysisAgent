@@ -2,7 +2,7 @@ use super::*;
 use crate::acp_client::{self, client::SessionHandle, DiagnoseEvent, DiagnoseRequest};
 use serde_json::{json, Value};
 use std::sync::{atomic::Ordering, Arc};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 #[derive(Default)]
 pub struct OptimizationState {
     pub operation: tokio::sync::Mutex<()>,
@@ -135,40 +135,59 @@ fn run_view(s: &Run) -> Value {
 }
 pub(super) fn view(w: &Workspace) -> Value {
     let d = w.data.lock().unwrap();
-    json!({"saveError":*w.save_error.lock().unwrap(),"version":d.version,"rootAvailable":super::workflow::project_available(&d.root).is_ok(),"id":d.id,"name":d.name,"root":d.root,"directory":w.directory,"budgets":d.budgets,"busy":w.busy.load(Ordering::SeqCst),
+    json!({"parseProgress":w.observation.lock().unwrap().progress.clone(),"saveError":*w.save_error.lock().unwrap(),"version":d.version,"rootAvailable":super::workflow::project_available(&d.root).is_ok(),"id":d.id,"name":d.name,"root":d.root,"directory":w.directory,"budgets":d.budgets,"busy":w.busy.load(Ordering::SeqCst),
     "captures":d.captures.iter().map(|c|json!({"id":c.id,"path":c.path,"hash":c.hash,"conditions":c.conditions,"snapshot":c.snapshot.meta})).collect::<Vec<_>>(),
     "rounds":d.rounds.iter().map(|r|json!({"workflow":r.workflow,"performanceStatus":r.performance_status(),"id":r.id,"baseline":r.baseline,"candidate":r.candidate,"tasks":r.tasks,"taskVersion":r.task_version,"taskVerifications":r.task_verifications,"tests":r.tests,"comparison":compact_comparison(&r.comparison),"correctness":r.correctness,"decision":r.decision,
         "reports":r.reports.iter().enumerate().map(|(i,p)|json!({"attempt":r.reports[..=i].iter().filter(|q|q.stage==p.stage).count(),"reportId":p.report_id,"sessionId":p.session_id,"stage":p.stage,"agentId":p.agent_id,"status":p.status,"createdAt":p.created_at,"parentReportId":p.parent_report_id,"reason":p.incomplete_reason})).collect::<Vec<_>>(),
         "runs":r.runs.iter().map(run_view).collect::<Vec<_>>() })).collect::<Vec<_>>()})
 }
 pub(super) async fn capture(path: PathBuf, conditions: Conditions) -> Result<Capture, String> {
+    capture_observed(path, conditions, None).await
+}
+pub(super) async fn capture_observed(
+    path: PathBuf,
+    conditions: Conditions,
+    progress: Option<observation::ParseProgress>,
+) -> Result<Capture, String> {
     let path = path.canonicalize().map_err(|e| e.to_string())?;
-    let p = path.clone();
-    let hash = tokio::task::spawn_blocking(move || storage::file_hash(&p, &AtomicBool::new(false)))
-        .await
-        .map_err(|e| e.to_string())??;
-    let profile = crate::parser::parse_file(&path)
-        .await
-        .map_err(|e| e.to_string())?;
-    let snapshot = crate::extractor::extract(&profile);
-    let mut frames = profile.frames;
-    for f in &mut frames {
-        f.main_thread_samples.clear();
-        f.gc_alloc_sites.clear();
-        f.render_events.clear();
-    }
-    let p = path.clone();
-    let after =
-        tokio::task::spawn_blocking(move || storage::file_hash(&p, &AtomicBool::new(false)))
+    async fn hash(path: PathBuf, p: &Option<observation::ParseProgress>) -> Result<String, String> {
+        if let Some(p) = p {
+            return p.hash(path).await;
+        }
+        tokio::task::spawn_blocking(move || storage::file_hash(&path, &AtomicBool::new(false)))
             .await
-            .map_err(|e| e.to_string())??;
-    if hash != after {
+            .map_err(|e| e.to_string())?
+    }
+    let before = hash(path.clone(), &progress).await?;
+    let profile = if let Some(p) = &progress {
+        p.parse(path.clone()).await?
+    } else {
+        crate::parser::parse_file(&path)
+            .await
+            .map_err(|e| e.to_string())?
+    };
+    if let Some(p) = &progress {
+        p.update("aggregate", None, None, "running", None);
+    }
+    let (snapshot, frames) = tokio::task::spawn_blocking(move || {
+        let snapshot = crate::extractor::extract(&profile);
+        let mut frames = profile.frames;
+        for f in &mut frames {
+            f.main_thread_samples.clear();
+            f.gc_alloc_sites.clear();
+            f.render_events.clear();
+        }
+        (snapshot, frames)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    if before != hash(path.clone(), &progress).await? {
         return Err("解析期间录制文件变化".into());
     }
     Ok(Capture {
         id: id(),
         path,
-        hash,
+        hash: before,
         conditions,
         snapshot,
         frames,
@@ -299,6 +318,12 @@ pub async fn optimization_command(
         return Ok(Value::Null);
     }
     let w = w.ok_or("请创建或打开优化项目")?;
+    {
+        let app = app.clone();
+        w.observation.lock().unwrap().notify = Some(Arc::new(move |name, value| {
+            let _ = app.emit(name, value);
+        }));
+    }
     if matches!(action, Action::Cancel) {
         w.cancel_epoch.fetch_add(1, Ordering::SeqCst);
         w.cancelled.store(true, Ordering::SeqCst);
@@ -528,13 +553,26 @@ pub async fn optimization_command(
                     .ok_or("基线不存在")?;
                 (c.snapshot.clone(), c.path.clone(), c.hash.clone())
             };
-            if storage::file_hash(&path, &AtomicBool::new(false))? != expected {
-                return Err("基线文件发生变化".into());
+            let parsing = observation::ParseProgress::new(w.clone(), round_id.clone(), id());
+            let parsed: Result<_, String> = async {
+                if parsing.hash(path.clone()).await? != expected {
+                    return Err("基线文件发生变化".into());
+                }
+                let p = parsing.parse(path.clone()).await?;
+                if parsing.hash(path).await? != expected {
+                    return Err("解析期间基线文件发生变化".into());
+                }
+                Ok(p.details)
             }
-            let details = crate::parser::parse_file(&path)
-                .await
-                .map_err(|e| e.to_string())?
-                .details;
+            .await;
+            let details = match parsed {
+                Ok(p) => p,
+                Err(e) => {
+                    parsing.fail(&e);
+                    return Err(e);
+                }
+            };
+            parsing.update("parse", None, None, "completed", None);
             if w.cancel_epoch.load(Ordering::SeqCst) != cancel_epoch {
                 return Err("已停止启动优化，尚未修改代码".into());
             }

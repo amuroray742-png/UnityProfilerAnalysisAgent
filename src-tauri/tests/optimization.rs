@@ -275,6 +275,13 @@ async fn session(real: Option<&str>) {
         .unwrap()
         .contains("number = 2"));
     assert!(!w.data.lock().unwrap().rounds[0].runs[0].changes.is_empty());
+    let mut cursor=0;let mut activity=vec![];
+    loop {let p=observation::read(&w.directory,&run,cursor).unwrap();activity.extend(p["rows"].as_array().unwrap().iter().cloned());cursor=p["nextCursor"].as_u64().unwrap();if p["hasMore"]!=true{break;}}
+    assert!(activity.iter().any(|e|e["event"]["kind"]=="chunk"));
+    assert!(activity.iter().any(|e|e["event"]["tool"]=="optimization_replace"&&e["event"]["status"]=="running"));
+    assert!(activity.iter().any(|e|e["event"]["tool"]=="optimization_replace"&&e["event"]["status"]=="completed"));
+    assert!(activity.iter().all(|e|e["event"]["args"].get("new_text").is_none()));
+    println!("Public modification activity: {} committed events",activity.len());
     w.rollback(&r).unwrap();
     assert!(std::fs::read_to_string(root.join("Assets/Work.cs"))
         .unwrap()
@@ -1102,4 +1109,52 @@ fn automatic_project_scan_observes_workspace_cancellation() {
         !w.cancelled.load(Ordering::SeqCst),
         "closing read scope must not disable checks or rollback"
     );
+}
+
+#[test]
+fn activity_feed_is_durable_paged_scoped_and_does_not_keep_code_arguments() {
+    let (_temp,w,rid)=setup(b"public class Work {}");
+    let pid=w.data.lock().unwrap().id.clone();let run=id();
+    assert_eq!(observation::read(&w.directory,&run,0).unwrap()["available"],false);
+    w.activity(&pid,&rid,&run,&DiagnoseEvent::ToolActivity{call_id:"call".into(),tool:"optimization_replace".into(),status:"running".into(),args:json!({"path":"Assets/中文.cs","new_text":"secret code","old_text":"old code"}),error:None}).unwrap();
+    for _ in 0..120{w.activity(&pid,&rid,&run,&DiagnoseEvent::Chunk{text:"公开说明中文\n".into()}).unwrap();}
+    w.activity(&pid,&rid,&run,&DiagnoseEvent::ToolActivity{call_id:"call".into(),tool:"optimization_replace".into(),status:"completed".into(),args:json!({}),error:None}).unwrap();
+    let page=observation::read(&w.directory,&run,0).unwrap();assert_eq!(page["rows"].as_array().unwrap().len(),100);assert_eq!(page["hasMore"],true);
+    assert_eq!(page["rows"][0]["event"]["args"]["path"],"Assets/中文.cs");assert!(page.to_string().find("secret code").is_none());
+    let cursor=page["nextCursor"].as_u64().unwrap();let rest=observation::read(&w.directory,&run,cursor).unwrap();assert_eq!(rest["rows"].as_array().unwrap().len(),22);assert_eq!(rest["hasMore"],false);
+    assert!(observation::read(&w.directory,&run,1).is_err());assert!(observation::read(&w.directory,"../escape",0).is_err());
+    let dir=w.directory.clone();drop(w);let reopened=Workspace::open(dir).unwrap();assert_eq!(observation::read(&reopened.directory,&run,cursor).unwrap(),rest);
+}
+
+#[test]
+fn activity_limit_preserves_report_semantics_and_torn_tail_is_not_published(){
+    use std::io::Write;
+    let (_temp,w,rid)=setup(b"class Work {}");let pid=w.data.lock().unwrap().id.clone();let run=id();
+    let text="中".repeat(16000);
+    for _ in 0..240{w.activity(&pid,&rid,&run,&DiagnoseEvent::Chunk{text:text.clone()}).unwrap();}
+    let p=w.directory.join("activity").join(format!("{run}.jsonl"));assert!(std::fs::metadata(&p).unwrap().len()<=observation::ACTIVITY_LIMIT);
+    let mut cursor=0;let mut limited=false;loop{let v=observation::read(&w.directory,&run,cursor).unwrap();for row in v["rows"].as_array().unwrap(){limited|=row["event"]["kind"]=="limited";assert!(row["event"]["text"].as_str().is_none_or(|s|s.len()<=16384));}cursor=v["nextCursor"].as_u64().unwrap();if v["hasMore"]!=true{break;}}
+    assert!(limited);
+    let other=id();w.activity(&pid,&rid,&other,&DiagnoseEvent::Chunk{text:"正文".into()}).unwrap();let v=observation::read(&w.directory,&other,0).unwrap();let cursor=v["nextCursor"].as_u64().unwrap();
+    std::fs::OpenOptions::new().append(true).open(w.directory.join("activity").join(format!("{other}.jsonl"))).unwrap().write_all(b"{torn").unwrap();
+    let v=observation::read(&w.directory,&other,cursor).unwrap();assert!(v["rows"].as_array().unwrap().is_empty());assert_eq!(v["hasMore"],false);
+}
+
+#[tokio::test]
+async fn observed_capture_hash_and_parse_use_real_bytes(){
+    let (_temp,w,rid)=setup(b"class Work {}");let p=observation::ParseProgress::new(w.clone(),rid,"operation".into());
+    let path=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/editor-dump.json");
+    let bytes=std::fs::read(&path).unwrap();assert_eq!(p.hash(path.clone()).await.unwrap(),storage::hash(&bytes));
+    let v=w.observation.lock().unwrap().progress.clone().unwrap();assert_eq!(v["done"],bytes.len());assert_eq!(v["total"],bytes.len());
+    let profile=p.parse(path).await.unwrap();assert!(!profile.frames.is_empty());let v=w.observation.lock().unwrap().progress.clone().unwrap();assert!(v["total"].is_null());assert_eq!(v["stage"],"parse");
+    p.fail("损坏结构");assert_eq!(w.observation.lock().unwrap().progress.as_ref().unwrap()["status"],"failed");
+}
+
+#[test]
+fn activity_write_failure_sets_unsaved_state(){
+    let (_temp,w,rid)=setup(b"class Work {}");let pid=w.data.lock().unwrap().id.clone();let run=id();
+    w.activity(&pid,&rid,&run,&DiagnoseEvent::Chunk{text:"before".into()}).unwrap();let path=w.directory.join("activity").join(format!("{run}.jsonl"));
+    let mut permissions=std::fs::metadata(&path).unwrap().permissions();permissions.set_readonly(true);std::fs::set_permissions(&path,permissions).unwrap();
+    assert!(w.activity(&pid,&rid,&run,&DiagnoseEvent::Chunk{text:"after".into()}).is_err());assert!(w.save_error.lock().unwrap().is_some());
+    let mut permissions=std::fs::metadata(&path).unwrap().permissions();permissions.set_readonly(false);std::fs::set_permissions(path,permissions).unwrap();
 }

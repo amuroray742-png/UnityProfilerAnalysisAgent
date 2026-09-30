@@ -16,3 +16,13 @@
 .project-workflow table{width:100%;border-collapse:collapse}.project-workflow td,.project-workflow th{padding:10px;text-align:left;border-bottom:1px solid #343c49}
 .workflow-note{padding:12px;background:#332b16;border-radius:6px}.workflow-actions{display:flex;flex-wrap:wrap;gap:8px}
 @media(max-width:650px){.project-workflow{padding:12px}.workflow-card{padding:16px}.workflow-heading{display:block}.workflow-steps{gap:6px}}
+.project-tabs,.history-tabs {display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+.project-tabs [aria-pressed="true"],.history-tabs [aria-pressed="true"],.round-list [aria-pressed="true"] {border-color:#60a5fa;background:#203247;color:#eff6ff}
+.history-layout {display:grid;grid-template-columns:230px minmax(0,1fr);gap:20px}
+.round-list{display:flex;flex-direction:column;gap:10px}.round-list button{text-align:left}.round-list span{display:block;font-size:12px;margin-top:7px}
+.round-content{min-width:0}.change-file{display:block;margin:8px 0;max-width:100%;overflow-wrap:anywhere;text-align:left}
+.activity-scroll{max-height:480px;overflow:auto;overflow-wrap:anywhere;padding:8px 12px;background:#10141b;border-radius:6px}
+.activity-tool,.activity-status{margin:10px 0;padding:8px;border-left:2px solid #557699}.activity-tool pre,.file-diff{white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%;background:#10141b;padding:12px}
+.work-activity .diagnosis-stream{min-height:0;border:0}.parse-progress progress{width:100%;height:16px;accent-color:#60a5fa}
+@media(max-width:800px){.history-layout{grid-template-columns:1fr}.round-list{flex-direction:row;overflow:auto}.round-list button{min-width:190px}}
+.project-summary{padding:14px 22px}.project-summary h2{font-size:20px}.workflow-running{padding:8px 0}.workflow-running p{margin:6px 0;color:var(--text-secondary)}.parse-complete{font-size:13px;color:var(--text-secondary);margin:8px 0}.stream-tail{white-space:pre-wrap;overflow-wrap:anywhere}.file-diff{line-height:1.65}

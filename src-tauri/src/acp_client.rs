@@ -40,6 +40,13 @@ pub enum DiagnoseEvent {
     Chunk {
         text: String,
     },
+    ToolActivity {
+        call_id: String,
+        tool: String,
+        status: String,
+        args: serde_json::Value,
+        error: Option<String>,
+    },
     McpCall {
         tool: String,
         args: serde_json::Value,
@@ -169,7 +176,8 @@ async fn run_session(
     })
     .await?;
     let config = bridge.acp_config(&req.bridge_executable);
-    let mut child = client::spawn_agent_with_policy(&preset, &workspace.0, modification.is_some()).await?;
+    let mut child =
+        client::spawn_agent_with_policy(&preset, &workspace.0, modification.is_some()).await?;
     let tree = match client::ProcessTree::attach(&child) {
         Ok(tree) => tree,
         Err(error) => {
@@ -207,13 +215,24 @@ async fn run_session(
     let events = req.event_tx.clone();
     workers.spawn(async move {
         while let Some(audit) = audit_rx.recv().await {
-            let _ = events.send(DiagnoseEvent::McpCall {
-                tool: audit.tool.clone(),
-                args: audit.arguments,
-            });
-            let _ = events.send(DiagnoseEvent::McpResult {
+            // Preserve legacy observers while the project UI uses correlated activity.
+            if audit.status == "running" {
+                let _ = events.send(DiagnoseEvent::McpCall {
+                    tool: audit.tool.clone(),
+                    args: audit.arguments.clone(),
+                });
+            } else {
+                let _ = events.send(DiagnoseEvent::McpResult {
+                    tool: audit.tool.clone(),
+                    result: serde_json::json!({"isError":audit.is_error}),
+                });
+            }
+            let _ = events.send(DiagnoseEvent::ToolActivity {
+                call_id: audit.id,
                 tool: audit.tool,
-                result: serde_json::json!({"isError":audit.is_error}),
+                status: audit.status,
+                args: audit.arguments,
+                error: audit.error,
             });
         }
     });

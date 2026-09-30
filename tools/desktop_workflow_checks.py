@@ -48,13 +48,13 @@ def run_workflow(js, request, root, output, report, saved=None, resume=None):
         click('返回项目首页');wait(lambda:text('新建优化项目'),20)
         js('window.__pick=arguments[0]',str(directory));click('打开优化项目');wait(lambda:state() is not None,20)
     def exports():
-        click('报告与每轮记录','summary')
+        click('历史轮次')
         for kind,ext in [('Markdown','md'),('HTML','html')]:
             path=output/f'workflow-{uuid.uuid4().hex}.{ext}'
             js('window.__save=arguments[0]',str(path));click('导出本轮 '+kind)
             wait(path.exists,30);assert path.stat().st_size>500
             report.setdefault('exports',[]).append(str(path))
-        click('报告与每轮记录','summary')
+        click('当前工作')
     if saved:
         js('window.__pick=arguments[0]',str(saved));click('打开优化项目');wait(lambda:state() is not None,20)
         p=state();assert os.path.samefile(p['root'],project)

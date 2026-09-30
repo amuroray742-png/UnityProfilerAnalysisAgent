@@ -10,6 +10,9 @@ use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
 pub struct ToolAudit {
+    pub id: String,
+    pub status: String,
+    pub error: Option<String>,
     pub tool: String,
     pub arguments: Value,
     pub is_error: bool,
@@ -83,13 +86,36 @@ impl ServerHandler for ProfilerServer {
         _: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let arguments = Value::Object(request.arguments.unwrap_or_default());
+        let id = uuid::Uuid::new_v4().to_string();
+        if let Some(tx) = &self.audit {
+            let _ = tx
+                .send(ToolAudit {
+                    id: id.clone(),
+                    status: "running".into(),
+                    error: None,
+                    tool: request.name.to_string(),
+                    arguments: arguments.clone(),
+                    is_error: false,
+                })
+                .await;
+        }
         let result = dispatch(&self.store, &request.name, arguments.clone()).await;
         if let Some(tx) = &self.audit {
-            let _ = tx.try_send(ToolAudit {
-                tool: request.name.to_string(),
-                arguments,
-                is_error: result.is_err(),
-            });
+            let _ = tx
+                .send(ToolAudit {
+                    id,
+                    status: if result.is_err() {
+                        "failed"
+                    } else {
+                        "completed"
+                    }
+                    .into(),
+                    error: result.as_ref().err().map(|e| e.to_string()),
+                    tool: request.name.to_string(),
+                    arguments,
+                    is_error: result.is_err(),
+                })
+                .await;
         }
         match result {
             Ok(value) => {
