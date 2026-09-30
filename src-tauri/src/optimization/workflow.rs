@@ -114,6 +114,9 @@ pub fn next_round(w: &Workspace) -> Result<(), String> {
 )]
 pub enum Action {
     Recent,
+    PluginStatus { project_id: String },
+    PluginInstall { project_id: String },
+    PluginRecords { project_id: String },
     Activity {
         round_id: String,
         run_id: String,
@@ -249,6 +252,20 @@ pub async fn workflow_command(
         .await
         .clone()
         .ok_or("请先新建或打开优化项目")?;
+    if let Action::PluginStatus { project_id } | Action::PluginInstall { project_id } | Action::PluginRecords { project_id } = &action {
+        if w.data.lock().unwrap().id != *project_id { return Err("工程身份已变化，请重新打开状态".into()); }
+        if w.busy.load(Ordering::SeqCst) { return Err("请先停止当前任务，再检查或安装插件".into()); }
+        if !app_state.0.lock().await.active_sessions.is_empty() { return Err("请先停止诊断会话".into()); }
+        let install = matches!(action, Action::PluginInstall { .. });
+        let records = matches!(action, Action::PluginRecords { .. });
+        let work = w.clone();
+        let result = tokio::task::spawn_blocking(move || if install { plugin::install(&work) } else { plugin::status(&work) }).await.map_err(|e|e.to_string())??;
+        if records { return Ok(json!(result.record)); }
+        let root=w.data.lock().unwrap().root.clone();
+        let mut value=json!(result);
+        value["editor"]=json!(crate::project::editor::status(&root, &std::sync::atomic::AtomicBool::new(false)).await);
+        return Ok(value);
+    }
     {
         let app = app.clone();
         w.observation.lock().unwrap().notify = Some(Arc::new(move |name, value| {

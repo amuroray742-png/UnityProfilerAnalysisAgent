@@ -2,7 +2,13 @@
 
 要求 Unity 6000.3、Unity CLI，以及 `com.unity.pipeline` 0.6.0-exp.1。本包只编译进入 Editor。
 
-在目标工程的 Unity Package Manager 中选择 **Add package from disk**，选择本目录的 `package.json`。Unity 会解析依赖并编译；这是用户主动的安装操作，分析应用不会自动改 manifest 或升级 Editor。
+推荐在分析工具中打开优化项目，在“Unity 插件”区域点击“重新检查”，关闭目标工程的 Unity Editor 后点击 **安装到工程** 或 **迁移到工程内**。插件随应用交付，安装到 `Packages/com.upaa.inspector`，不需要下载工具仓库。完成后重新打开 Unity，等待依赖解析与编译，再检查 Editor 连接。
+
+将内嵌包（含 `.meta`）、变更后的 `Packages/manifest.json` 和 Unity 重新生成的 `Packages/packages-lock.json` 一并提交。团队成员不需要相同个人目录；Pipeline 与 Newtonsoft 仍需正常获取，Unity CLI 须另行安装。安装不会升级 Unity、改其他包版本或 registry。
+
+原 `file:` 路径失效时可以迁移；旧目录仍存在但与随程序版本内容不同，或工程已有其他版本／本地修改时，工具停止并提示冲突，不覆盖。Git／registry 来源不自动迁移。安装备份与恢复状态独立保存在优化项目存档的 `plugin-install.json`，不参与 AI 代码回退。失败可在关闭 Editor 后继续安装，外部变动冲突须先核对。
+
+**Add package from disk** 指向工程外部目录只适合插件开发：该引用可能包含个人绝对路径或依赖工程外目录，不能作为团队共享的默认方式。手动部署时应把完整插件放进工程的 `Packages/com.upaa.inspector` 并纳入版本控制，不另加外部路径依赖。
 
 编译后，在分析应用选择同一工程根目录，检查 Editor 状态。诊断和定位只调用 `upaa_context`、`upaa_asset` 和用于取消该次读取的 `upaa_cancel`，不给 AI 注册 Unity 的通用执行或写入工具。
 

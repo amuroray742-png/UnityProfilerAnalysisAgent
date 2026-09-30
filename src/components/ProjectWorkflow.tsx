@@ -1,3 +1,4 @@
+import { UnityPluginPanel } from './UnityPluginPanel';
 import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -36,7 +37,8 @@ export function ProjectWorkflow(){
  const [tests,setTests]=useState(''),[conditions,setConditions]=useState<Record<string,Record<string,string>>>({}),[budgets,setBudgets]=useState<Record<string,number>>({});
  const epoch=useRef(0),inFlight=useRef(false);
  const current=project?.rounds.at(-1),round=current;
- const busy=loading||!!project?.busy, step=stepOf(current),run=round?.runs.at(-1);
+ const [pluginBusy,setPluginBusy]=useState(false);
+ const busy=loading||pluginBusy||!!project?.busy, step=stepOf(current),run=round?.runs.at(-1);
  const finished=!!current&&['accepted','rolled_back'].includes(current.decision);
  const complete=readyReport(current);
  const available=(id:string)=>!!agents.find(a=>a.id===id&&a.available);
@@ -71,11 +73,12 @@ export function ProjectWorkflow(){
  <nav className="project-tabs" aria-label="项目页面"><button aria-pressed={view==='current'} onClick={()=>setView('current')}>当前工作</button><button aria-pressed={view==='history'} onClick={()=>setView('history')}>历史轮次</button></nav>
  {view==='history'&&<HistoryPanel key={project.id} project={project}/>}
  <div hidden={view!=='current'}>
+ <UnityPluginPanel key={project.id} projectId={project.id} busy={loading||!!project.busy} onBusy={setPluginBusy}/>
  <section className="workflow-card">
  {project.rootAvailable===false&&<div role="alert">Unity 工程不可用，目前只能查看存档；恢复原目录后再继续。</div>}
  <ol className="workflow-steps">{['导入录制','诊断定位','优化代码','重录对比','本轮结论'].map((s,i)=><li key={s} aria-current={i===step?'step':undefined} className={i===step?'active':''}>{i+1}. {s}</li>)}</ol>
  {current?.workflow?.reason&&<p className="workflow-note">{current?.workflow?.reason}</p>}
- {project.busy||operation==='startAutomatic'?<div className="workflow-running"><h3>{current?.workflow?.status==='running'?(current?.workflow?.stage==='project'?'正在定位工程中的问题…':'正在诊断性能热点…'):'AI 正在优化和检查代码…'}</h3><p>记录持续保存。停止后可重新打开项目继续。</p>{!current?.reports.some(p=>p.status==='running')&&!current?.runs.some(r=>r.status==='running')&&<button onClick={stop}>停止当前任务</button>}</div>:<div className="workflow-primary">
+ {project.busy||operation==='startAutomatic'?<div className="workflow-running"><h3>{pluginBusy?'正在检查或安装 Unity 插件…':current?.workflow?.status==='running'?(current?.workflow?.stage==='project'?'正在定位工程中的问题…':'正在诊断性能热点…'):'AI 正在优化和检查代码…'}</h3><p>记录持续保存。停止后可重新打开项目继续。</p>{!pluginBusy&&!current?.reports.some(p=>p.status==='running')&&!current?.runs.some(r=>r.status==='running')&&<button onClick={stop}>停止当前任务</button>}</div>:<div className="workflow-primary">
  {step===0&&<><h3>第一步：导入优化前的录制</h3><p>在 Unity Profiler 中录制要优化的场景，保存后在这里导入。</p><button className="primary" disabled={busy} onClick={()=>importCapture('a')}>导入录制 A</button></>}
  {step===1&&<><h3>找出性能热点及工程中的相关代码</h3>{agentSelect('分析 AI',analysis,setAnalysis)}<details><summary>高级设置：单独选择定位 AI</summary>{agentSelect('定位 AI',localization,setLocalization)}</details><button className="primary" disabled={busy||!available(analysis)||!available(localization||analysis)||project.rootAvailable===false} onClick={()=>analyze()}>{current?.reports.length?'继续诊断定位':'一键诊断并定位'}</button><p>自动完成性能诊断和工程定位；此步骤不会修改代码。</p></>}
  {step===2&&<><h3>{current?.runs.length?'上次记录已保存，可以继续优化':'定位完成，准备优化代码'}</h3>{agentSelect('修改 AI',modifier,setModifier,true)}<label>补充要求（选填）<textarea value={requirements} onChange={e=>setRequirements(e.target.value)} placeholder="例如：保持玩法不变，优先减少卡顿"/></label><button className="primary" disabled={busy||!available(modifier)||!!modificationAvailability(agents.find(a=>a.id===modifier)??{id:'',command:'',label:'',args:[],available:false})||project.rootAvailable===false} onClick={()=>opt({op:'startAutomatic',roundId:current!.id,agentId:modifier,requirements})}>开始优化</button><p>点击后 AI 会在新会话中调查并修改代码，修改前自动保存可回退记录。</p></>}

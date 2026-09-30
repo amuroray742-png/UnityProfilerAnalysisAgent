@@ -1,4 +1,5 @@
 //! Persistent optimization workspaces. No Agent owns the edit/rollback ledger.
+pub mod plugin;
 pub mod archive;
 pub mod observation;
 pub mod automatic;
