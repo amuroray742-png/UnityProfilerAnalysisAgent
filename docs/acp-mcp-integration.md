@@ -1,8 +1,22 @@
 # ACP / MCP 集成与验收
 
-当前已接通 Windows 上的 ACP v1 诊断与 MCP stdio 查询。真实 Claude Code ACP 0.16.2 的完成及取消流程通过公开 fixture 验证；release 桌面完成/取消/重试及 NSIS 安装后协议已通过；MSI 安装后协议也已在 Windows CI 通过；其他 Agent 与更广泛诊断内容仍待验收。完成范围见[项目状态](project-status.md)。
+当前已接通 Windows 上的 ACP v1 诊断与 MCP stdio 查询。真实 Claude Code ACP 0.16.2 的完成及取消流程通过公开 fixture 验证；release 桌面完成/取消/重试及 NSIS 安装后协议已通过；MSI 安装后协议也已在 Windows CI 通过；Codex ACP 1.13.1 也已有公开样例诊断、定位和受限修改验收；Gemini 和更广泛诊断内容仍待验收。完成范围见[项目状态](project-status.md)。
 
-## 使用流程
+## 当前项目流程
+
+新建／打开项目 → 导入 A → 一键诊断并定位 → 用户点击开始优化 → 重录 B → 对比与决定。诊断、定位、修改及每次重试分别创建 ACP 会话；定位完成不会自动修改。诊断与定位可共用分析 AI，修改 AI 独立选择。操作见[简单使用说明](optimization-loop.md)。
+
+项目通过 `workflow_command` 管理阶段，报告及终态按轮次保存；公开活动先追加同步 `activity` 日志再通知 UI，通过游标补读。正文上限 2 MiB UTF-8，超限标为不完整；活动摘要上限 10 MiB，达到上限明确记录。关闭重开可查看历史，不恢复旧聊天。
+
+| 阶段 | 工具范围 |
+|---|---|
+| 性能诊断 | 当前录制的性能只读查询 |
+| 工程定位 | 性能查询、工程只读查询及候选任务提案；提案不授权编辑 |
+| 代码优化 | 新会话内的性能与工程查询、受限代码读取／替换／创建、内部任务及固定检查；旧受限接口保留原文件白名单 |
+
+当前开放修改的适配器为已验证的 Claude 与 Codex；不会自动替换不可用 Agent。具体代码范围与回退限制见[优化项目说明](optimization-loop.md)。
+
+## 旧录制接口与历史界面流程
 
 1. 导入支持的录制或 Editor dump，等待分析完成。
 2. 选择已安装且已完成自身登录配置的 ACP Agent，点击“开始 AI 诊断”。PATH 检测只代表程序存在，认证或协议错误会显示在界面。
@@ -21,11 +35,11 @@
 
 session/update 中的 agent_message_chunk 才作为回答正文；其他会话的通知被过滤。stderr 是日志，不直接作为失败终态。只有 end_turn 生成 Finished；refusal、max_tokens、max_turn_requests 会说明诊断未完成。协议错误、过早 EOF、非法 JSON 和超时产生一个 Error，之后不再追加 Finished。
 
-前后端事件包含 fileId 与本地 sessionId，camelCase 字段一致。前端缓冲早于 diagnose 命令响应到达的事件，只接收最终返回的会话；重试、重置后的旧事件被忽略。界面保留最近 500 条事件和最近 2 MiB 字符的回答，长会话可能截去早期内容；这不是服务端整体内存上限。
+前后端事件包含 fileId 与本地 sessionId，camelCase 字段一致。前端缓冲早于 diagnose 命令响应到达的事件，只接收最终返回的会话；重试、重置后的旧事件被忽略。兼容 hook 保留最近 500 条事件；正文不再静默截取尾部，终态从后端报告读取。项目主流程另按项目／轮次／运行身份过滤事件，历史正文和公开活动通过分页读取；这些限制不是服务端整体内存上限。
 
 取消先发 session/cancel，等待最多 2 秒取得 prompt 的取消响应，再清理进程、MCP 服务和临时目录。初始化/新会话阶段尚无远端 sessionId 时直接结束进程。Windows 使用 Job Object 管理适配器后代，关闭 Job 时一并终止；不配合取消的 fixture 也通过子进程退出断言。创建进程后立即加入 Job，极早启动阶段及其他平台的完整进程树行为尚需更广验收。
 
-初始化超时 30 秒，新会话 60 秒，prompt 总期限 300 秒，单条 ACP 消息上限 1 MiB。客户端不声明文件或终端能力；仅对当前会话中名称精确匹配本服务的 MCP 只读工具授予 allow_once，其余权限请求回复 cancelled 并记录日志。这不是对任意 Agent 内建能力的操作系统沙箱。
+初始化超时 30 秒，新会话 60 秒，普通诊断与 C# 兼容定位的 prompt 总期限 300 秒，工程定位及修改为 900 秒，单条 ACP 消息上限 1 MiB。客户端不声明文件或终端能力；仅对当前会话名称精确匹配且处于阶段白名单内的 MCP 工具授予 allow_once；只读阶段不授权修改工具，修改阶段另行校验运行身份、代码范围和指纹。其他权限请求回复 cancelled 并记录日志。这不是对任意 Agent 内建能力的操作系统沙箱。
 
 ## MCP 数据通道
 
@@ -111,4 +125,4 @@ codex-acp --version
 
 工程定位另用 `project` 报告阶段和独立 ACP 会话，注册 `project_summary`、`project_files`、`project_search`、`project_read`、`project_asset`、`project_references`；旧 `source_*` 仍仅限 C#。普通诊断不能访问工程工具，工程会话不能访问终端或 Unity eval。Editor 查询由 Rust 白名单桥接，固定协议与路径校验，取消仅针对对应 requestId。整体工程诊断 900 秒上限，单次 Editor 查询另有短超时；详情见[工程定位指南](project-diagnosis.md)。
 
-2026-09-29 增量：新增两个性能证据工具，默认性能工具总数为 9；Self 通过原始完整树区间校验后提供，不通过全局热点相减推断。详见 [data 证据查询](data-evidence.md)。前述“未提供 Self”为历史状态。
+2026-09-29 增量：新增两个性能证据工具，该次增量时性能工具总数为 9（历史计数，后续 Flow 等工具见对应专题）；Self 通过原始完整树区间校验后提供，不通过全局热点相减推断。详见 [data 证据查询](data-evidence.md)。前述“未提供 Self”为历史状态。

@@ -59,7 +59,11 @@ CPU、帧时间、GC 与可用渲染计数分别统计 mean/P50/P95/P99/max 和�
 
 导出不默认附带完整源码、通信日志、工程或录制。本轮导出列出变更类型、文件、指纹和执行状态；完整原始字节和逐次变化保存在优化项目，完整修改正文及差异可分页读取。HTML 沿用原有安全 Markdown 渲染及打印样式。
 
-## 验证入口
+## 安装包与开发验证
+
+普通使用者直接安装已提供的安装包，无需运行开发命令。维护者构建安装包的命令、输出目录及验证边界见[发布说明](release-readiness.md#构建与分发)；`--no-bundle` 只生成程序，不生成安装包。
+
+### 验证入口
 
 - `cargo test --manifest-path src-tauri/Cargo.toml --locked --offline`
 - `npm test`、`npm run build`
