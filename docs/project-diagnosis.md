@@ -4,15 +4,15 @@
 
 ## 使用
 
-1. 导入录制并完成首轮 AI 诊断。首轮失败、取消或超限时不能启动工程定位。
-2. 选择含 `Assets`、`Packages`、`ProjectSettings` 的 Unity 工程根目录，或粘贴路径。应用校验 Unity 版本并在后台建立索引；代码片段、资源字段会交给所选 Agent。
+1. 新建／打开优化项目，使用项目绑定的 Unity 工程目录；新建时选择含 `Assets`、`Packages`、`ProjectSettings` 的工程根目录。完整操作见[简单使用说明](optimization-loop.md)。
+2. 导入 A，选择分析 AI，点击“一键诊断并定位”。后端先完成性能诊断，再准备工程并定位；首轮失败、取消或超限时不会进入定位。应用校验 Unity 版本并在后台建立索引；代码片段、资源字段会交给所选 Agent。
 3. 应用自动检查与该路径匹配的 Editor、插件协议与工程身份。没有 CLI、未安装插件、Editor 未运行/编译/导入/Play Mode 或请求失败时，明确降级为离线定位，不会切换到其他已打开工程。
-4. 单次独立 ACP 会话接收完整首轮报告，并按热点查询性能数据、代码、引用和资源。可以取消、换目录后重试；首轮始终保留，旧定位报告保留到新会话成功启动。
-5. 在最终报告旁点击 **导出定位报告** 或 **合并导出**，选择 Markdown / HTML。系统保存对话框取消不报错，写入失败可以重试。HTML 禁止正文 HTML、脚本与远程资源，提供打印样式。报告包含实际工程/Editor 采集范围、时间、平台、资源指纹和缺失原因，不附带完整工程或通信日志。
+4. 单次独立 ACP 会话接收完整首轮报告，并按热点查询性能数据、代码、引用和资源。可以停止；诊断完成但定位失败时，“继续诊断定位”只重试定位。重试使用新会话，旧报告版本保留，不自动改绑工程目录。
+5. 在项目“历史轮次”查看完整诊断、定位版本及修改记录，并按轮次导出 Markdown / HTML。兼容录制页面另保留 **导出定位报告** 和 **合并导出**。系统保存对话框取消不报错，写入失败可以重试。HTML 禁止正文 HTML、脚本与远程资源，提供打印样式。报告包含实际工程/Editor 采集范围、时间、平台、资源指纹和缺失原因，不附带完整工程或通信日志。
 
-报告正文由后端保存，上限 2 MiB UTF-8，超限停止并明确标记不完整；有正文的取消/失败报告仍可导出。重置、切换录制和退出释放内存报告，已导出的文件保留。
+报告正文由后端保存，上限 2 MiB UTF-8，超限停止并明确标记不完整；有正文的取消/失败报告仍可导出。项目主流程按轮次在本地存档，关闭或重新打开项目不会清除已保存报告。旧 `fileId` 兼容接口的内存报告随录制释放，两者生命周期不同。已导出的文件保留。
 
-报告还会按需提供[具体 Marker 补点方案](marker-guidance.md#第二阶段确认具体补点方案)：依据实际读取的代码说明文件、行号、同步范围、固定名称和重录指标，并修正或撤回首轮不合适的方向。由程序手动添加，不自动修改工程；代码位置能确认不代表热点因果已证实。
+报告还会按需提供[具体 Marker 补点方案](marker-guidance.md#第二阶段确认具体补点方案)：依据实际读取的代码说明文件、行号、同步范围、固定名称和重录指标，并修正或撤回首轮不合适的方向。诊断和定位阶段只提建议；用户可手动添加，也可点击“开始优化”后由独立修改会话在允许的代码范围内补点；代码位置能确认不代表热点因果已证实。
 
 ## 首次安装 Editor 插件
 
@@ -37,6 +37,6 @@ Editor API 在主线程执行，层级遍历按对象分批让出到下一次 Ed
 
 ## 接口与验证
 
-新增 Tauri `prepare_project(fileId, root)`、`project_editor_status(fileId, scopeId)`、`diagnose_project(fileId, agentId, parentReportId, scopeId)`。报告阶段新增 `project` 和 `projectContext`。工程会话注册 `project_summary/files/search/read/asset/references` 六个 MCP 工具；普通诊断不开放。旧 `prepare_source/diagnose_source` 与 `source_*` 仍只授权 C#。
+项目主流程由 `workflow_command` 组织两阶段，并使用持久化项目／轮次身份恢复上下文。兼容 Tauri `prepare_project(fileId, root)`、`project_editor_status(fileId, scopeId)`、`diagnose_project(fileId, agentId, parentReportId, scopeId)`。报告阶段新增 `project` 和 `projectContext`。工程会话注册 `project_summary/files/search/read/asset/references` 六个 MCP 工具；普通诊断不开放。旧 `prepare_source/diagnose_source` 与 `source_*` 仍只授权 C#。
 
 公开资源在 [`tests/fixtures/unity-project`](../src-tauri/tests/fixtures/unity-project)，由 [Editor 生成器](../tools/unity-project-fixture/README.md) 生成；性能数据是公开合成 fixture，不声称真实采集关联。默认回归包含索引、安全边界、原始 Prefab override、权限隔离、取消与报告生命周期；真实 Editor 验收使用 `UPAA_PUBLIC_UNITY_PROJECT` 显式运行。当前验证结果及尚未覆盖项集中记录在[状态台账](project-status.md)。

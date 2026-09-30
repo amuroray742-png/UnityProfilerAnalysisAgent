@@ -12,7 +12,7 @@ CPU/GC 与诊断之后，新增 Unity 6000.3.9f1 渲染计数对照与展示，�
 
 ## 文档导航
 
-- [手动 Marker 补点建议](docs/marker-guidance.md)：首轮指出采样缺口，第二阶段根据实际代码给出具体补点方案，由程序手动添加后重新录制。
+- [手动 Marker 补点建议](docs/marker-guidance.md)：首轮指出采样缺口，第二阶段根据实际代码给出具体补点方案，用户可交给程序手动添加，或在点击“开始优化”后由修改 AI 补点，再重新录制。
 
 - [Flow 解码与跨线程查询](docs/flow-decoding.md)：事件 ID、样本关联、相邻帧查询和证据边界。
 
@@ -26,7 +26,7 @@ CPU/GC 与诊断之后，新增 Unity 6000.3.9f1 渲染计数对照与展示，�
 - [Windows 性能与发布验收](docs/performance-and-release.md)：release 测量方法、基线与安装验收边界。
 - [Windows 桌面验收](docs/manual-acceptance.md)：已验证的结果页/诊断流程与剩余原生窗口、安装检查。
 - [本地交付与发布门槛](docs/release-readiness.md)：本轮交付范围、检查结果及需要维护者决定的事项。
-- [ACP / MCP 集成状态](docs/acp-mcp-integration.md)：协议缺口和后续验收条件。
+- [ACP / MCP 集成状态](docs/acp-mcp-integration.md)：分阶段会话、工具权限与适配器验收边界。
 - [Unity 导出与对照操作](docs/unity-scripts/ExtractProfilerDump.README.md)：研究用 dump 与应用 JSON 的区别。
 
 ## 当前能力
@@ -42,7 +42,7 @@ CPU/GC 与诊断之后，新增 Unity 6000.3.9f1 渲染计数对照与展示，�
 | Unity 6000.3.23f1 `.data` | 部分实现 | 两份录制的指定范围通过 CPU/GC 对照；帧时间来自下一帧起点，末帧不可用；渲染计数已接入，渲染数值对照范围为另一个 6000.3.9f1 录制；更广版本待验证 |
 | Unity 6000.3.9f1 `.data` | 已验证（限定范围） | 单录制 2,000 帧五类渲染计数逐帧对照，1,998 帧有效；CPU/GC 对照 7 帧；GPU 与 SRP 收益不可用 |
 | `.pd3u` / `.raw` | 占位 | 文件头识别及帧数估算，不具备实质性能分析能力 |
-| ACP / MCP | 部分实现 | Windows Claude Code ACP 0.16.2 的 MCP 查询、流式诊断和取消通过；release 完成/取消/重新诊断已验证；其他 Agent 与广泛诊断准确性待验收 |
+| ACP / MCP | 部分实现 | Windows Claude Code ACP 0.16.2 与 Codex ACP 1.13.1 已有公开样例诊断、定位及受限修改证据；Gemini 与广泛诊断准确性待验收 |
 | 跨平台安装包、体积和性能承诺 | 待验证 | 不能从框架支持推导出本项目已验证 |
 
 ## 开发环境
@@ -68,7 +68,13 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 npm run tauri:build
 ```
 
-`npm run build` 只验证前端；`tauri:build` 已在本机生成 MSI / NSIS 包；NSIS 当前用户安装、安装后界面/协议和卸载已通过；MSI 管理员静默安装/协议/卸载也已在 CI 通过；交互安装向导、快捷方式、MSI GUI 和原生文件选择已由维护者本机人工确认，见[发布记录](docs/performance-and-release.md)。Rust 依赖已缓存时可追加 `--offline`。默认 Rust 测试会跳过依赖私有文件或进程环境的集成测试，详见验证台账。
+`npm run build` 只验证前端。2026-09-28 的历史发布验收中，`tauri:build` 已在本机生成 MSI / NSIS 包；NSIS 当前用户安装、安装后界面/协议和卸载已通过；MSI 管理员静默安装/协议/卸载也已在 CI 通过；交互安装向导、快捷方式、MSI GUI 和原生文件选择已由维护者本机人工确认，见[发布记录](docs/performance-and-release.md)。Rust 依赖已缓存时可追加 `--offline`。默认 Rust 测试会跳过依赖私有文件或进程环境的集成测试，详见验证台账。
+
+### Windows 安装包
+
+在仓库根目录执行 `npm run tauri:build`，生成 MSI 与 NSIS 安装包，分别位于 `src-tauri/target/release/bundle/msi/` 和 `src-tauri/target/release/bundle/nsis/`。只生成 EXE 安装包可用 `npm run tauri:build -- --bundles nsis`。
+
+`npm run tauri:build -- --no-bundle` 只生成 Release 程序，不生成安装包；`npm run build` 只构建前端。新构建产物不能直接沿用历史包的安装验收结论，见[发布门槛](docs/release-readiness.md)。
 
 ## 当前使用流程
 
@@ -112,6 +118,6 @@ Editor 脚本产生的 `frames[].threads[].samples[]` dump 由独立分支直接
 
 [data 原始证据、Self Time 与帧对比](docs/data-evidence.md)：CPU/GC 页展开帧证据，查询 Counter/metadata 或比较完整调用路径。
 
-### 一键代码优化
+### 历史与实时工作
 
-完成工程定位后，选择修改 AI 并点击“开始优化”。AI 在新会话中继续调查，自主修改和新增相关代码，自动保存记录；用户重录后对比，并可撤销本轮修改。无需逐项勾选或指定代码文件。资源与工程设置仍只读。见[简单使用说明](docs/optimization-loop.md)。
+“当前工作／历史轮次”提供各轮报告、报告版本、修改记录和逐文件差异。导入显示校验、解析、汇总、保存阶段；有准确字节总量时显示百分比，否则显示活动条。AI 面板展示真实公开输出和工具操作摘要，不展示内部思考。详细操作见[简单使用说明](docs/optimization-loop.md)。
