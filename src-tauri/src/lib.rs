@@ -30,6 +30,7 @@ pub fn run() {
         .manage(AppState::new())
         .manage(optimization::commands::OptimizationState::default())
         .invoke_handler(tauri::generate_handler![
+            optimization::workflow::workflow_command,
             optimization::commands::optimization_command,
             commands::upload,
             commands::analyze,

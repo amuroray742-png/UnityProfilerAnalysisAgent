@@ -38,7 +38,17 @@ def main():
     parser.add_argument('--report-source', action='store_true', help='Real Agent report/export/C# workflow using public fixtures only')
     parser.add_argument('--optimization-loop', action='store_true', help='Real public optimization workflow with saved tasks, two Agents, checks and rollback')
     parser.add_argument('--optimization-saved', type=Path, help='Reopen the public acceptance records and exercise final UI exports without calling an Agent')
+    parser.add_argument('--project-workflow', action='store_true')
+    parser.add_argument('--workflow-saved', type=Path)
+    parser.add_argument('--workflow-resume', type=Path)
     args = parser.parse_args()
+    # Keep optimization acceptance entrypoints usable after the project-first UI.
+    if args.optimization_loop:
+        args.project_workflow=True
+        args.optimization_loop=False
+    if args.optimization_saved:
+        args.workflow_saved=args.optimization_saved
+        args.optimization_saved=None
     if args.optimization_loop and (args.ui or args.real_agent or args.report_source or args.measure_input or args.render_input):
         parser.error('--optimization-loop is a separate public real-Agent workflow')
     if args.report_source and (args.ui or args.real_agent or args.measure_input or args.render_input):
@@ -69,7 +79,7 @@ def main():
     for path in (args.application, args.driver, args.native_driver):
         if not path.is_file():
             raise FileNotFoundError(path)
-    output = root / '.cache' / ('desktop-optimization-saved' if args.optimization_saved else 'desktop-optimization' if args.optimization_loop else 'desktop-reports' if args.report_source else 'desktop-render' if args.render_input else 'desktop-memory' if args.measure_input else 'desktop-ui' if args.ui else 'desktop-smoke')
+    output = root / '.cache' / ('desktop-workflow-saved' if args.workflow_saved else 'desktop-workflow' if args.project_workflow else 'desktop-optimization-saved' if args.optimization_saved else 'desktop-optimization' if args.optimization_loop else 'desktop-reports' if args.report_source else 'desktop-render' if args.render_input else 'desktop-memory' if args.measure_input else 'desktop-ui' if args.ui else 'desktop-smoke')
     output.mkdir(parents=True, exist_ok=True)
     def port():
         with socket.socket() as sock:
@@ -83,7 +93,7 @@ def main():
         raw = None if body is None else json.dumps(body).encode()
         req = urllib.request.Request(base + path, data=raw, method=method, headers={'Content-Type': 'application/json'})
         try:
-            with urllib.request.urlopen(req, timeout=960 if args.optimization_loop and path.endswith('/execute/async') else 45) as response:
+            with urllib.request.urlopen(req, timeout=960 if (args.optimization_loop or args.project_workflow) and path.endswith('/execute/async') else 45) as response:
                 value = json.load(response)['value']
         except urllib.error.HTTPError as error:
             raise RuntimeError(error.read().decode()) from error
@@ -116,7 +126,7 @@ def main():
                     if time.monotonic() > deadline:
                         raise AssertionError('Timed out: ' + script)
                     time.sleep(.1)
-            wait('return !!document.querySelector(".dropzone")')
+            wait('return !!document.querySelector(".project-workflow")')
             report['checks'].append('release UI startup')
             data = request('POST', f'/session/{session}/execute/async', {'script': '''
                 const done=arguments[arguments.length-1], path=arguments[0];
@@ -158,6 +168,9 @@ def main():
                 report['realAgentRequested'] = args.real_agent
                 report['agentId'] = args.agent_id if args.real_agent else None
                 run_ui(js, lambda method, path, body=None: request(method, f'/session/{session}' + path, body), root, output, report, args.real_agent, args.agent_id)
+            if args.project_workflow or args.workflow_saved:
+                from desktop_workflow_checks import run_workflow
+                run_workflow(js,lambda method,path,body=None: request(method,f'/session/{session}'+path,body),root,output,report,args.workflow_saved,args.workflow_resume)
             if args.optimization_loop:
                 from desktop_optimization_checks import run_optimization_checks
                 report['scope']='Public release optimization workflow; native dialogs substituted; synthetic A/B is not game benefit evidence'
@@ -207,7 +220,7 @@ def main():
             (output / 'result.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
         if not report.get('passed'):
             raise AssertionError('Desktop smoke or cleanup failed')
-        summary = {'passed': report['passed'], 'evidence': str(output / 'result.json'), 'checks': report['checks']} if args.optimization_loop or args.optimization_saved else report
+        summary = {'passed': report['passed'], 'evidence': str(output / 'result.json'), 'checks': report['checks']} if args.optimization_loop or args.optimization_saved or args.project_workflow or args.workflow_saved else report
         print(json.dumps(summary, ensure_ascii=True), flush=True)
 
 

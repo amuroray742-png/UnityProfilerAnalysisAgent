@@ -128,7 +128,7 @@ impl Workspace {
         }
         let root_lease = root_lease(&root)?;
         let data = Project {
-            version: 2,
+            version: 3,
             id: id(),
             name,
             root,
@@ -138,12 +138,13 @@ impl Workspace {
         };
         let s = Self {
             directory,
+            save_error: Mutex::new(None),
             _lease: lease,
             _root_lease: root_lease,
             data: Mutex::new(data),
             cancelled: Arc::new(AtomicBool::new(false)),
+            cancel_epoch: std::sync::atomic::AtomicU64::new(0),
             busy: AtomicBool::new(false),
-            last_report_save: Mutex::new(std::time::Instant::now()),
         };
         s.save(&s.data.lock().unwrap())?;
         Ok(s)
@@ -160,14 +161,17 @@ impl Workspace {
         if bytes.len() > 128 * 1024 * 1024 {
             return Err("优化项目超过读取上限".into());
         }
-        let mut data: Project = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        data.root = data.root.canonicalize().map_err(|e| e.to_string())?;
-        let root_lease = root_lease(&data.root)?;
-        if data.version != 1 && data.version != 2 {
+        let mut data = super::archive::load(&directory, &bytes)?;
+        if ![1, 2, 3].contains(&data.version) {
             return Err("不支持的优化项目版本".into());
         }
-        if data.version == 1 {
-            let backup = directory.join("optimization.v1.backup.json");
+        // A missing Unity project must not prevent reading the archive.
+        // Keep the recorded canonical identity. A replaced link must never rebind
+        // an archive to a different Unity project; read-only history remains usable.
+        let root_lease = root_lease(&data.root)?;
+        let legacy = data.version < 3;
+        if legacy {
+            let backup = directory.join(format!("optimization.v{}.backup.json", data.version));
             if !backup.exists() {
                 let mut f = OpenOptions::new()
                     .create_new(true)
@@ -178,10 +182,84 @@ impl Workspace {
                     .and_then(|_| f.sync_all())
                     .map_err(|e| e.to_string())?;
             }
-            data.version = 2;
+            data.version = 3;
         }
         for round in &mut data.rounds {
+            if legacy
+                && !round.runs.is_empty()
+                && round.runs.iter().all(|r| r.status == "rolled_back")
+            {
+                round.decision = "rolled_back".into();
+            }
+            for report in &mut round.reports {
+                if report.status == "running" {
+                    for entry in super::archive::replay(&directory, &report.report_id)? {
+                        if let Some(e) = entry.get("event") {
+                            let event = serde_json::from_value::<crate::acp_client::DiagnoseEvent>(
+                                e.clone(),
+                            )
+                            .map_err(|e| e.to_string())?;
+                            if let crate::acp_client::DiagnoseEvent::Chunk { .. } = &event {
+                                let offset =
+                                    entry["offset"].as_u64().ok_or("报告日志偏移缺失")? as usize;
+                                if offset < report.text.len() {
+                                    continue;
+                                }
+                                if offset > report.text.len() {
+                                    return Err("报告正文日志存在缺口".into());
+                                }
+                            }
+                            if let crate::acp_client::DiagnoseEvent::SessionCreated {
+                                acp_session_id,
+                            } = &event
+                            {
+                                report.session_id = acp_session_id.clone();
+                            }
+                            report.apply(&event);
+                        }
+                        if let Some(context) = entry.get("context") {
+                            report.project_context = Some(context.clone());
+                        }
+                    }
+                    if report.status == "running" {
+                        report.status = "interrupted".into();
+                        report.incomplete_reason = Some("应用中断，请在新会话继续".into());
+                    }
+                }
+            }
+            if round.workflow.status == "running" {
+                round.workflow.status = "interrupted".into();
+                round.workflow.reason = Some("上次任务中断，已保留内容，请继续当前步骤".into());
+            }
             for run in &mut round.runs {
+                if run.status == "running" {
+                    for entry in super::archive::replay(&directory, &run.id)? {
+                        match serde_json::from_value::<crate::acp_client::DiagnoseEvent>(
+                            entry["event"].clone(),
+                        )
+                        .map_err(|e| e.to_string())?
+                        {
+                            crate::acp_client::DiagnoseEvent::Chunk { text } => {
+                                let offset =
+                                    entry["offset"].as_u64().ok_or("修改日志偏移缺失")? as usize;
+                                if offset == run.text.len() {
+                                    let mut n =
+                                        text.len().min(crate::reports::MAX_REPORT - run.text.len());
+                                    while !text.is_char_boundary(n) {
+                                        n -= 1;
+                                    }
+                                    run.text.push_str(&text[..n]);
+                                } else if offset > run.text.len() {
+                                    return Err("修改日志正文存在缺口".into());
+                                }
+                            }
+                            crate::acp_client::DiagnoseEvent::SessionCreated { acp_session_id } => {
+                                run.session_id = acp_session_id
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 for c in &mut run.changes {
                     if hash(&c.before) != c.before_hash || hash(&c.after) != c.after_hash {
                         return Err("变更备份校验失败".into());
@@ -224,12 +302,13 @@ impl Workspace {
         }
         let s = Self {
             directory,
+            save_error: Mutex::new(None),
             _lease: lease,
             _root_lease: root_lease,
             data: Mutex::new(data),
             cancelled: Arc::new(AtomicBool::new(false)),
+            cancel_epoch: std::sync::atomic::AtomicU64::new(0),
             busy: AtomicBool::new(false),
-            last_report_save: Mutex::new(std::time::Instant::now()),
         };
         s.save(&s.data.lock().unwrap())?;
         Ok(s)
@@ -240,11 +319,9 @@ impl Workspace {
         ) {
             return Err("保存目录不可是链接".into());
         }
-        let bytes = serde_json::to_vec(data).map_err(|e| e.to_string())?;
-        if bytes.len() > 128 * 1024 * 1024 {
-            return Err("项目数据超过 128 MiB，请新建优化项目；现有备份保留".into());
-        }
-        atomic(&self.directory.join("optimization.json"), &bytes)
+        let result = super::archive::save(&self.directory, data);
+        *self.save_error.lock().unwrap() = result.as_ref().err().cloned();
+        result
     }
     pub fn check(&self) -> Result<(), String> {
         if self.cancelled.load(Ordering::SeqCst) {

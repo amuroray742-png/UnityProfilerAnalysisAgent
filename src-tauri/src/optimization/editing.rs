@@ -132,11 +132,7 @@ impl Workspace {
         if requirements.is_none() {
             validate_tasks(&tasks, &d.root)?;
         } else {
-            if !round
-                .reports
-                .iter()
-                .any(|r| r.stage == "project" && r.status == "completed")
-            {
+            if !super::workflow::ready_report(round) {
                 return Err("需要完整工程定位报告".into());
             }
             tasks.clear();
@@ -163,6 +159,7 @@ impl Workspace {
         round.runs.push(run);
         // A previous B and human decision cannot verify newly started edits.
         round.comparison = None;
+        round.candidate = None;
         round.task_verifications.clear();
         round.correctness = "pending".into();
         round.decision = "pending".into();

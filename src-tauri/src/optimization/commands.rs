@@ -9,7 +9,7 @@ pub struct OptimizationState {
     pub workspace: tokio::sync::Mutex<Option<Arc<Workspace>>>,
     pub active: tokio::sync::Mutex<Option<SessionHandle>>,
 }
-static ACTIVE: AtomicBool = AtomicBool::new(false);
+pub(super) static ACTIVE: AtomicBool = AtomicBool::new(false);
 pub static START_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 pub fn active() -> bool {
     ACTIVE.load(Ordering::SeqCst)
@@ -133,15 +133,15 @@ fn compact_comparison(value: &Option<Value>) -> Value {
 fn run_view(s: &Run) -> Value {
     json!({"id":s.id,"automatic":s.automatic,"tasks":s.tasks,"text":s.text.chars().take(4000).collect::<String>(),"textPartial":s.text.chars().count()>4000,"requirements":s.requirements,"taskVersion":s.task_version,"agentId":s.agent_id,"sessionId":s.session_id,"status":s.status,"reason":s.reason,"createdAt":s.created_at,"checks":s.checks,"baselineCheck":s.baseline_check,"changes":s.changes.iter().map(|c|json!({"path":c.path,"kind":c.kind,"taskId":c.task_id,"beforeHash":c.before_hash,"afterHash":c.after_hash,"state":c.state})).collect::<Vec<_>>()})
 }
-fn view(w: &Workspace) -> Value {
+pub(super) fn view(w: &Workspace) -> Value {
     let d = w.data.lock().unwrap();
-    json!({"id":d.id,"name":d.name,"root":d.root,"directory":w.directory,"budgets":d.budgets,"busy":w.busy.load(Ordering::SeqCst),
+    json!({"saveError":*w.save_error.lock().unwrap(),"version":d.version,"rootAvailable":super::workflow::project_available(&d.root).is_ok(),"id":d.id,"name":d.name,"root":d.root,"directory":w.directory,"budgets":d.budgets,"busy":w.busy.load(Ordering::SeqCst),
     "captures":d.captures.iter().map(|c|json!({"id":c.id,"path":c.path,"hash":c.hash,"conditions":c.conditions,"snapshot":c.snapshot.meta})).collect::<Vec<_>>(),
-    "rounds":d.rounds.iter().map(|r|json!({"performanceStatus":r.performance_status(),"id":r.id,"baseline":r.baseline,"candidate":r.candidate,"tasks":r.tasks,"taskVersion":r.task_version,"taskVerifications":r.task_verifications,"tests":r.tests,"comparison":compact_comparison(&r.comparison),"correctness":r.correctness,"decision":r.decision,
-        "reports":r.reports.iter().map(|p|json!({"reportId":p.report_id,"stage":p.stage,"agentId":p.agent_id,"status":p.status})).collect::<Vec<_>>(),
+    "rounds":d.rounds.iter().map(|r|json!({"workflow":r.workflow,"performanceStatus":r.performance_status(),"id":r.id,"baseline":r.baseline,"candidate":r.candidate,"tasks":r.tasks,"taskVersion":r.task_version,"taskVerifications":r.task_verifications,"tests":r.tests,"comparison":compact_comparison(&r.comparison),"correctness":r.correctness,"decision":r.decision,
+        "reports":r.reports.iter().enumerate().map(|(i,p)|json!({"attempt":r.reports[..=i].iter().filter(|q|q.stage==p.stage).count(),"reportId":p.report_id,"sessionId":p.session_id,"stage":p.stage,"agentId":p.agent_id,"status":p.status,"createdAt":p.created_at,"parentReportId":p.parent_report_id,"reason":p.incomplete_reason})).collect::<Vec<_>>(),
         "runs":r.runs.iter().map(run_view).collect::<Vec<_>>() })).collect::<Vec<_>>()})
 }
-async fn capture(path: PathBuf, conditions: Conditions) -> Result<Capture, String> {
+pub(super) async fn capture(path: PathBuf, conditions: Conditions) -> Result<Capture, String> {
     let path = path.canonicalize().map_err(|e| e.to_string())?;
     let p = path.clone();
     let hash = tokio::task::spawn_blocking(move || storage::file_hash(&p, &AtomicBool::new(false)))
@@ -300,6 +300,7 @@ pub async fn optimization_command(
     }
     let w = w.ok_or("请创建或打开优化项目")?;
     if matches!(action, Action::Cancel) {
+        w.cancel_epoch.fetch_add(1, Ordering::SeqCst);
         w.cancelled.store(true, Ordering::SeqCst);
         if let Some(h) = state.active.lock().await.clone() {
             h.cancel().await;
@@ -367,6 +368,7 @@ pub async fn optimization_command(
             }
             let mut d = w.data.lock().unwrap();
             let round = Round {
+                workflow: Default::default(),
                 task_version: 1,
                 task_verifications: BTreeMap::new(),
                 id: id(),
@@ -477,6 +479,8 @@ pub async fn optimization_command(
             w.save(&d)?;
         }
         Action::Start { .. } | Action::StartAutomatic { .. } => {
+            let cancel_epoch = w.cancel_epoch.load(Ordering::SeqCst);
+            super::workflow::project_available(&w.data.lock().unwrap().root)?;
             let (round_id, agent_id, requirements) = match action {
                 Action::Start { round_id, agent_id } => (round_id, agent_id, None),
                 Action::StartAutomatic {
@@ -513,6 +517,10 @@ pub async fn optimization_command(
                     .iter()
                     .find(|r| r.id == round_id)
                     .ok_or("轮次不存在")?;
+                if d.rounds.last().is_none_or(|last| last.id != round_id) || r.decision != "pending"
+                {
+                    return Err("只能优化当前未结束轮次；请先开始下一轮".into());
+                }
                 let c = d
                     .captures
                     .iter()
@@ -527,6 +535,9 @@ pub async fn optimization_command(
                 .await
                 .map_err(|e| e.to_string())?
                 .details;
+            if w.cancel_epoch.load(Ordering::SeqCst) != cancel_epoch {
+                return Err("已停止启动优化，尚未修改代码".into());
+            }
             if ACTIVE.swap(true, Ordering::SeqCst) {
                 return Err("已有修改运行".into());
             }
@@ -537,6 +548,9 @@ pub async fn optimization_command(
                     return Err(e);
                 }
             };
+            if w.cancel_epoch.load(Ordering::SeqCst) != cancel_epoch {
+                w.cancelled.store(true, Ordering::SeqCst);
+            }
             let mut startup = StartingRun {
                 workspace: w.clone(),
                 run: run.clone(),
@@ -679,6 +693,7 @@ pub async fn optimization_command(
             startup.armed = false;
         }
         Action::Check { round_id } => {
+            super::workflow::project_available(&w.data.lock().unwrap().root)?;
             let _start = START_LOCK.lock().await;
             if !app_state.0.lock().await.active_sessions.is_empty()
                 || ACTIVE.swap(true, Ordering::SeqCst)
@@ -716,10 +731,21 @@ pub async fn optimization_command(
             scope.check_editor().await?;
         }
         Action::Rollback { round_id } => {
+            super::workflow::project_available(&w.data.lock().unwrap().root)?;
             let work = w.clone();
-            tokio::task::spawn_blocking(move || work.rollback(&round_id))
-                .await
-                .map_err(|e| e.to_string())??;
+            tokio::task::spawn_blocking(move || {
+                work.rollback(&round_id)?;
+                let mut d = work.data.lock().unwrap();
+                let r = d
+                    .rounds
+                    .iter_mut()
+                    .find(|r| r.id == round_id)
+                    .ok_or("轮次不存在")?;
+                r.decision = "rolled_back".into();
+                work.save(&d)
+            })
+            .await
+            .map_err(|e| e.to_string())??;
         }
         Action::Compare {
             round_id,
@@ -791,6 +817,14 @@ pub async fn optimization_command(
                 .iter_mut()
                 .find(|r| r.id == round_id)
                 .ok_or("轮次不存在")?;
+            if decision == "accepted"
+                && (r.candidate.is_none()
+                    || r.comparison.is_none()
+                    || r.runs.is_empty()
+                    || r.runs.iter().all(|s| s.status == "rolled_back"))
+            {
+                return Err("请先完成修改并导入 B 对比；已回退不能接受".into());
+            }
             r.decision = decision;
             r.correctness = correctness;
             w.save(&d)?;
@@ -801,6 +835,7 @@ pub async fn optimization_command(
                 return Err("基线不存在".into());
             }
             d.rounds.push(Round {
+                workflow: Default::default(),
                 task_version: 1,
                 task_verifications: BTreeMap::new(),
                 id: id(),
