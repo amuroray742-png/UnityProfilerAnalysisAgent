@@ -6,7 +6,7 @@
 
 CPU/GC 与诊断之后，新增 Unity 6000.3.9f1 渲染计数对照与展示，见[渲染验收记录](docs/rendering-validation.md)。GPU 时间、版本升级、签名及长期性能预算仍后续推进。原生文件选择与 EXE/MSI 安装、启动、快捷方式、卸载已由维护者人工确认通过。完整可信分析 MVP 与正式发布仍按[状态台账](docs/project-status.md)分别验收。
 
-新增[工具内优化项目](docs/optimization-loop.md)：独立修改 Agent、新 ACP 会话、已有代码受限编辑、持久化备份与回退，以及跨录制 A/B 复验。诊断和定位仍只读，修改需在独立页面确认任务。
+新增[工具内优化项目](docs/optimization-loop.md)：独立修改 Agent、新 ACP 会话、自主代码调查、修改与新增、持久化备份与回退，以及跨录制 A/B 复验。诊断和定位仍只读，用户选择修改 AI 并点击“开始优化”即可启动。
 
 ## 文档导航
 
@@ -78,7 +78,7 @@ npm run tauri:build
 
 6. 首轮完成后选择 Unity 工程，按界面说明安装可选只读 Editor 插件，点击“开始工程联合定位”。最终报告可单独导出或与首轮合并导出。
 
-7. 打开“优化项目”，保存本轮定位、确认任务和允许文件，独立选择修改 Agent。每次修改使用新会话，已有代码变更有备份和冲突保护；修改后的固定 Unity 检查需要新版插件。
+7. 打开“优化项目”，独立选择修改 AI 并点击“开始优化”。记录自动保存，每次优化使用新会话，代码修改与新增都有恢复记录和冲突保护；修改后的固定 Unity 检查需要新版插件。
 8. 手动复测玩法并录制 B，导入优化项目核对条件、比较分布与覆盖率，再决定接受或回退，明确选择下一轮基线。详见[闭环操作说明](docs/optimization-loop.md)。
 
 当前没有统一录制文件大小上限；实际内存取决于输入结构。已移除未落实的“最大 500MB”提示，测量范围及已知内存峰值见[性能基线](docs/performance-and-release.md)。
@@ -111,3 +111,7 @@ Editor 脚本产生的 `frames[].threads[].samples[]` dump 由独立分支直接
 架构与部分解析思路参考 [librashuai/UnityPerfAgent](https://github.com/librashuai/UnityPerfAgent)。本项目采用 [MIT License](LICENSE)，Copyright (c) 2026 amuroray742-png。
 
 [data 原始证据、Self Time 与帧对比](docs/data-evidence.md)：CPU/GC 页展开帧证据，查询 Counter/metadata 或比较完整调用路径。
+
+### 一键代码优化
+
+完成工程定位后，选择修改 AI 并点击“开始优化”。AI 在新会话中继续调查，自主修改和新增相关代码，自动保存记录；用户重录后对比，并可撤销本轮修改。无需逐项勾选或指定代码文件。资源与工程设置仍只读。见[简单使用说明](docs/optimization-loop.md)。

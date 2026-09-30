@@ -49,13 +49,28 @@ impl ServerHandler for ProfilerServer {
             tools.extend(project_tools);
         }
         if self.store.modification().await.is_some() {
-            let extra: Vec<Tool> =
+            let mut extra: Vec<Tool> =
                 serde_json::from_value(crate::optimization::session::schemas()["tools"].clone())
                     .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+            let scope = self.store.modification().await.unwrap();
+            if !scope
+                .workspace
+                .data
+                .lock()
+                .unwrap()
+                .rounds
+                .iter()
+                .flat_map(|r| &r.runs)
+                .any(|r| r.id == scope.run_id && r.automatic)
+            {
+                extra.retain(|t| {
+                    !matches!(t.name.as_ref(), "optimization_create" | "optimization_task")
+                });
+            }
             tools.extend(extra);
         }
         for tool in &mut tools {
-            tool.annotations = Some(serde_json::from_value(json!({"readOnlyHint":!matches!(tool.name.as_ref(),"optimization_replace"|"optimization_check"),"destructiveHint":tool.name=="optimization_replace","idempotentHint":!matches!(tool.name.as_ref(),"optimization_replace"|"optimization_check"),"openWorldHint":false})).unwrap());
+            tool.annotations = Some(serde_json::from_value(json!({"readOnlyHint":!matches!(tool.name.as_ref(),"optimization_replace"|"optimization_check"|"optimization_create"|"optimization_task"),"destructiveHint":matches!(tool.name.as_ref(),"optimization_replace"|"optimization_create"),"idempotentHint":!matches!(tool.name.as_ref(),"optimization_replace"|"optimization_check"|"optimization_create"|"optimization_task"),"openWorldHint":false})).unwrap());
         }
         Ok(ListToolsResult {
             tools,

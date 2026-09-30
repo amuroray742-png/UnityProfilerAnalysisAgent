@@ -584,3 +584,365 @@ fn reports_are_loaded_on_demand_and_cannot_cross_rounds() {
     let restored: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(restored["text"], report.text);
 }
+
+fn automatic_setup() -> (Temp, Arc<Workspace>, String, String) {
+    let (t, w, r) = setup(b"class Work { int number = 1; }");
+    let report=serde_json::from_value(json!({"reportId":"report","fileId":"a","sessionId":"diagnostic","stage":"project","parentReportId":null,"text":"Public evidence: investigate Work and its downstream code before optimizing","createdAt":"test","agentId":"other","status":"completed","incompleteReason":null,"fileName":"public.json","unityVersion":null,"frameCount":1,"coverage":"test"})).unwrap();
+    w.data.lock().unwrap().rounds[0].reports.push(report);
+    w.data.lock().unwrap().rounds[0].tasks.clear();
+    let run = w
+        .begin_mode(&r, "codex".into(), Some("保持玩法".into()))
+        .unwrap();
+    task(&w, &run, "optimize");
+    (t, w, r, run)
+}
+fn task(w: &Workspace, run: &str, kind: &str) {
+    w.edit_query(run,"optimization_task",json!({"id":"t","kind":kind,"title":"公开热点","evidence":"已读公开 Work.cs；GC 分配候选","instructions":"继续调查并减少分配","acceptance":"编译和重录"})).unwrap();
+}
+fn create(w: &Workspace, run: &str, path: &str) -> Result<serde_json::Value, String> {
+    w.edit_query(run,"optimization_create",json!({"task_id":"t","path":path,"content":"public static class Helper { public const int Value = 2; }\n"}))
+}
+#[test]
+fn automatic_without_drafts_investigates_and_edits_newly_read_code() {
+    let (_t, w, r, run) = automatic_setup();
+    let root = w.data.lock().unwrap().root.clone();
+    std::fs::write(
+        root.join("Assets/Downstream.cs"),
+        b"class Downstream { int value = 1; }",
+    )
+    .unwrap();
+    let args = json!({"task_id":"t","path":"Assets/Downstream.cs","expected_hash":storage::hash(b"class Downstream { int value = 1; }"),"old_text":"value = 1","new_text":"value = 2"});
+    assert!(w
+        .edit_query(&run, "optimization_replace", args.clone())
+        .is_err());
+    w.edit_query(
+        &run,
+        "optimization_read",
+        json!({"path":"Assets/Downstream.cs"}),
+    )
+    .unwrap();
+    task(&w, &run, "investigate");
+    assert!(w
+        .edit_query(&run, "optimization_replace", args.clone())
+        .is_err());
+    task(&w, &run, "optimize");
+    w.edit_query(&run, "optimization_replace", args).unwrap();
+    finish(&w, &run);
+    assert_eq!(w.data.lock().unwrap().rounds[0].tasks[0].title, "公开热点");
+    w.rollback(&r).unwrap();
+    assert!(std::fs::read_to_string(root.join("Assets/Downstream.cs"))
+        .unwrap()
+        .contains("value = 1"));
+}
+#[test]
+fn new_code_meta_directories_survive_restart_and_rollback_exactly() {
+    let (_t, w, r, run) = automatic_setup();
+    let root = w.data.lock().unwrap().root.clone();
+    create(&w, &run, "Assets/中文/Generated/Helper.cs").unwrap();
+    assert!(root.join("Assets/中文/Generated/Helper.cs.meta").exists());
+    assert!(create(&w, &run, "Assets/中文/Generated/Helper.cs").is_err());
+    let directory = w.directory.clone();
+    drop(w);
+    let w = Workspace::open(directory).unwrap();
+    assert_eq!(
+        w.data.lock().unwrap().rounds[0].runs[0].status,
+        "interrupted"
+    );
+    w.rollback(&r).unwrap();
+    assert!(!root.join("Assets/中文").exists());
+    assert!(!root.join("Assets/中文.meta").exists());
+    assert!(root.join("Assets/Work.cs").exists());
+}
+#[test]
+fn new_file_external_change_and_external_reference_block_rollback() {
+    let (_t, w, r, run) = automatic_setup();
+    let root = w.data.lock().unwrap().root.clone();
+    create(&w, &run, "Assets/CacheFile.cs").unwrap();
+    finish(&w, &run);
+    std::fs::write(
+        root.join("Assets/Other.cs"),
+        "class Other { int v = Helper.Value; }",
+    )
+    .unwrap();
+    assert!(w.rollback(&r).unwrap_err().contains("引用"));
+    assert!(root.join("Assets/CacheFile.cs").exists());
+    std::fs::write(root.join("Assets/Other.cs"), "class Other {}").unwrap();
+    std::fs::write(root.join("Assets/CacheFile.cs"), "external edit").unwrap();
+    assert!(w.rollback(&r).unwrap_err().contains("外部"));
+    assert_eq!(
+        std::fs::read_to_string(root.join("Assets/CacheFile.cs")).unwrap(),
+        "external edit"
+    );
+}
+#[test]
+fn restricted_and_automatic_permissions_do_not_expand_into_resources() {
+    let (_t, w, r) = setup(b"class Work {}");
+    let run = w.begin(&r, "a".into()).unwrap();
+    assert!(create(&w, &run, "Assets/Helper.cs").is_err());
+    assert!(w.edit_query(&run, "optimization_task", json!({})).is_err());
+    let (_t, w, _r, run) = automatic_setup();
+    for path in [
+        "../Outside.cs",
+        "Assets/../Outside.cs",
+        "Packages/Helper.cs",
+        "Assets/Test.prefab",
+        "ProjectSettings/Test.cs",
+        "Assets/a.cs:stream",
+        "Assets/com.upaa.inspector/Test.cs",
+    ] {
+        assert!(create(&w, &run, path).is_err(), "{path}");
+    }
+    task(&w, &run, "investigate");
+    assert!(create(&w, &run, "Assets/Helper.cs").is_err());
+    task(&w, &run, "marker");
+    w.cancelled.store(true, Ordering::SeqCst);
+    assert!(create(&w, &run, "Assets/Helper.cs").is_err());
+}
+#[test]
+fn version_one_migrates_with_original_backup() {
+    let (_t, w, _r) = setup(b"class Work {}");
+    let directory = w.directory.clone();
+    {
+        let mut d = w.data.lock().unwrap();
+        d.version = 1;
+        w.save(&d).unwrap();
+    }
+    let original = std::fs::read(directory.join("optimization.json")).unwrap();
+    drop(w);
+    let w = Workspace::open(directory.clone()).unwrap();
+    assert_eq!(w.data.lock().unwrap().version, 2);
+    assert_eq!(
+        std::fs::read(directory.join("optimization.v1.backup.json")).unwrap(),
+        original
+    );
+}
+#[test]
+fn automatic_marker_task_and_retry_keep_separate_sessions() {
+    let (_t, w, r, run) = automatic_setup();
+    task(&w, &run, "marker");
+    create(&w, &run, "Assets/Helper.cs").unwrap();
+    finish(&w, &run);
+    assert_ne!(
+        w.data.lock().unwrap().rounds[0].performance_status(),
+        "达到目标"
+    );
+    let retry = w
+        .begin_mode(&r, "codex".into(), Some(String::new()))
+        .unwrap();
+    assert_ne!(retry, run);
+    assert!(w.data.lock().unwrap().rounds[0].runs[1]
+        .read_receipts
+        .is_empty());
+    assert_eq!(w.data.lock().unwrap().rounds[0].runs[0].agent_id, "codex");
+}
+
+async fn automatic_real_agent(agent: &str) {
+    let public = PathBuf::from(
+        std::env::var_os("UPAA_PUBLIC_UNITY_PROJECT").expect("set explicit public Unity project"),
+    );
+    assert!(
+        public.join(".upaa-public-fixture").is_file(),
+        "public fixture marker required"
+    );
+    let root = public.canonicalize().unwrap();
+    let original = std::fs::read(root.join("Assets/AutomaticHotspots.cs"))
+        .expect("copy public AutomaticHotspots.cs fixture first");
+    assert_eq!(
+        original,
+        include_bytes!("fixtures/unity-project/Assets/AutomaticHotspots.cs")
+    );
+    assert!(!root.join("Assets/AutomaticBufferCache.cs").exists());
+    let records = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("../.cache/automatic-records-{}", id()));
+    std::fs::create_dir(&records).unwrap();
+    let w = Arc::new(Workspace::create(records, root.clone(), "公开自动优化验收".into()).unwrap());
+    let (_fixture, template, r, _) = automatic_setup();
+    let mut round = template.data.lock().unwrap().rounds[0].clone();
+    round.runs.clear();
+    round.tasks.clear();
+    round.reports[0].text="Public synthetic evidence: AutomaticCaller.Invoke calls AutomaticHotspots.Update. Its byte[4096] allocation is a GC candidate; inspect actual code before changing. There is also an Unmapped.Native marker with no source evidence: record that it cannot be located, do not invent code. A new helper is explicitly required for this acceptance fixture. Returned contents must stay 4096 bytes with byte 0 equal to 1; callers may reuse the buffer.".into();
+    round.tests = vec![];
+    w.data.lock().unwrap().rounds.push(round);
+    let baseline = unity_profiler_analysis_agent_lib::project::editor::check_changes(
+        &root,
+        vec!["Assets/AutomaticHotspots.cs".into()],
+        vec![],
+        &w.cancelled,
+    )
+    .await
+    .unwrap();
+    assert_eq!(baseline["status"], "passed");
+    let run=w.begin_mode(&r,agent.into(),Some("仅优化公开 AutomaticHotspots 的每次分配：读取 AutomaticCaller 调用链，新增 Assets/AutomaticBufferCache.cs 用于缓存，再修改已有 AutomaticHotspots.cs 使用缓存；不得改其他现有文件。保留返回内容，可复用实例。未定位的 Unmapped.Native 只记录调查不足。完成后执行编译检查。".into())).unwrap();
+    let scope = Arc::new(session::EditScope {
+        operation: tokio::sync::Mutex::new(()),
+        workspace: w.clone(),
+        run_id: run.clone(),
+    });
+    let project = Arc::new(
+        unity_profiler_analysis_agent_lib::project::ProjectScope::prepare(
+            run.clone(),
+            root.clone(),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .unwrap(),
+    );
+    let profile = parser::parse_file(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/editor-dump.json"),
+    )
+    .await
+    .unwrap();
+    let preset = acp_client::agents::builtin_presets()
+        .into_iter()
+        .find(|p| p.id == agent)
+        .unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let req = acp_client::DiagnoseRequest {
+        project: Some(project),
+        source: None,
+        parent_report: None,
+        file_id: run.clone(),
+        agent_id: agent.into(),
+        snapshot: extractor::extract(&profile),
+        details: profile.details,
+        bridge_executable: std::env::var_os("UPAA_TEST_APP_EXE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_unity-profiler-analysis-agent"))),
+        event_tx: tx,
+    };
+    let handle = acp_client::start_with_scope(preset, req, Some(scope.clone()))
+        .await
+        .unwrap();
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(600), async {
+        while let Some(event) = rx.recv().await {
+            if let DiagnoseEvent::Log { message } = &event {
+                eprintln!("{}", message.chars().take(250).collect::<String>());
+            }
+            let end = event.terminal();
+            w.event(&run, &event).unwrap();
+            if end {
+                return matches!(event, DiagnoseEvent::Finished { .. });
+            }
+        }
+        false
+    })
+    .await;
+    if outcome.is_err() {
+        handle.cancel().await;
+    } else {
+        handle.wait().await;
+    }
+    let check = if w.cancelled.load(Ordering::SeqCst) {
+        w.data.lock().unwrap().rounds[0].runs[0]
+            .checks
+            .last()
+            .cloned()
+            .unwrap_or(json!({"status":"cancelled"}))
+    } else {
+        scope.check_editor().await.unwrap()
+    };
+    let changed = std::fs::read(root.join("Assets/AutomaticHotspots.cs")).unwrap() != original;
+    let created = root.join("Assets/AutomaticBufferCache.cs").exists();
+    let evidence = serde_json::to_string_pretty(&*w.data.lock().unwrap()).unwrap();
+    let evidence_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("../.cache/automatic-{agent}.json"));
+    std::fs::write(evidence_path, evidence).unwrap();
+    w.busy.store(false, Ordering::SeqCst);
+    w.rollback(&r).unwrap();
+    assert_eq!(
+        std::fs::read(root.join("Assets/AutomaticHotspots.cs")).unwrap(),
+        original
+    );
+    assert!(!root.join("Assets/AutomaticBufferCache.cs").exists());
+    assert!(!root.join("Assets/AutomaticBufferCache.cs.meta").exists());
+    assert!(outcome.unwrap(), "Agent failed");
+    assert!(changed && created, "must edit and create actual files");
+    assert_eq!(check["status"], "passed", "{check}");
+    assert_ne!(
+        w.data.lock().unwrap().rounds[0].runs[0].session_id,
+        "diagnostic"
+    );
+}
+#[tokio::test]
+#[ignore = "explicit public Unity project, real Codex automatic edit/create/check/rollback"]
+async fn real_automatic_codex() {
+    automatic_real_agent("codex").await;
+}
+#[tokio::test]
+#[ignore = "explicit public Unity project, real Claude automatic edit/create/check/rollback"]
+async fn real_automatic_claude() {
+    automatic_real_agent("claude-code").await;
+}
+
+#[test]
+fn metadata_normalization_is_recorded_but_changed_guid_is_not_adopted() {
+    let (_t, w, r, run) = automatic_setup();
+    create(&w, &run, "Assets/Helper.cs").unwrap();
+    let root = w.data.lock().unwrap().root.clone();
+    let path = root.join("Assets/Helper.cs.meta");
+    let before = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, before.replace("\n", "\r\n")).unwrap();
+    {
+        let mut d = w.data.lock().unwrap();
+        let paths = automatic::reconcile_meta(&root, &mut d.rounds[0].runs[0]).unwrap();
+        assert_eq!(paths, vec!["Assets/Helper.cs.meta"]);
+        assert_eq!(d.rounds[0].runs[0].changes.last().unwrap().kind, "metadata");
+        w.save(&d).unwrap();
+    }
+    finish(&w, &run);
+    // Simulate interruption after restoring normalized metadata but before recording that step.
+    std::fs::write(&path, &before).unwrap();
+    w.rollback(&r).unwrap();
+    assert!(!path.exists());
+    let (_t, w, _r, run) = automatic_setup();
+    create(&w, &run, "Assets/Helper.cs").unwrap();
+    let root = w.data.lock().unwrap().root.clone();
+    let path = root.join("Assets/Helper.cs.meta");
+    let before = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, before.replace("guid:", "changedGuid:")).unwrap();
+    assert!(
+        automatic::reconcile_meta(&root, &mut w.data.lock().unwrap().rounds[0].runs[0]).is_err()
+    );
+}
+#[tokio::test]
+async fn diagnosis_cannot_create_files_or_record_automatic_tasks() {
+    let s = mcp::MetricsStore::new();
+    for name in [
+        "optimization_create",
+        "optimization_task",
+        "optimization_replace",
+    ] {
+        assert!(mcp::tools::dispatch(&s, name, json!({})).await.is_err());
+    }
+}
+
+#[test]
+fn automatic_project_scan_observes_workspace_cancellation() {
+    let (_t, w, _r, _run) = automatic_setup();
+    let root = w.data.lock().unwrap().root.clone();
+    std::fs::write(
+        root.join("ProjectSettings/ProjectVersion.txt"),
+        "m_EditorVersion: 6000.3.23f1\n",
+    )
+    .unwrap();
+    w.cancelled.store(true, Ordering::SeqCst);
+    let error = unity_profiler_analysis_agent_lib::project::ProjectScope::prepare(
+        "run".into(),
+        root.clone(),
+        w.cancelled.clone(),
+    )
+    .unwrap_err();
+    assert!(error.contains("取消"));
+    w.cancelled.store(false, Ordering::SeqCst);
+    let mut scope = unity_profiler_analysis_agent_lib::project::ProjectScope::prepare(
+        "run".into(),
+        root,
+        w.cancelled.clone(),
+    )
+    .unwrap();
+    scope.cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    scope.cancelled.store(true, Ordering::SeqCst);
+    assert!(
+        !w.cancelled.load(Ordering::SeqCst),
+        "closing read scope must not disable checks or rollback"
+    );
+}

@@ -107,8 +107,15 @@ flowchart LR
 
 ## 持久化优化项目
 
-`optimization/` 管理项目、轮次、任务版本、修改运行、文件前后字节、检查及 A/B。`optimization_command` 接收操作标签；每次 Start 独立新建 ACP 会话，拒绝旧 session ID。普通诊断的 `MetricsStore` 没有编辑范围；修改会话只增加 `optimization_context/read/replace/check`，后端校验任务和文件指纹。
+`optimization/` 管理项目、轮次、任务版本、修改运行、文件前后字节、检查及 A/B。`optimization_command` 接收操作标签；每次 Start 独立新建 ACP 会话，拒绝旧 session ID。普通诊断的 `MetricsStore` 没有编辑范围；旧受限修改会话增加 `optimization_context/read/replace/check`，后端校验批准任务与文件指纹；自动模式的新增工具和范围见下节。
 
 保存目录中的 `optimization.json` 与首次写入备份先落盘，再对目标文件做单文件替换。应用中断后核对 prepared 条目；回退按逆序、内容指纹和后续轮次依赖执行。跨进程锁分别保护保存目录及 Unity 工程，仍不等价于文件系统沙箱。
 
 Unity 固定检查协议与只读采集协议分开版本化。编译、相关 Shader 导入和选定 EditMode 测试由 Editor 执行；检查记录跨域重载保存在 Library。业务文件监测出现变化时暂停后续编辑。A/B 保存独立录制指纹及紧凑帧指标，调用树仍按需读取原录制，统计只使用有效值。完整限制和状态见[优化项目说明](optimization-loop.md)。
+
+
+### 自动优化模式
+
+定位报告完成后，`prepareAutomatic` 按规范化工程路径复用工作区，默认记录存入应用数据目录；`startAutomatic` 仅接收轮次、Agent 和补充要求。新会话同时持有性能及工程只读查询范围，后台内部任务无需前端逐项授权。`optimization_task/create` 仅对自动修改会话开放，原 `start` 保留文件白名单。
+
+版本 2 记录区分 modify/create/directory/metadata。新文件用同目录临时文件完整写入并无覆盖发布；生成的 meta 由后台管理，只自动接受换行/空白及明确的空默认导入字段变化。回退前检查新依赖及后续轮次，不完整扫描停止删除。固定 Unity 检查先刷新 AssetDatabase，使新增或回退移除的代码与编译输入同步；范围外文件变化仍暂停。

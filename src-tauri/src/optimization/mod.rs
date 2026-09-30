@@ -1,4 +1,5 @@
 //! Persistent optimization workspaces. No Agent owns the edit/rollback ledger.
+pub mod automatic;
 pub mod commands;
 pub mod comparison;
 pub mod editing;
@@ -9,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    sync::{atomic::AtomicBool, Mutex},
+    sync::{atomic::AtomicBool, Arc, Mutex},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +52,10 @@ pub struct Capture {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Change {
+    #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default = "modify_kind")]
+    pub kind: String,
     pub path: String,
     pub before_hash: String,
     pub after_hash: String,
@@ -58,9 +63,18 @@ pub struct Change {
     pub after: Vec<u8>,
     pub state: String,
 }
+fn modify_kind() -> String {
+    "modify".into()
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Run {
+    #[serde(default)]
+    pub automatic: bool,
+    #[serde(default)]
+    pub requirements: String,
+    #[serde(skip)]
+    pub read_receipts: BTreeMap<String, String>,
     #[serde(default)]
     pub task_version: u64,
     pub id: String,
@@ -143,7 +157,7 @@ pub struct Project {
 pub struct Workspace {
     pub directory: PathBuf,
     pub data: Mutex<Project>,
-    pub cancelled: AtomicBool,
+    pub cancelled: Arc<AtomicBool>,
     /// A process-wide workspace lease; editor actions also take `data`.
     pub busy: AtomicBool,
     pub(crate) last_report_save: Mutex<std::time::Instant>,

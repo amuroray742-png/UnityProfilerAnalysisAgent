@@ -85,6 +85,7 @@ namespace UPAA.Inspector {
    EditorApplication.delayCall+=()=>{
     if(job==null||(string)job["id"]!=id||(string)job["phase"]!="compiling")return;
     try{
+     AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport); // Discover new code and remove rolled-back code from the compiler input.
      foreach(var path in paths){AssetDatabase.ImportAsset(path,ImportAssetOptions.ForceUpdate);if(path.EndsWith(".shader",StringComparison.Ordinal)){var shader=AssetDatabase.LoadAssetAtPath<Shader>(path);if(shader)foreach(var e in ShaderUtil.GetShaderMessages(shader)){if(e.severity.ToString()=="Error")((JArray)job["errors"]).Add(new JObject{["file"]=path,["line"]=e.line,["message"]=e.message});}}}
      job["compileRequested"]=true;Persist();if(journalDirty){End("unavailable","编译前检查记录无法保存");return;}CompilationPipeline.RequestScriptCompilation();
     }catch(Exception e){End("unavailable",e.Message);}
