@@ -36,6 +36,7 @@ fn setup(bytes: &[u8]) -> (Temp, Arc<Workspace>, String) {
     let w = Arc::new(Workspace::create(save, root, "公开测试".into()).unwrap());
     let rid = id();
     w.data.lock().unwrap().rounds.push(Round {
+        workflow: Default::default(),
         task_version: 1,
         task_verifications: BTreeMap::new(),
         id: rid.clone(),
@@ -512,9 +513,11 @@ fn durable_save_tolerates_short_reader_sharing_lock() {
     let d = w.data.lock().unwrap();
     w.save(&d).unwrap();
     reader.join().unwrap();
-    let saved: Project =
-        serde_json::from_slice(&std::fs::read(w.directory.join("optimization.json")).unwrap())
-            .unwrap();
+    let saved = archive::load(
+        &w.directory,
+        &std::fs::read(w.directory.join("optimization.json")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(saved.id, d.id);
 }
 
@@ -705,16 +708,170 @@ fn version_one_migrates_with_original_backup() {
     {
         let mut d = w.data.lock().unwrap();
         d.version = 1;
-        w.save(&d).unwrap();
+        storage::atomic(
+            &directory.join("optimization.json"),
+            &serde_json::to_vec(&*d).unwrap(),
+        )
+        .unwrap();
     }
     let original = std::fs::read(directory.join("optimization.json")).unwrap();
     drop(w);
     let w = Workspace::open(directory.clone()).unwrap();
-    assert_eq!(w.data.lock().unwrap().version, 2);
+    assert_eq!(w.data.lock().unwrap().version, 3);
     assert_eq!(
         std::fs::read(directory.join("optimization.v1.backup.json")).unwrap(),
         original
     );
+}
+
+#[test]
+fn workflow_archive_split_recovery_and_missing_root() {
+    let (t, w, r, run) = automatic_setup();
+    w.event(
+        &run,
+        &DiagnoseEvent::Chunk {
+            text: "本轮已调查".into(),
+        },
+    )
+    .unwrap();
+    // This tail is durable in the journal even if no manifest checkpoint follows.
+    archive::append(
+        &w.directory,
+        &run,
+        &json!({"offset":"本轮已调查".len(),"event":{"kind":"chunk","text":"，继续定位"}}),
+    )
+    .unwrap();
+    let directory = w.directory.clone();
+    let root = w.data.lock().unwrap().root.clone();
+    let index: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.join("optimization.json")).unwrap())
+            .unwrap();
+    assert!(index["rounds"][0]["object"].is_string());
+    assert!(!serde_json::to_string(&index)
+        .unwrap()
+        .contains("本轮已调查"));
+    drop(w);
+    let moved = t.0.join("temporarily-missing");
+    std::fs::rename(&root, &moved).unwrap();
+    let reopened = Workspace::open(directory).unwrap();
+    let d = reopened.data.lock().unwrap();
+    let round = d.rounds.iter().find(|x| x.id == r).unwrap();
+    assert_eq!(round.runs.last().unwrap().text, "本轮已调查，继续定位");
+    assert_eq!(round.runs.last().unwrap().status, "interrupted");
+    assert_eq!(d.root, root);
+    assert!(workflow::project_available(&d.root).is_err());
+}
+
+#[test]
+fn workflow_report_wal_replays_once_and_marks_interruption() {
+    let (_t, w, r, _run) = automatic_setup();
+    let directory = w.directory.clone();
+    let mut p = w.data.lock().unwrap().rounds[0].reports[0].clone();
+    p.report_id = id();
+    p.text = "已经保存".into();
+    p.status = "running".into();
+    let pid = p.report_id.clone();
+    {
+        let mut d = w.data.lock().unwrap();
+        d.rounds[0].reports = vec![p];
+        d.rounds[0].workflow.status = "running".into();
+        w.save(&d).unwrap();
+    }
+    archive::append(
+        &directory,
+        &pid,
+        &json!({"offset":0,"event":{"kind":"chunk","text":"已经保存"}}),
+    )
+    .unwrap();
+    archive::append(
+        &directory,
+        &pid,
+        &json!({"offset":"已经保存".len(),"event":{"kind":"chunk","text":"和未提交尾部"}}),
+    )
+    .unwrap();
+    drop(w);
+    let w = Workspace::open(directory.clone()).unwrap();
+    assert_eq!(
+        w.data.lock().unwrap().rounds[0].reports[0].text,
+        "已经保存和未提交尾部"
+    );
+    assert_eq!(
+        w.data.lock().unwrap().rounds[0].workflow.status,
+        "interrupted"
+    );
+    assert!(workflow::export_round(&w, &r)
+        .unwrap()
+        .contains("未提交尾部"));
+    drop(w);
+    let w = Workspace::open(directory).unwrap();
+    assert_eq!(
+        w.data.lock().unwrap().rounds[0].reports[0].text,
+        "已经保存和未提交尾部"
+    );
+}
+
+#[tokio::test]
+async fn workflow_next_requires_decision_and_uses_correct_baseline() {
+    let (_t, w, _r) = setup(b"class Work {}");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/editor-dump.json");
+    let profile = parser::parse_file(&path).await.unwrap();
+    w.data.lock().unwrap().captures.push(Capture {
+        id: "b".into(),
+        path,
+        hash: "test".into(),
+        conditions: Conditions::default(),
+        snapshot: extractor::extract(&profile),
+        frames: profile.frames,
+    });
+    assert!(workflow::next_round(&w).is_err());
+    {
+        let mut d = w.data.lock().unwrap();
+        d.rounds[0].candidate = Some("b".into());
+        d.rounds[0].decision = "accepted".into();
+    }
+    workflow::next_round(&w).unwrap();
+    {
+        let mut d = w.data.lock().unwrap();
+        assert_eq!(d.rounds[1].baseline, "b");
+        assert!(d.rounds[1].reports.is_empty());
+        d.rounds[1].decision = "rolled_back".into();
+    }
+    workflow::next_round(&w).unwrap();
+    assert_eq!(w.data.lock().unwrap().rounds[2].baseline, "b");
+}
+
+#[test]
+fn workflow_objects_are_verified_and_failed_save_preserves_manifest() {
+    let (_t, w, _r) = setup(b"class Work {}");
+    let directory = w.directory.clone();
+    let before = std::fs::read(directory.join("optimization.json")).unwrap();
+    let index: serde_json::Value = serde_json::from_slice(&before).unwrap();
+    let hash = index["rounds"][0]["object"].as_str().unwrap();
+    let object = directory.join("objects").join(format!("{hash}.json"));
+    std::fs::write(&object, b"{}").unwrap();
+    assert!(archive::load(&directory, &before)
+        .unwrap_err()
+        .contains("损坏"));
+    assert_eq!(
+        std::fs::read(directory.join("optimization.json")).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn workflow_save_failure_is_visible_and_does_not_overwrite_manifest() {
+    let (_t, w, _r) = setup(b"class Work {}");
+    let manifest = w.directory.join("optimization.json");
+    let before = std::fs::read(&manifest).unwrap();
+    let mut perm = std::fs::metadata(&manifest).unwrap().permissions();
+    perm.set_readonly(true);
+    std::fs::set_permissions(&manifest, perm).unwrap();
+    assert!(w.save(&w.data.lock().unwrap()).is_err());
+    assert!(w.save_error.lock().unwrap().is_some());
+    assert_eq!(std::fs::read(&manifest).unwrap(), before);
+    let mut perm = std::fs::metadata(&manifest).unwrap().permissions();
+    perm.set_readonly(false);
+    std::fs::set_permissions(&manifest, perm).unwrap();
 }
 #[test]
 fn automatic_marker_task_and_retry_keep_separate_sessions() {

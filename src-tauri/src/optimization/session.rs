@@ -216,6 +216,20 @@ impl Workspace {
         if run.status != "running" {
             return Ok(());
         }
+        if matches!(
+            event,
+            Chunk { .. } | SessionCreated { .. } | Finished { .. } | Cancelled | Error { .. }
+        ) {
+            let offset = run.text.len();
+            if let Err(error) = super::archive::append(
+                &self.directory,
+                run_id,
+                &json!({"event":event,"offset":offset}),
+            ) {
+                *self.save_error.lock().unwrap() = Some(error.clone());
+                return Err(error);
+            }
+        }
         match event {
             SessionCreated { acp_session_id } => run.session_id = acp_session_id.clone(),
             Chunk { text } => {
@@ -275,14 +289,11 @@ impl Workspace {
         if event.terminal() {
             self.busy.store(false, Ordering::SeqCst);
         }
-        // Backups and terminal states always flush; avoid rewriting all backup bytes
-        // on every streamed token. A crash can lose at most this unflushed text tail.
-        let mut saved = self.last_report_save.lock().unwrap();
-        if matches!(event, Chunk { .. }) && saved.elapsed() < std::time::Duration::from_millis(250)
-        {
+        // Token text is already durable in the append-only journal. Checkpoint only
+        // structural/terminal changes, avoiding a new full text object per token.
+        if matches!(event, Chunk { .. }) {
             return Ok(());
         }
-        *saved = std::time::Instant::now();
         self.save(&d)
     }
 }

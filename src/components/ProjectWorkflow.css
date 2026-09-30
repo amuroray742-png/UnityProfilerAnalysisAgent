@@ -1,0 +1,18 @@
+.project-workflow{max-width:1100px;margin:0 auto;padding:28px;color:var(--text-primary,#e2e8f0)}
+.project-workflow header p,.project-workflow p{color:var(--text-secondary,#94a3b8);line-height:1.65;overflow-wrap:anywhere}
+.workflow-card{padding:24px;margin:18px 0;background:var(--bg-secondary,#171b22);border:1px solid #303640;border-radius:12px}
+.workflow-heading{display:flex;justify-content:space-between;gap:24px;align-items:flex-start}
+.workflow-steps{display:flex;gap:12px;padding:0;list-style:none;flex-wrap:wrap;margin:24px 0}
+.workflow-steps li{padding:10px 14px;border-radius:8px;background:#222833;color:#a5afbd}
+.workflow-steps li.active{background:#214677;color:#fff}
+.project-workflow button{padding:10px 16px;margin:6px 8px 6px 0;border:1px solid #465064;border-radius:7px;background:#252d3a;color:#e2e8f0;cursor:pointer}
+.project-workflow button.primary{background:#3978d7;border-color:#3978d7;color:white;font-weight:600}
+.project-workflow button:disabled{opacity:.45;cursor:not-allowed}
+.project-workflow label{display:block;margin:14px 0}
+.project-workflow input:not([type=checkbox]),.project-workflow textarea,.project-workflow select{display:block;width:min(100%,620px);box-sizing:border-box;margin-top:7px;padding:10px;background:#10151d;color:#e2e8f0;border:1px solid #455064;border-radius:6px}
+.project-workflow textarea{min-height:80px}.project-workflow summary{cursor:pointer;padding:8px 0;font-weight:500}
+.workflow-primary{border-left:3px solid #5899ef;padding:8px 20px;margin:20px 0}
+.recent-project{display:block;text-align:left;width:100%}.recent-project span{display:block;color:#94a3b8;font-size:12px;margin-top:6px}
+.project-workflow table{width:100%;border-collapse:collapse}.project-workflow td,.project-workflow th{padding:10px;text-align:left;border-bottom:1px solid #343c49}
+.workflow-note{padding:12px;background:#332b16;border-radius:6px}.workflow-actions{display:flex;flex-wrap:wrap;gap:8px}
+@media(max-width:650px){.project-workflow{padding:12px}.workflow-card{padding:16px}.workflow-heading{display:block}.workflow-steps{gap:6px}}

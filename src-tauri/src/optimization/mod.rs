@@ -1,10 +1,12 @@
 //! Persistent optimization workspaces. No Agent owns the edit/rollback ledger.
+pub mod archive;
 pub mod automatic;
 pub mod commands;
 pub mod comparison;
 pub mod editing;
 pub mod session;
 pub mod storage;
+pub mod workflow;
 use crate::reports::Report;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -94,6 +96,8 @@ pub struct Run {
 #[serde(rename_all = "camelCase")]
 pub struct Round {
     #[serde(default)]
+    pub workflow: workflow::Progress,
+    #[serde(default)]
     pub task_version: u64,
     #[serde(default)]
     pub task_verifications: BTreeMap<String, String>,
@@ -156,11 +160,12 @@ pub struct Project {
 #[derive(Debug)]
 pub struct Workspace {
     pub directory: PathBuf,
+    pub save_error: Mutex<Option<String>>,
     pub data: Mutex<Project>,
     pub cancelled: Arc<AtomicBool>,
+    pub cancel_epoch: std::sync::atomic::AtomicU64,
     /// A process-wide workspace lease; editor actions also take `data`.
     pub busy: AtomicBool,
-    pub(crate) last_report_save: Mutex<std::time::Instant>,
     pub(crate) _lease: std::fs::File,
     pub(crate) _root_lease: std::fs::File,
 }
