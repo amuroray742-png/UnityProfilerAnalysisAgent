@@ -1,5 +1,7 @@
 # Unity 6000.3 二进制布局对照记录
 
+本页保留历史研究与对照证据。当前版本分派、辅助区段、内存、缓存及取消以[当前解析契约](data-parser-current.md)为准。
+
 更新：2026-09-28。P0 第二阶段已完成两份录制及加载高峰、末帧的无扫描生产入口对照。验收范围限定 Windows Unity 6000.3.23f1；不能外推至未对照帧或其他版本。下文分别保留当前验收与早期研究证据。
 
 新增渲染阶段：6000.3.9f1 的结构兼容及 2,000 帧五类计数已对照，见[独立渲染验收记录](rendering-validation.md)。下述两录制 CPU/GC 证据仍限定原版本。
@@ -104,7 +106,8 @@ repeat thread_count:
     f32 duration_ns
     u64 start_ns
     i32 direct_child_count
-  u32 section_a_count                 # 目前样本中必须为 0；非零拒绝
+  u32 section_a_count                 # 后续已支持 counted 12-byte 辅助记录，校验样本索引
+  bytes[section_a_count * 12] auxiliary_records
   u32 indexed_record_count
   repeat indexed_record_count:
     u32 sample_index
@@ -128,7 +131,7 @@ repeat thread_count:
   u32 opaque_scalar_1
   u32 opaque_scalar_2
   u32 trailing_record_count
-  bytes[trailing_record_count * 12] opaque_records
+  bytes[trailing_record_count * 12] flow_records  # 后续已对照 Flow 语义
 ```
 
 校验内容：
@@ -162,7 +165,7 @@ python -B tools/verify_unity6_layout.py --data '<录制绝对路径>' --dump '<�
 
 [公开合成测试](../tools/test_verify_unity6_layout.py)覆盖零 GC、非零 GC、缺失/歧义定位、逐样本字段错误、GC metadata 缺失或不一致、尾部截断、线程 ID 表示差异、根 marker 限定及部分导出。本轮 8 项通过。
 
-## 接下来
+## 历史阶段的后续事项（查询与 ACP 已完成）
 
 1. 将保留的原始帧 ID、线程 ID、样本树接入有界单帧查询，替换全局热点冒充调用树的接口。
 2. 在可信查询基础上接通真实 ACP / MCP 协议、取消及会话隔离。

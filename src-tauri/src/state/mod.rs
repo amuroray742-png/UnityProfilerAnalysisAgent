@@ -21,7 +21,8 @@ pub struct UploadEntry {
 
 #[derive(Debug)]
 pub struct AppStateInner {
-    pub capture_hashes:HashMap<String,String>,
+    pub parses: HashMap<String, Arc<std::sync::atomic::AtomicBool>>,
+    pub capture_hashes: HashMap<String, String>,
     /// file_id → UploadEntry
     pub uploads: HashMap<String, UploadEntry>,
     /// file_id → MetricsSnapshot
@@ -47,7 +48,8 @@ pub struct AppState(pub Arc<Mutex<AppStateInner>>);
 impl AppState {
     pub fn new() -> Self {
         Self(Arc::new(Mutex::new(AppStateInner {
-            capture_hashes:HashMap::new(),
+            parses: HashMap::new(),
+            capture_hashes: HashMap::new(),
             uploads: HashMap::new(),
             snapshots: HashMap::new(),
             details: HashMap::new(),
@@ -93,6 +95,9 @@ impl AppState {
     }
     pub async fn release_file(&self, file_id: &str) {
         let mut inner = self.0.lock().await;
+        if let Some(flag) = inner.parses.get(file_id) {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         inner.capture_hashes.remove(file_id);
         inner.projects.retain(|_, p| {
             if p.info.file_id == file_id {

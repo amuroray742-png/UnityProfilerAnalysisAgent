@@ -225,6 +225,7 @@ pub fn parse(bytes: &[u8], name: &str, size: u64) -> Result<ParsedProfile, Parse
         }
         warnings.extend(quality.reasons.clone());
         let mut frame = Frame {
+            memory: Default::default(),
             quality,
             index: df.frame_index,
             duration_ms: df.frame_time_ms.unwrap_or(0.0),
@@ -293,6 +294,7 @@ pub fn parse(bytes: &[u8], name: &str, size: u64) -> Result<ParsedProfile, Parse
             });
         }
         details.write_frame(&DetailFrame {
+            sections: vec![],
             info: FrameInfo::summary(&frame),
             threads,
         })?;

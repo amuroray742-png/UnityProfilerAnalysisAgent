@@ -79,6 +79,19 @@ impl MetricsStore {
         })
     }
 
+    pub async fn memory_page(
+        &self,
+        name: &str,
+        start: usize,
+        limit: usize,
+    ) -> Result<serde_json::Value, transport::McpToolError> {
+        let inner = self.inner.lock().await;
+        let snapshot = inner
+            .snapshot
+            .as_ref()
+            .ok_or(transport::McpToolError::NoSnapshot)?;
+        Ok(snapshot.memory.page(name, start, limit)?)
+    }
     pub async fn get(&self) -> Option<MetricsSnapshot> {
         self.inner.lock().await.snapshot.clone()
     }
@@ -166,6 +179,10 @@ pub fn list_tool_schemas() -> serde_json::Value {
             "inputSchema":{"type":"object","properties":{"frame_index":{"type":"integer","minimum":0},"start":{"type":"integer","minimum":0,"default":0},"limit":{"type":"integer","minimum":1,"maximum":50,"default":10},"counters_only":{"type":"boolean","default":false}},"required":["frame_index"]}}),
         json!({"name":"performance_compare_frames","description":"按完整 marker 名路径比较尖峰与显式对照帧；inclusive 增量降序，提供调用次数、Self 覆盖率和 GC 字节。默认唯一 Main Thread；显式线程按 ID 匹配对照帧。对照不自动证明正常，父子路径不可相加。",
             "inputSchema":{"type":"object","properties":{"frame_index":{"type":"integer","minimum":0},"baseline_frame_index":{"type":"integer","minimum":0},"thread_index":{"type":"integer","minimum":0},"start":{"type":"integer","minimum":0,"default":0},"limit":{"type":"integer","minimum":1,"maximum":50,"default":10}},"required":["frame_index","baseline_frame_index"]}})
+    ]);
+    schemas["tools"].as_array_mut().unwrap().extend([
+      json!({"name":"performance_memory","description":"按内存 Counter 分页查询 bytes 观测、峰值、首末变化及覆盖率；尚待 Editor 对照，不作泄漏或达标结论。大整数是字符串。","inputSchema":{"type":"object","properties":{"name":{"type":"string","enum":crate::parser::data::unity6_structured::MEMORY_COUNTER_NAMES},"start":{"type":"integer","minimum":0,"default":0},"limit":{"type":"integer","minimum":1,"maximum":50,"default":10}},"required":["name"]}}),
+      json!({"name":"performance_frame_sections","description":"读取帧体未知区段的偏移、长度、数量、最多64字节预览；unknown 不代表已理解业务语义。","inputSchema":{"type":"object","properties":{"frame_index":{"type":"integer","minimum":0},"start":{"type":"integer","minimum":0,"default":0},"limit":{"type":"integer","minimum":1,"maximum":50,"default":10}},"required":["frame_index"]}})
     ]);
     for tool in schemas["tools"].as_array_mut().unwrap() {
         tool["inputSchema"]["additionalProperties"] = json!(false);

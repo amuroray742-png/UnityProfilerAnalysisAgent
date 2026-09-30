@@ -69,6 +69,8 @@ pub struct ProfileMeta {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Frame {
     #[serde(default)]
+    pub memory: std::collections::BTreeMap<String, data::unity6_structured::MemoryObservation>,
+    #[serde(default)]
     pub quality: FrameQuality,
     pub index: usize,
     pub duration_ms: f64,
@@ -106,6 +108,8 @@ pub struct FrameQuality {
     pub sites: bool,
     pub render: bool,
     pub estimated: bool,
+    #[serde(default)]
+    pub version_verified: Option<bool>,
     pub source: String,
     pub reasons: Vec<String>,
 }
@@ -126,6 +130,7 @@ impl FrameQuality {
             sites: false,
             render: false,
             estimated: false,
+            version_verified: None,
             source: source.into(),
             reasons: vec![],
         }
@@ -143,6 +148,8 @@ pub struct AllocSite {
 
 #[derive(Debug, Error)]
 pub enum ParseError {
+    #[error("解析已取消")]
+    Cancelled,
     #[error("不支持的文件格式: {0}")]
     UnsupportedFormat(String),
 
@@ -178,8 +185,21 @@ pub async fn parse_file(path: &Path) -> Result<ParsedProfile, ParseError> {
 
 pub async fn parse_file_with_progress(
     path: &Path,
-    mut progress: impl FnMut(u64, u64) + Send + 'static,
+    progress: impl FnMut(u64, u64) + Send + 'static,
 ) -> Result<ParsedProfile, ParseError> {
+    parse_file_cancel(
+        path,
+        progress,
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+    .await
+}
+pub async fn parse_file_cancel(
+    path: &Path,
+    mut progress: impl FnMut(u64, u64) + Send + 'static,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<ParsedProfile, ParseError> {
+    data::cancelled(&cancel)?;
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -209,11 +229,10 @@ pub async fn parse_file_with_progress(
         }
         ProfilerFormat::Data => {
             let path = path.to_owned();
-            tokio::task::spawn_blocking(move || {
-                data::parse_path_with_progress(&path, &mut progress)
-            })
-            .await
-            .map_err(|e| ParseError::Other(e.to_string()))??
+            let flag = cancel.clone();
+            tokio::task::spawn_blocking(move || data::parse_path_cancel(&path, &mut progress, flag))
+                .await
+                .map_err(|e| ParseError::Other(e.to_string()))??
         }
         ProfilerFormat::Pd3u => {
             let bytes = Bytes::from(tokio::fs::read(path).await?);
@@ -222,6 +241,7 @@ pub async fn parse_file_with_progress(
         }
     };
 
+    data::cancelled(&cancel)?;
     // 通用元信息填充
     profile.meta.format = format;
     if profile.meta.file_name.is_empty() {

@@ -18,7 +18,7 @@ export interface Hotspot {
 }
 
 export interface Quality {
- status: 'available' | 'partial' | 'unavailable' | 'estimated'; source: string;
+ status: 'available' | 'partial' | 'unavailable' | 'estimated' | 'unverified'; source: string;
  reasons: string[]; validFrames: number; totalFrames: number;
 }
 export interface AllocHotspot {
@@ -58,11 +58,18 @@ export interface RenderingMetrics {
   topRenderEvents: Hotspot[];
 }
 
+export interface MemoryObservation {value:string|null;reason:string|null;sources:{threadId:string;sampleIndex:number;markerId:number}[];sourceCount:number}
+export interface MemoryMetrics {
+ counters:Record<string,{peak:string|null;peakFrame:number|null;first:string|null;last:string|null;delta:string|null;validFrames:number;totalFrames:number;status:string;validation:string}>;
+ frames:{frameIndex:number;counters:Record<string,MemoryObservation>;versionVerified:boolean|null}[];
+}
 export interface MetricsSnapshot {
+ memory?:MemoryMetrics;
   meta: {
     fileName: string;
     declaredFrameCount: number;
     durationQuality: Quality;
+    parsing?: {rawBlocks:number;decodedFrames:number;skippedFrames:number;failedFrames:number;validation:string}|null;
     source: string;
     durationMs: number | null;
     frameCount: number;

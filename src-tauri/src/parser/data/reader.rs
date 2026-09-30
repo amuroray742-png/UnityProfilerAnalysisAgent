@@ -14,6 +14,7 @@ use super::constants::{MAX_STRING_BYTES, STRING_ALIGN};
 pub struct Reader<'a> {
     pub(crate) inner: Cursor<&'a [u8]>,
     pub(crate) err: Option<String>,
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl<'a> Reader<'a> {
@@ -21,6 +22,7 @@ impl<'a> Reader<'a> {
         Self {
             inner: Cursor::new(buf),
             err: None,
+            cancel: None,
         }
     }
 
@@ -37,11 +39,22 @@ impl<'a> Reader<'a> {
     }
 
     pub fn need(&mut self, n: usize) -> bool {
+        if self
+            .cancel
+            .as_ref()
+            .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            self.err = Some("解析已取消".into());
+        }
         if self.err.is_some() {
             return false;
         }
         if self.remaining() < n {
-            self.err = Some(format!("unexpected EOF: want {} bytes, have {}", n, self.remaining()));
+            self.err = Some(format!(
+                "unexpected EOF: want {} bytes, have {}",
+                n,
+                self.remaining()
+            ));
             return false;
         }
         true
@@ -141,7 +154,8 @@ impl<'a> Reader<'a> {
                 String::new()
             }
         };
-        self.inner.set_position(self.inner.position() + advance as u64);
+        self.inner
+            .set_position(self.inner.position() + advance as u64);
         result
     }
 

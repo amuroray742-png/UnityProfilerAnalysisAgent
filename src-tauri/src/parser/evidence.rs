@@ -113,12 +113,12 @@ impl FrameStore {
         for index in frame_index..=end_frame_index {
             let frame = self.load(index)?;
             available &= !frame.threads.is_empty();
-            for t in frame.threads {
-                let Some(events) = t.flow_events else {
+            for t in &frame.threads {
+                let Some(events) = &t.flow_events else {
                     available = false;
                     continue;
                 };
-                for (event_index, e) in events.into_iter().enumerate() {
+                for (event_index, e) in events.iter().enumerate() {
                     if flow_id.is_some_and(|id| id != e.flow_id) {
                         continue;
                     }
@@ -216,13 +216,14 @@ impl FrameStore {
         }
         let frame = self.load(frame_index)?;
         let baseline = self.load(baseline_index)?;
-        let select = |threads: Vec<DetailThread>,
+        let select = |threads: &[DetailThread],
                       id: Option<&str>,
                       index: Option<usize>|
-         -> Result<DetailThread, QueryError> {
+         -> Result<usize, QueryError> {
             let mut candidates: Vec<_> = threads
-                .into_iter()
-                .filter(|t| {
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| {
                     if let Some(i) = index {
                         t.info.thread_index == i
                     } else if let Some(id) = id {
@@ -237,14 +238,14 @@ impl FrameStore {
                     "对照线程缺失或不唯一；非主线程按线程 ID 匹配，不能按数组位置替代".into(),
                 ));
             }
-            Ok(candidates.remove(0))
+            Ok(candidates.remove(0).0)
         };
-        let current = select(frame.threads, None, thread_index)?;
-        let previous = select(
-            baseline.threads,
+        let current = &frame.threads[select(&frame.threads, None, thread_index)?];
+        let previous = &baseline.threads[select(
+            &baseline.threads,
             thread_index.map(|_| current.info.thread_id.as_str()),
             None,
-        )?;
+        )?];
         let mut thread = json!(current.info);
         thread["name"] = json!(current.info.name.chars().take(128).collect::<String>());
         thread["group"] = json!(current
@@ -253,17 +254,16 @@ impl FrameStore {
             .as_ref()
             .map(|s| s.chars().take(128).collect::<String>()));
         let mut rows: BTreeMap<Vec<String>, [Totals; 2]> = BTreeMap::new();
-        for (side, mut t) in [previous, current].into_iter().enumerate() {
-            calculate_self(&mut t.samples);
+        for (side, t) in [previous, current].into_iter().enumerate() {
             let mut stack: Vec<String> = Vec::new();
-            for s in t.samples {
+            for s in &t.samples {
                 if s.depth > 64 {
                     return Err(QueryError::BadArg(
                         "调用路径深度超过 64；请用原始树查询".into(),
                     ));
                 }
                 stack.truncate(s.depth);
-                stack.push(s.name);
+                stack.push(s.name.clone());
                 if stack.iter().map(String::len).sum::<usize>() > 4096 {
                     return Err(QueryError::BadArg("单条调用路径超过 4096 字节".into()));
                 }

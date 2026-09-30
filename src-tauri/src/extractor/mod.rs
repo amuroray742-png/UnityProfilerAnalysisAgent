@@ -9,11 +9,14 @@ use crate::parser::ParsedProfile;
 
 pub mod cpu;
 pub mod gc;
+pub mod memory;
 pub mod rendering;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetricsSnapshot {
+    #[serde(default)]
+    pub memory: memory::MemoryMetrics,
     pub meta: SnapshotMeta,
     pub cpu: cpu::CpuMetrics,
     pub gc: gc::GcMetrics,
@@ -24,6 +27,8 @@ pub struct MetricsSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SnapshotMeta {
+    #[serde(default)]
+    pub parsing: Option<ParsingCoverage>,
     pub duration_quality: Quality,
     pub declared_frame_count: usize,
     pub source: String,
@@ -34,10 +39,46 @@ pub struct SnapshotMeta {
     pub unity_version: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParsingCoverage {
+    pub raw_blocks: usize,
+    pub decoded_frames: usize,
+    pub skipped_frames: usize,
+    pub failed_frames: usize,
+    pub validation: String,
+}
 /// 提取入口
 pub fn extract(profile: &ParsedProfile) -> MetricsSnapshot {
     MetricsSnapshot {
+        memory: memory::extract(&profile.frames),
         meta: SnapshotMeta {
+            parsing: (profile.meta.format == crate::parser::ProfilerFormat::Data).then(|| {
+                ParsingCoverage {
+                    raw_blocks: profile.frames.len(),
+                    decoded_frames: profile
+                        .frames
+                        .iter()
+                        .filter(|f| !f.quality.source.ends_with("-skipped"))
+                        .count(),
+                    skipped_frames: profile
+                        .frames
+                        .iter()
+                        .filter(|f| f.quality.source.ends_with("-skipped"))
+                        .count(),
+                    failed_frames: 0,
+                    validation: if profile
+                        .frames
+                        .iter()
+                        .any(|f| f.quality.version_verified == Some(false))
+                    {
+                        "pending-editor-comparison"
+                    } else {
+                        "limited-capture-comparison"
+                    }
+                    .into(),
+                }
+            }),
             duration_quality: Quality::from_frames(&profile.frames, |f| f.quality.duration),
             declared_frame_count: profile.meta.frame_count,
             source: profile
@@ -80,10 +121,15 @@ impl Quality {
     ) -> Self {
         let count = frames.iter().filter(|f| valid(f)).count();
         let estimated = frames.iter().any(|f| valid(f) && f.quality.estimated);
+        let unverified = frames
+            .iter()
+            .any(|f| f.quality.version_verified == Some(false));
         let status = if count == 0 {
             "unavailable"
         } else if count < frames.len() {
             "partial"
+        } else if unverified {
+            "unverified"
         } else if estimated {
             "estimated"
         } else {
@@ -96,6 +142,9 @@ impl Quality {
             .collect();
         if count < frames.len() && reasons.is_empty() {
             reasons.push("输入未提供或解析器尚未验证该指标".into());
+        }
+        if unverified {
+            reasons.push("版本待验证；不能作确定性达标结论".into());
         }
         if estimated {
             reasons.push("包含估算值，不能视为观测结果".into());

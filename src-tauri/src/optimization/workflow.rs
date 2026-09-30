@@ -487,6 +487,15 @@ pub async fn workflow_command(
                     return Err("请先导入 A".into());
                 }
             }
+            struct ImportGuard(Arc<Workspace>);
+            impl Drop for ImportGuard {
+                fn drop(&mut self) {
+                    self.0.busy.store(false, Ordering::SeqCst);
+                }
+            }
+            w.cancelled.store(false, Ordering::SeqCst);
+            w.busy.store(true, Ordering::SeqCst);
+            let _import_guard = ImportGuard(w.clone());
             let rid = w
                 .data
                 .lock()
@@ -512,6 +521,10 @@ pub async fn workflow_command(
             };
             progress.update("save", None, None, "running", None);
             let mut saved = w.data.lock().unwrap();
+            if w.cancelled.load(Ordering::SeqCst) {
+                progress.fail("导入已取消");
+                return Err("导入已取消".into());
+            }
             let mut d = saved.clone();
             let cid = c.id.clone();
             d.captures.push(c);

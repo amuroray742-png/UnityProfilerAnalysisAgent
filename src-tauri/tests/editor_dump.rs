@@ -404,16 +404,8 @@ async fn experimental_binary_outputs_never_become_real_zero_metrics() {
     bytes.extend_from_slice(&1u32.to_le_bytes());
     bytes.extend_from_slice(&constants::FRAME_END_MARKER.to_le_bytes());
     bytes.extend_from_slice(&constants::FILE_END_MARKER.to_le_bytes());
-    let profile = parser::data::parse(&Bytes::from(bytes), "synthetic.data", 64)
-        .await
-        .unwrap();
-    let snapshot = extractor::extract(&profile);
-    assert_eq!(snapshot.cpu.main_thread_ms.p95, Some(16.0));
-    assert_eq!(snapshot.cpu.main_thread_ms.quality.status, "estimated");
-    assert_eq!(snapshot.gc.total_alloc_bytes, None);
-    assert_eq!(snapshot.gc.site_quality.status, "unavailable");
-    assert_eq!(snapshot.cpu.hotspot_quality.status, "unavailable");
-    assert_eq!(snapshot.rendering.draw_calls.p95, None);
+    let error=parser::data::parse(&Bytes::from(bytes),"synthetic.data",64).await.unwrap_err();
+    assert!(matches!(error,parser::ParseError::UnsupportedFormat(_)));
     let raw = parser::raw::parse(&Bytes::from_static(b"UNITY\x01\x00\x00\x00"), "test.raw", 9)
         .await
         .unwrap();

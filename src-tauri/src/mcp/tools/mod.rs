@@ -84,6 +84,24 @@ struct Compare {
     #[serde(default = "hotspot_limit")]
     limit: usize,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Memory {
+    name: String,
+    #[serde(default)]
+    start: usize,
+    #[serde(default = "hotspot_limit")]
+    limit: usize,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Sections {
+    frame_index: usize,
+    #[serde(default)]
+    start: usize,
+    #[serde(default = "hotspot_limit")]
+    limit: usize,
+}
 fn hotspot_limit() -> usize {
     10
 }
@@ -107,6 +125,20 @@ pub async fn dispatch(
     name: &str,
     arguments: Value,
 ) -> Result<Value, McpToolError> {
+    if name == "performance_memory" {
+        let a: Memory = args(arguments)?;
+        return store.memory_page(&a.name, a.start, a.limit).await;
+    }
+    if name == "performance_frame_sections" {
+        let a: Sections = args(arguments)?;
+        let source = store.query_source().await?;
+        return tokio::task::spawn_blocking(move || {
+            source.sections(a.frame_index, a.start, a.limit)
+        })
+        .await
+        .map_err(|e| McpToolError::BadArg(e.to_string()))?
+        .map_err(Into::into);
+    }
     if name.starts_with("optimization_") {
         let scope = store
             .modification()

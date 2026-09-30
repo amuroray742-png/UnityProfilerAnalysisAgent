@@ -7,7 +7,7 @@ interface Props {
 }
 export function QualityNote({ quality }: { quality?: Quality }) {
   if (!quality) return null;
-  const labels = { available: '可用', partial: '部分可用', unavailable: '不可用', estimated: '估算' };
+  const labels = { available: '可用', partial: '部分可用', unavailable: '不可用', estimated: '估算', unverified: '版本待验证' };
   return <div className="metric-detail" title={quality.reasons.join('；')}>
     {labels[quality.status]} · 有效帧 {quality.validFrames}/{quality.totalFrames} · {quality.source}
     {quality.reasons.length > 0 && <div>{quality.reasons.join('；')}</div>}
