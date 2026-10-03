@@ -261,7 +261,7 @@ async fn run_session(
     let chunks = peer.chunks;
     drop(peer);
     bridge.shutdown().await;
-    drop(tree); // terminates the Windows adapter and all job descendants
+    drop(tree); // terminates the adapter job / Unix process group and its descendants
     let _ = child.kill().await;
     let _ = tokio::time::timeout(std::time::Duration::from_secs(1), async {
         while workers.join_next().await.is_some() {}

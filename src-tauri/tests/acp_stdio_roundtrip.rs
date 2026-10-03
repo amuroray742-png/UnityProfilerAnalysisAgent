@@ -227,7 +227,7 @@ async fn real_agent_cancellation_closes_session() {
     );
 }
 #[tokio::test]
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 async fn cancellation_reaps_adapter_descendants_even_without_cancel_response() {
     for mode in ["cancel", "uncooperative"] {
         let (handle, mut rx) = fixture(mode).await;
@@ -264,8 +264,25 @@ async fn cancellation_reaps_adapter_descendants_even_without_cancel_response() {
                 CloseHandle(process);
             }
         }
-        #[cfg(not(windows))]
-        let _ = pid;
+        #[cfg(unix)]
+        {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+            loop {
+                // SAFETY: signal 0 probes existence without signalling the process.
+                if unsafe { libc::kill(pid as libc::pid_t, 0) } == -1 {
+                    assert_eq!(
+                        std::io::Error::last_os_error().raw_os_error(),
+                        Some(libc::ESRCH)
+                    );
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "descendant survived cancellation"
+                );
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
     }
 }
 #[tokio::test]

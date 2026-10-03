@@ -30,9 +30,13 @@
     "targets": "all",
     "icon": [
       "icons/icon.png",
+      "icons/icon.icns",
       "icons/icon.ico"
     ],
     "category": "DeveloperTool",
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    },
     "shortDescription": "Unity Profiler 自动化分析工具",
     "longDescription": "通过 ACP Client + MCP Server 接入 Claude Code / Gemini CLI 等 Agent，自动诊断 Unity 游戏性能瓶颈"
   }
