@@ -847,6 +847,133 @@ async fn workflow_next_requires_decision_and_uses_correct_baseline() {
     assert_eq!(w.data.lock().unwrap().rounds[2].baseline, "b");
 }
 
+fn public_capture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+}
+
+#[tokio::test]
+async fn workflow_replacing_inherited_a_preserves_history_and_survives_reopen() {
+    let (temp, w, rid) = setup(b"class Work { int number = 1; }");
+    workflow::bind_capture(w.clone(), public_capture("editor-dump.json"), "a".into(), None).await.unwrap();
+    let run = w.begin(&rid, "public-test".into()).unwrap();
+    replace(&w, &run, "number = 1", "number = 2").unwrap();
+    finish(&w, &run);
+    workflow::bind_capture(w.clone(), public_capture("isolated-peak.json"), "b".into(), None).await.unwrap();
+    let (prior, inherited) = {
+        let mut d = w.data.lock().unwrap();
+        let mut report = unity_profiler_analysis_agent_lib::reports::Report::new(id(), "fixture".into(), "public-test".into(), None, &d.captures[0].snapshot);
+        report.status = "completed".into();
+        report.text = "公开夹具历史报告".into();
+        d.rounds[0].reports.push(report);
+        d.rounds[0].decision = "accepted".into();
+        w.save(&d).unwrap();
+        (serde_json::to_value(&d.rounds[0]).unwrap(), d.rounds[0].candidate.clone().unwrap())
+    };
+    workflow::next_round(&w).unwrap();
+    assert_eq!(w.data.lock().unwrap().rounds[1].baseline, inherited);
+    let fresh = temp.0.join("新 A.json");
+    std::fs::copy(public_capture("editor-dump.json"), &fresh).unwrap();
+    workflow::bind_capture(w.clone(), fresh.clone(), "a".into(), None).await.unwrap();
+    let (directory, baseline, next_id) = {
+        let d = w.data.lock().unwrap();
+        assert_eq!(serde_json::to_value(&d.rounds[0]).unwrap(), prior);
+        let r = &d.rounds[1];
+        assert_ne!(r.baseline, inherited);
+        assert!(r.reports.is_empty() && r.runs.is_empty() && r.candidate.is_none());
+        let a = d.captures.iter().find(|c| c.id == r.baseline).unwrap();
+        let b = d.captures.iter().find(|c| c.id == inherited).unwrap();
+        assert_eq!(a.path, fresh.canonicalize().unwrap());
+        let compared = comparison::compare(a, b, None, None, false, &d.budgets).unwrap();
+        assert_eq!(compared["baseline"], r.baseline);
+        assert_eq!(compared["metrics"][0]["a"]["totalFrames"], 2);
+        assert_eq!(compared["metrics"][0]["b"]["totalFrames"], 21);
+        (w.directory.clone(), r.baseline.clone(), r.id.clone())
+    };
+    assert!(workflow::export_round(&w, &next_id).unwrap().contains("新 A.json"));
+    drop(w);
+    let reopened = Workspace::open(directory).unwrap();
+    let d = reopened.data.lock().unwrap();
+    assert_eq!(d.rounds[1].baseline, baseline);
+    assert_eq!(serde_json::to_value(&d.rounds[0]).unwrap(), prior);
+    assert!(d.rounds[1].reports.is_empty() && d.rounds[1].runs.is_empty());
+}
+
+#[tokio::test]
+async fn workflow_failed_or_cancelled_a_import_preserves_memory_and_manifest() {
+    let (temp, w, _rid) = setup(b"class Work {}");
+    workflow::bind_capture(w.clone(), public_capture("editor-dump.json"), "a".into(), None).await.unwrap();
+    let before = serde_json::to_value(&*w.data.lock().unwrap()).unwrap();
+    let manifest = w.directory.join("optimization.json");
+    let bytes = std::fs::read(&manifest).unwrap();
+    let invalid = temp.0.join("invalid.json");
+    std::fs::write(&invalid, b"invalid profiler input").unwrap();
+    assert!(workflow::bind_capture(w.clone(), invalid, "a".into(), None).await.is_err());
+    assert_eq!(serde_json::to_value(&*w.data.lock().unwrap()).unwrap(), before);
+    assert_eq!(std::fs::read(&manifest).unwrap(), bytes);
+    let cancelled = w.cancelled.clone();
+    w.observation.lock().unwrap().notify = Some(Arc::new(move |_, event| {
+        if event["stage"] == "save" && event["status"] == "running" {
+            cancelled.store(true, Ordering::SeqCst);
+        }
+    }));
+    assert!(workflow::bind_capture(w.clone(), public_capture("isolated-peak.json"), "a".into(), None).await.unwrap_err().contains("取消"));
+    assert_eq!(serde_json::to_value(&*w.data.lock().unwrap()).unwrap(), before);
+    assert_eq!(std::fs::read(&manifest).unwrap(), bytes);
+    assert!(!w.busy.load(Ordering::SeqCst));
+    w.observation.lock().unwrap().notify = None;
+    let permissions = std::fs::metadata(&manifest).unwrap().permissions();
+    let mut readonly = permissions.clone();
+    readonly.set_readonly(true);
+    std::fs::set_permissions(&manifest, readonly).unwrap();
+    assert!(workflow::bind_capture(w.clone(), public_capture("isolated-peak.json"), "a".into(), None).await.is_err());
+    assert_eq!(serde_json::to_value(&*w.data.lock().unwrap()).unwrap(), before);
+    assert_eq!(std::fs::read(&manifest).unwrap(), bytes);
+    assert!(w.save_error.lock().unwrap().is_some());
+    std::fs::set_permissions(&manifest, permissions).unwrap();
+    workflow::bind_capture(w.clone(), public_capture("isolated-peak.json"), "a".into(), None).await.unwrap();
+    assert_ne!(serde_json::to_value(&*w.data.lock().unwrap()).unwrap(), before);
+    assert!(!w.busy.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn workflow_a_replacement_rejects_started_finished_and_busy_rounds() {
+    let (_temp, w, rid) = setup(b"class Work { int number = 1; }");
+    workflow::bind_capture(w.clone(), public_capture("editor-dump.json"), "a".into(), None).await.unwrap();
+    let before = w.data.lock().unwrap().rounds[0].baseline.clone();
+    w.busy.store(true, Ordering::SeqCst);
+    assert!(workflow::bind_capture(w.clone(), public_capture("isolated-peak.json"), "a".into(), None).await.unwrap_err().contains("任务正在运行"));
+    assert!(w.busy.load(Ordering::SeqCst));
+    w.busy.store(false, Ordering::SeqCst);
+    for decision in ["accepted", "rolled_back"] {
+        w.data.lock().unwrap().rounds[0].decision = decision.into();
+        assert!(workflow::bind_capture(w.clone(), public_capture("isolated-peak.json"), "a".into(), None).await.unwrap_err().contains("已结束"));
+    }
+    {
+        let mut d = w.data.lock().unwrap();
+        d.rounds[0].decision = "pending".into();
+        let report = unity_profiler_analysis_agent_lib::reports::Report::new(id(), "fixture".into(), "public-test".into(), None, &d.captures[0].snapshot);
+        d.rounds[0].reports.push(report);
+    }
+    assert!(workflow::bind_capture(w.clone(), public_capture("isolated-peak.json"), "a".into(), None).await.unwrap_err().contains("已开始分析"));
+    w.data.lock().unwrap().rounds[0].reports.clear();
+    let run = w.begin(&rid, "public-test".into()).unwrap();
+    finish(&w, &run);
+    assert!(workflow::bind_capture(w.clone(), public_capture("isolated-peak.json"), "a".into(), None).await.unwrap_err().contains("已开始分析"));
+    assert_eq!(w.data.lock().unwrap().rounds[0].baseline, before);
+}
+
+#[tokio::test]
+async fn workflow_replacing_rolled_back_baseline_clears_inheritance_note() {
+    let (_temp, w, _rid) = setup(b"class Work {}");
+    workflow::bind_capture(w.clone(), public_capture("editor-dump.json"), "a".into(), None).await.unwrap();
+    w.data.lock().unwrap().rounds[0].decision = "rolled_back".into();
+    workflow::next_round(&w).unwrap();
+    assert!(w.data.lock().unwrap().rounds[1].workflow.reason.is_some());
+    workflow::bind_capture(w.clone(), public_capture("isolated-peak.json"), "a".into(), None).await.unwrap();
+    assert!(w.data.lock().unwrap().rounds[1].workflow.reason.is_none());
+    assert!(w.data.lock().unwrap().rounds[1].reports.is_empty());
+}
+
 #[test]
 fn workflow_objects_are_verified_and_failed_save_preserves_manifest() {
     let (_t, w, _r) = setup(b"class Work {}");
