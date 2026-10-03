@@ -1,5 +1,17 @@
 # 项目状态、验证证据与路线图
 
+## macOS 适配（2026-10-03）
+
+新增 macOS 13+ 桌面支持：Finder 启动的 PATH 恢复及命令回退、Unix 执行权限检查、ACP 进程组回收、Unity CLI 的 `~/.unity/bin` 检测、macOS 插件安装占用检查、ICNS 图标及 Apple Silicon / Intel CI。工程结构和开发命令见 [macOS 支持说明](macos-support.md)。
+
+Apple Silicon 本机（macOS 26.6.2、Node 22.23.2、Rust stable 1.99.0）验证：前端 64 项测试、生产构建和 Python 8 项研究测试通过；Rust 173 项通过、23 项依赖私有录制、真实 Agent 或 Editor 的测试默认忽略。包含实际 Node ACP / MCP 桥、协作及不响应取消的子进程回收、插件安装/迁移/恢复、Editor 锁保留及替换保护、符号链接拒绝、shell 启动输出和 3 秒超时回归。
+
+Release `.app` / ARM64 `.dmg` 构建通过，包中 `LSMinimumSystemVersion=13.0`，`hdiutil verify` 通过。以 `.app/Contents/MacOS/` 中二进制运行的协议、报告和优化回归 48 项通过、9 项真实 Agent 测试默认忽略。原生 WKWebView 窗口验证：公开夹具项目创建、真实文件对话框选取并导入 `editor-dump.json`、存档、应用重启后从最近项目恢复、插件检查及未连接 Editor 的离线降级通过；插件安装文件与内置包逐字节一致，安装记录 completed，安装结束清理自身 Editor 锁。未替代原生文件选择返回值。
+
+应用二进制 SHA-256：`a1c8e12649980e2dab971ecbed14bf1bf61966c21c307a45467b7ae6de5daf59`；DMG SHA-256：`c3825157cfa2b1192db6fea6555e9290f43333bb3e179041b93a7e907bed21f6`。日志位于忽略目录 `.cache/macos-rust-tests.log`、`.cache/macos-build.log`、`.cache/macos-bundle-protocol.log`、`.cache/macos-dmg-verify.log`；本机 Rust 工具链位于 `.cache/toolchain/`，没有修改用户 shell 配置。
+
+Intel CI 已配置但尚未执行。Mac 来源真实录制的数值对照、真实 ACP 适配器和 Editor 编译/检查联调、原生对话框取消与各文件格式、macOS 13 最低系统验证、通用包和 Developer ID 签名/公证仍待验收；不沿用 Windows 历史证据宣称已完成。
+
 ## .data 修复与补齐（2026-09-30）
 
 当前行为、接口与待验边界统一见[当前解析契约](data-parser-current.md)。限定 2022.3 / 6000.3.x；版本未验证与不可用/部分覆盖分开记录。移除生产 GC/内存扫描，接入未知区段、typed 内存观测、查询缓存和导入取消。2022.3 counted suffix 仍为候选，新增内存 Counter 尚未取得真实 Editor 对照；不得宣称版本已验收。调用栈只完成 API/格式边界调研及参考导出准备，GPU 不纳入本轮。后文保留历史验收，不代表本次产物重新通过了私有录制或桌面安装验证。

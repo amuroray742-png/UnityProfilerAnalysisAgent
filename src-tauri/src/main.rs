@@ -14,5 +14,6 @@ fn main() {
         }
         std::process::exit(0);
     }
+    unity_profiler_analysis_agent_lib::platform::initialize_environment();
     unity_profiler_analysis_agent_lib::run()
 }

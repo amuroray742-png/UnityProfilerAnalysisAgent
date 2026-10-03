@@ -4,7 +4,7 @@
 
 当前主流程：**新建／打开优化项目 → 导入 A → 一键诊断并定位 → 选择修改 AI → 开始优化 → 手动重录 B → 对比 → 接受或回退 → 下一轮**。每轮报告和修改记录自动存档，重开项目可继续。首次使用请看[非程序员简单使用说明](docs/quick-start.md)，更多细节见[完整使用说明](docs/optimization-loop.md)。
 
-面向 Unity Profiler 离线录制的本地桌面分析原型，使用 Tauri 2、React / TypeScript 和 Rust。首要目标是 **Windows 上的 Unity 6000.3 可信分析**，通过 ACP Agent 与 MCP 数据查询辅助诊断。
+面向 Unity Profiler 离线录制的本地桌面分析原型，使用 Tauri 2、React / TypeScript 和 Rust。已有验收基线是 **Windows 上的 Unity 6000.3 可信分析**，通过 ACP Agent 与 MCP 数据查询辅助诊断。新增 macOS 桌面适配、命令检测、会话进程回收、插件安装及 Apple Silicon / Intel CI，开发和验证范围见 [macOS 支持说明](docs/macos-support.md)。
 
 历史 CPU/GC 功能链路已完成此前限定范围的本地验收：Editor dump 与 Unity 6000.3.23f1 `.data` 导入、指标聚合、慢帧/高分配帧定位、原始线程调用树，以及 Windows Claude Code ACP 的 MCP 查询、流式诊断、取消和重新诊断。两份录制的 137 个参考帧通过样本、CPU/GC 和站点归因对照，包含加载高峰和末帧；该证据不覆盖所有录制或 Unity 版本。缺失指标显示“—”，有效零值仍显示为零。AI 正文是辅助解释，须与原始样本核对。
 
@@ -26,6 +26,7 @@ CPU/GC 与诊断之后，新增 Unity 6000.3.9f1 渲染计数对照与展示，�
 - [架构与数据契约](docs/architecture.md)：现有数据流、目标数据流及实现边界。
 - [原始帧与调用树查询](docs/frame-queries.md)：线程选择、分页、数据来源和临时存储生命周期。
 - [Windows 性能与发布验收](docs/performance-and-release.md)：release 测量方法、基线与安装验收边界。
+- [macOS 开发、打包与验证](docs/macos-support.md)：平台适配、Apple Silicon / Intel 构建和待验收范围。
 - [Windows 桌面验收](docs/manual-acceptance.md)：已验证的结果页/诊断流程与剩余原生窗口、安装检查。
 - [本地交付与发布门槛](docs/release-readiness.md)：本轮交付范围、检查结果及需要维护者决定的事项。
 - [ACP / MCP 集成状态](docs/acp-mcp-integration.md)：分阶段会话、工具权限与适配器验收边界。
@@ -52,6 +53,7 @@ CPU/GC 与诊断之后，新增 Unity 6000.3.9f1 渲染计数对照与展示，�
 - Node.js >= 20 与 npm。
 - Rust stable；依赖版本以 `src-tauri/Cargo.lock` 为准。清单声明的最低 Rust 版本尚未单独验证。
 - Windows 构建需要 MSVC C++ 构建工具、Windows SDK 与 WebView2，见 [Tauri 前置条件](https://v2.tauri.app/start/prerequisites/)。
+- macOS 构建需要 Xcode Command Line Tools（`xcode-select --install`），使用系统 WKWebView；见 [macOS 支持说明](docs/macos-support.md)。
 - 解析文件不需要 Agent；内置 Agent 命令被 PATH 检测到，也不代表协议兼容。
 
 在仓库根目录执行：
@@ -77,6 +79,10 @@ npm run tauri:build
 在仓库根目录执行 `npm run tauri:build`，生成 MSI 与 NSIS 安装包，分别位于 `src-tauri/target/release/bundle/msi/` 和 `src-tauri/target/release/bundle/nsis/`。只生成 EXE 安装包可用 `npm run tauri:build -- --bundles nsis`。
 
 `npm run tauri:build -- --no-bundle` 只生成 Release 程序，不生成安装包；`npm run build` 只构建前端。新构建产物不能直接沿用历史包的安装验收结论，见[发布门槛](docs/release-readiness.md)。
+
+### macOS 安装包
+
+macOS 上执行 `npm run tauri:build -- --bundles app,dmg`，生成 `src-tauri/target/release/bundle/macos/Unity Profiler Analysis Agent.app` 和 `src-tauri/target/release/bundle/dmg/` 下的磁盘映像。默认匹配构建机器架构；通用包、签名和公证说明见 [macOS 支持说明](docs/macos-support.md)。
 
 ## 当前使用流程
 

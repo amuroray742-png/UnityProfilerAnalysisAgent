@@ -389,17 +389,31 @@ struct EditorLease {
 }
 impl Drop for EditorLease {
     fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
+        if self.created {
+            use std::os::unix::fs::MetadataExt;
+            // Do not remove a lock replaced by Unity or another process.
+            if let Some(file) = &self.file {
+                if let (Ok(held), Ok(current)) = (file.metadata(), fs::symlink_metadata(&self.path))
+                {
+                    if held.dev() == current.dev() && held.ino() == current.ino() {
+                        let _ = fs::remove_file(&self.path);
+                    }
+                }
+            }
+        }
         self.file.take();
+        #[cfg(not(target_os = "macos"))]
         if self.created {
             let _ = fs::remove_file(&self.path);
         }
     }
 }
 fn editor_lease(root: &Path) -> Result<EditorLease, String> {
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = root;
-        return Err("插件安装首版仅支持 Windows".into());
+        return Err("插件自动安装仅支持 Windows 和 macOS".into());
     }
     #[cfg(windows)]
     {
@@ -427,6 +441,29 @@ fn editor_lease(root: &Path) -> Result<EditorLease, String> {
             file: Some(f),
             path,
             created,
+            _temp: temp_pin,
+        })
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // macOS Unity uses the presence of UnityLockfile; opening it exclusively
+        // as on Windows would not detect an open Editor. Never reuse an old file.
+        let temp = root.join("Temp");
+        safe(&temp)?;
+        if !temp.exists() {
+            fs::create_dir(&temp).map_err(err)?;
+        }
+        let temp_pin = pin(&temp)?;
+        let path = temp.join("UnityLockfile");
+        safe(&path)?;
+        let file = OpenOptions::new().read(true).write(true).create_new(true)
+            .open(&path).map_err(|_| {
+                "请先关闭目标工程的 Unity Editor；若仍有 Temp/UnityLockfile，请确认 Editor 已退出并清理残留 Temp 后重试".to_owned()
+            })?;
+        Ok(EditorLease {
+            file: Some(file),
+            path,
+            created: true,
             _temp: temp_pin,
         })
     }
@@ -595,7 +632,10 @@ mod tests {
         }
     }
     fn setup() -> (Temp, Workspace) {
-        let p = std::env::temp_dir().join(format!("upaa-plugin-{}", super::super::id()));
+        let p = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("upaa-plugin-{}", super::super::id()));
         let root = p.join("中文工程");
         let records = p.join("records");
         fs::create_dir_all(&records).unwrap();
@@ -799,5 +839,52 @@ mod tests {
         r.project_id = "other".into();
         save(&w, &r).unwrap();
         assert!(status(&w).is_err());
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_existing_editor_lock_is_preserved_and_installation_refused() {
+        let (_t, w) = setup();
+        let temp = root(&w).join("Temp");
+        fs::create_dir(&temp).unwrap();
+        let path = temp.join("UnityLockfile");
+        fs::write(&path, b"editor lock").unwrap();
+        assert!(install(&w).unwrap_err().contains("UnityLockfile"));
+        assert_eq!(fs::read(&path).unwrap(), b"editor lock");
+        assert!(!root(&w).join(TARGET).exists());
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_install_lease_is_exclusive_and_released() {
+        let (_t, w) = setup();
+        let path = root(&w).join("Temp/UnityLockfile");
+        let lease = editor_lease(&root(&w)).unwrap();
+        assert!(path.exists());
+        assert!(editor_lease(&root(&w)).is_err());
+        drop(lease);
+        assert!(!path.exists());
+        install(&w).unwrap();
+        assert!(!path.exists());
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_lease_does_not_delete_a_replaced_lock() {
+        let (_t, w) = setup();
+        let path = root(&w).join("Temp/UnityLockfile");
+        let lease = editor_lease(&root(&w)).unwrap();
+        fs::rename(&path, path.with_extension("old")).unwrap();
+        fs::write(&path, b"replacement").unwrap();
+        drop(lease);
+        assert_eq!(fs::read(path).unwrap(), b"replacement");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn packages_symlink_denied() {
+        let (t, w) = setup();
+        let packages = root(&w).join("Packages");
+        let outside = t.0.join("outside");
+        fs::rename(&packages, &outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &packages).unwrap();
+        assert!(install(&w).is_err());
+        assert!(!outside.join(PACKAGE).exists());
     }
 }

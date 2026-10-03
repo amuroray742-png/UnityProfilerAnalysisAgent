@@ -43,7 +43,9 @@ pub fn builtin_presets() -> Vec<AgentPreset> {
             label: "Codex (ACP)".to_string(),
             command: "codex-acp".to_string(),
             args: vec![],
-            description: "Codex ACP 适配器（@agentclientprotocol/codex-acp）；检测 codex-acp，不是 codex CLI".to_string(),
+            description:
+                "Codex ACP 适配器（@agentclientprotocol/codex-acp）；检测 codex-acp，不是 codex CLI"
+                    .to_string(),
             available: false,
         },
     ]
@@ -51,8 +53,7 @@ pub fn builtin_presets() -> Vec<AgentPreset> {
 
 /// 检测 command 是否在 PATH 中
 pub fn probe_available(command: &str) -> bool {
-    let command_name = command.split_whitespace().next().unwrap_or(command);
-    which(command_name).is_some()
+    which(command).is_some()
 }
 
 /// 把 (command, args) 解析成实际可 spawn 的 (program, args)。
@@ -63,11 +64,13 @@ pub fn probe_available(command: &str) -> bool {
 /// `.cmd` / `.bat` 走 `cmd /C`。
 pub fn resolve_command(command: &str, args: &[String]) -> Option<(String, Vec<String>)> {
     let path = which(command)?;
+    #[cfg(windows)]
     let ext = path
         .extension()
         .and_then(|s| s.to_str())
         .map(|s| s.to_ascii_lowercase());
 
+    #[cfg(windows)]
     match ext.as_deref() {
         Some("ps1") | Some("psm1") => {
             let mut wrapped = vec![
@@ -87,37 +90,13 @@ pub fn resolve_command(command: &str, args: &[String]) -> Option<(String, Vec<St
         }
         _ => Some((path.to_string_lossy().into_owned(), args.to_vec())),
     }
+    #[cfg(not(windows))]
+    Some((path.to_string_lossy().into_owned(), args.to_vec()))
 }
 
 /// 简易 `which` 实现（Windows 兼容 PATHEXT 所有后缀，包括 .ps1 shim）
 fn which(cmd: &str) -> Option<std::path::PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    let exts: Vec<String> = if cfg!(windows) {
-        std::env::var("PATHEXT")
-            .unwrap_or_else(|_| {
-                ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WS;.WSF;.WSC;.WSH;.MSC;.PS1;.PSM1"
-                    .to_string()
-            })
-            .split(';')
-            .map(|s| s.to_string())
-            .collect()
-    } else {
-        vec![String::new()]
-    };
-
-    for dir in std::env::split_paths(&path) {
-        for ext in &exts {
-            let candidate = dir.join(format!("{}{}", cmd, ext));
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-        let direct = dir.join(cmd);
-        if direct.is_file() {
-            return Some(direct);
-        }
-    }
-    None
+    crate::platform::find_command(cmd)
 }
 
 #[cfg(test)]
@@ -159,9 +138,10 @@ mod tests {
             let original_pathext = std::env::var_os("PATHEXT");
 
             // PATH 临时目录优先
-            let mut new_path = tmp.clone().into_os_string();
-            new_path.push(";");
-            new_path.push(&original_path);
+            let new_path = std::env::join_paths(
+                std::iter::once(tmp.clone()).chain(std::env::split_paths(&original_path)),
+            )
+            .unwrap();
             std::env::set_var("PATH", &new_path);
             // PATHEXT 用测试自带的（覆盖父进程的设置，保证 .ps1 也能命中）
             std::env::set_var("PATHEXT", pathext);
@@ -185,6 +165,7 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     #[test]
     fn resolve_command_wraps_ps1_with_powershell() {
         let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -208,6 +189,7 @@ mod tests {
         assert_eq!(args.last().map(String::as_str), Some("--flag"));
     }
 
+    #[cfg(windows)]
     #[test]
     fn resolve_command_wraps_cmd_with_cmd_exe() {
         let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -223,7 +205,7 @@ mod tests {
     #[test]
     fn resolve_command_returns_none_for_missing() {
         let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let env = TestEnv::new("missing", ".COM;.EXE;.BAT;.CMD;.PS1");
+        let _env = TestEnv::new("missing", ".COM;.EXE;.BAT;.CMD;.PS1");
         let result = resolve_command("completely-fake-zzz-9999", &[]);
         assert!(result.is_none());
     }

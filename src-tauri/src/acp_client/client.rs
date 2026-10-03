@@ -79,6 +79,8 @@ pub async fn spawn_agent_with_policy(
         .kill_on_drop(true);
     #[cfg(windows)]
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    #[cfg(unix)]
+    cmd.process_group(0);
     Ok(cmd.spawn()?)
 }
 
@@ -121,9 +123,30 @@ impl Drop for ProcessTree {
         }
     }
 }
-#[cfg(not(windows))]
+#[cfg(unix)]
+pub struct ProcessTree(libc::pid_t);
+#[cfg(unix)]
+impl ProcessTree {
+    pub fn attach(child: &Child) -> std::io::Result<Self> {
+        let id = child.id().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "adapter has exited")
+        })?;
+        // The adapter becomes group leader at spawn, before it can start descendants.
+        Ok(Self(id as libc::pid_t))
+    }
+}
+#[cfg(unix)]
+impl Drop for ProcessTree {
+    fn drop(&mut self) {
+        // SAFETY: a negative PID targets only this session's process group.
+        unsafe {
+            libc::kill(-self.0, libc::SIGKILL);
+        }
+    }
+}
+#[cfg(not(any(windows, unix)))]
 pub struct ProcessTree;
-#[cfg(not(windows))]
+#[cfg(not(any(windows, unix)))]
 impl ProcessTree {
     pub fn attach(_: &Child) -> std::io::Result<Self> {
         Ok(Self)

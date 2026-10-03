@@ -34,17 +34,12 @@ impl EditorStatus {
 }
 fn executable() -> Result<PathBuf, String> {
     let name = if cfg!(windows) { "unity.exe" } else { "unity" };
-    if let Some(paths) = std::env::var_os("PATH") {
-        for p in std::env::split_paths(&paths) {
-            let path = p.join(name);
-            if path.is_file() {
-                return Ok(path);
-            }
-        }
+    if let Some(path) = crate::platform::find_command(name) {
+        return Ok(path);
     }
     if let Some(local) = dirs::data_local_dir() {
         let path = local.join("Unity/bin").join(name);
-        if path.is_file() {
+        if crate::platform::executable(&path) {
             return Ok(path);
         }
     }
