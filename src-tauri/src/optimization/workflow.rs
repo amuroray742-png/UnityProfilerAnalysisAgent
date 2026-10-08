@@ -105,6 +105,28 @@ pub fn next_round(w: &Workspace) -> Result<(), String> {
     w.save(&d)
 }
 
+fn validate_capture_binding(d: &Project, role: &str) -> Result<(), String> {
+    if let Some(r) = d.rounds.last() {
+        if r.decision != "pending" {
+            return Err("本轮已结束，请开始下一轮".into());
+        }
+        if role == "a" {
+            if r.workflow.status == "running" || r.reports.iter().any(|p| p.status == "running") {
+                return Err("任务正在运行，请先停止".into());
+            }
+            if !r.runs.is_empty() {
+                return Err("本轮已开始优化，不能替换 A".into());
+            }
+        }
+        if role == "b" && r.runs.is_empty() {
+            return Err("请先完成代码优化，再导入 B".into());
+        }
+    } else if role == "b" {
+        return Err("请先导入 A".into());
+    }
+    Ok(())
+}
+
 /// Bind a capture through the same validation and durable commit used by desktop IPC.
 pub async fn bind_capture(
     w: Arc<Workspace>,
@@ -118,41 +140,23 @@ pub async fn bind_capture(
     if !["a", "b"].contains(&role.as_str()) {
         return Err("录制角色无效".into());
     }
-    {
+    let rid = {
         let d = w.data.lock().unwrap();
-        if let Some(r) = d.rounds.last() {
-            if r.decision != "pending" {
-                return Err("本轮已结束，请开始下一轮".into());
-            }
-            if role == "a" && (!r.reports.is_empty() || !r.runs.is_empty()) {
-                return Err("本轮已开始分析，不能替换 A".into());
-            }
-            if role == "b" && r.runs.is_empty() {
-                return Err("请先完成代码优化，再导入 B".into());
-            }
-        } else if role == "b" {
-            return Err("请先导入 A".into());
-        }
-    }
+        validate_capture_binding(&d, &role)?;
+        w.busy.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| "任务正在运行，请先停止")?;
+        w.cancelled.store(false, Ordering::SeqCst);
+        d.rounds.last().map(|r| r.id.clone())
+    };
     struct ImportGuard(Arc<Workspace>);
     impl Drop for ImportGuard {
         fn drop(&mut self) {
             self.0.busy.store(false, Ordering::SeqCst);
         }
     }
-    w.cancelled.store(false, Ordering::SeqCst);
-    w.busy.store(true, Ordering::SeqCst);
     let _import_guard = ImportGuard(w.clone());
-    let rid = w
-        .data
-        .lock()
-        .unwrap()
-        .rounds
-        .last()
-        .map(|r| r.id.clone())
-        .unwrap_or_default();
     let progress =
-        observation::ParseProgress::new(w.clone(), rid, operation_id.unwrap_or_else(id));
+        observation::ParseProgress::new(w.clone(), rid.clone().unwrap_or_default(), operation_id.unwrap_or_else(id));
     let c = match commands::capture_observed(
         path,
         Conditions::default(),
@@ -172,13 +176,33 @@ pub async fn bind_capture(
         progress.fail("导入已取消");
         return Err("导入已取消".into());
     }
+    let validation = if saved.rounds.last().map(|r| &r.id) != rid.as_ref() {
+        Err("当前轮次已变化，请重新导入".into())
+    } else {
+        validate_capture_binding(&saved, &role)
+    };
+    if let Err(e) = validation {
+        progress.fail(&e);
+        return Err(e);
+    }
     let mut d = saved.clone();
     let cid = c.id.clone();
     d.captures.push(c);
     if role == "a" {
         if let Some(r) = d.rounds.last_mut() {
             r.baseline = cid;
-            r.workflow.reason = None;
+            r.reports.clear();
+            r.tasks.clear();
+            r.task_verifications.clear();
+            r.task_version += 1;
+            r.candidate = None;
+            r.comparison = None;
+            r.correctness = "pending".into();
+            r.workflow = Progress {
+                analysis_agent: r.workflow.analysis_agent.clone(),
+                localization_agent: r.workflow.localization_agent.clone(),
+                ..Progress::default()
+            };
         } else {
             d.rounds.push(new_round(cid));
         }

@@ -40,6 +40,7 @@ def main():
     parser.add_argument('--optimization-loop', action='store_true', help='Real public optimization workflow with saved tasks, two Agents, checks and rollback')
     parser.add_argument('--optimization-saved', type=Path, help='Reopen the public acceptance records and exercise final UI exports without calling an Agent')
     parser.add_argument('--project-workflow', action='store_true')
+    parser.add_argument('--replace-diagnosed-a', action='store_true', help='Public diagnosed round A replacement without an Agent; native picker substituted')
     parser.add_argument('--workflow-saved', type=Path)
     parser.add_argument('--workflow-resume', type=Path)
     parser.add_argument('--history-replay', type=Path)
@@ -47,6 +48,11 @@ def main():
     parser.add_argument('--history-activity', action='store_true')
     parser.add_argument('--history-records', type=Path)
     args = parser.parse_args()
+    if args.replace_diagnosed_a and any((args.ui, args.real_agent, args.plugin_install, args.project_workflow,
+            args.workflow_saved, args.workflow_resume, args.optimization_loop, args.optimization_saved,
+            args.history_replay, args.history_progress, args.history_activity, args.report_source,
+            args.measure_input, args.render_input)):
+        parser.error('--replace-diagnosed-a is a separate public workflow without an Agent')
     # Keep optimization acceptance entrypoints usable after the project-first UI.
     if args.optimization_loop:
         args.project_workflow=True
@@ -84,7 +90,7 @@ def main():
     for path in (args.application, args.driver, args.native_driver):
         if not path.is_file():
             raise FileNotFoundError(path)
-    output = root / '.cache' / ('desktop-plugin' if args.plugin_install else 'desktop-history-replay' if args.history_replay else 'desktop-progress' if args.history_progress else 'desktop-history' if args.history_activity else 'desktop-workflow-saved' if args.workflow_saved else 'desktop-workflow' if args.project_workflow else 'desktop-optimization-saved' if args.optimization_saved else 'desktop-optimization' if args.optimization_loop else 'desktop-reports' if args.report_source else 'desktop-render' if args.render_input else 'desktop-memory' if args.measure_input else 'desktop-ui' if args.ui else 'desktop-smoke')
+    output = root / '.cache' / ('desktop-diagnosed-a' if args.replace_diagnosed_a else 'desktop-plugin' if args.plugin_install else 'desktop-history-replay' if args.history_replay else 'desktop-progress' if args.history_progress else 'desktop-history' if args.history_activity else 'desktop-workflow-saved' if args.workflow_saved else 'desktop-workflow' if args.project_workflow else 'desktop-optimization-saved' if args.optimization_saved else 'desktop-optimization' if args.optimization_loop else 'desktop-reports' if args.report_source else 'desktop-render' if args.render_input else 'desktop-memory' if args.measure_input else 'desktop-ui' if args.ui else 'desktop-smoke')
     output.mkdir(parents=True, exist_ok=True)
     def port():
         with socket.socket() as sock:
@@ -188,6 +194,9 @@ def main():
             if args.project_workflow or args.workflow_saved:
                 from desktop_workflow_checks import run_workflow
                 run_workflow(js,lambda method,path,body=None: request(method,f'/session/{session}'+path,body),root,output,report,args.workflow_saved,args.workflow_resume)
+            if args.replace_diagnosed_a:
+                from desktop_round_a_checks import run_round_a
+                run_round_a(js,lambda method,path,body=None: request(method,f'/session/{session}'+path,body),root,output,report)
             if args.optimization_loop:
                 from desktop_optimization_checks import run_optimization_checks
                 report['scope']='Public release optimization workflow; native dialogs substituted; synthetic A/B is not game benefit evidence'
@@ -237,7 +246,7 @@ def main():
             (output / 'result.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
         if not report.get('passed'):
             raise AssertionError('Desktop smoke or cleanup failed')
-        summary = {'passed': report['passed'], 'evidence': str(output / 'result.json'), 'checks': report['checks']} if args.optimization_loop or args.optimization_saved or args.project_workflow or args.workflow_saved else report
+        summary = {'passed': report['passed'], 'evidence': str(output / 'result.json'), 'checks': report['checks']} if args.optimization_loop or args.optimization_saved or args.project_workflow or args.workflow_saved or args.replace_diagnosed_a else report
         print(json.dumps(summary, ensure_ascii=True), flush=True)
 
 

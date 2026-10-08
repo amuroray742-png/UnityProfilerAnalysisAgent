@@ -851,10 +851,106 @@ fn public_capture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
 }
 
+fn seed_diagnosis(w: &Workspace, status: &str) -> Vec<String> {
+    let mut d = w.data.lock().unwrap();
+    let snapshot = &d.captures.last().unwrap().snapshot;
+    let mut performance = unity_profiler_analysis_agent_lib::reports::Report::new(
+        id(), "old-file".into(), "claude-code".into(), None, snapshot,
+    );
+    performance.status = "completed".into();
+    performance.session_id = "old-performance-session".into();
+    performance.text = "OLD_DIAGNOSIS_SENTINEL".into();
+    let mut project = unity_profiler_analysis_agent_lib::reports::Report::new(
+        id(), "old-file".into(), "codex".into(), Some(performance.report_id.clone()), snapshot,
+    );
+    project.stage = "project".into();
+    project.status = status.into();
+    project.session_id = "old-project-session".into();
+    project.text = "OLD_LOCALIZATION_SENTINEL".into();
+    let ids = vec![performance.report_id.clone(), project.report_id.clone()];
+    let r = d.rounds.last_mut().unwrap();
+    r.reports = vec![performance, project];
+    r.tasks = vec![Task {
+        id: "old-task".into(), kind: "investigate".into(), title: "旧诊断任务".into(),
+        evidence: "旧录制".into(), files: BTreeMap::new(), instructions: "调查".into(),
+        acceptance: "核对".into(), constraints: String::new(), selected: true,
+    }];
+    r.task_verifications.insert("old-task".into(), "passed".into());
+    r.task_version = 7;
+    r.tests = vec!["Public.EditMode".into()];
+    r.workflow = workflow::Progress {
+        stage: "project".into(), status: status.into(), reason: Some("旧诊断原因".into()),
+        analysis_agent: "claude-code".into(), localization_agent: "codex".into(),
+    };
+    d.budgets.insert("cpuMs".into(), 16.0);
+    w.save(&d).unwrap();
+    ids
+}
+
+#[tokio::test]
+async fn workflow_replacing_diagnosed_a_resets_same_round_and_survives_reopen() {
+    for status in ["completed", "failed", "cancelled", "interrupted"] {
+        let (temp, w, rid) = setup(b"class Work {}");
+        workflow::bind_capture(w.clone(), public_capture("editor-dump.json"), "a".into(), None).await.unwrap();
+        seed_diagnosis(&w, status);
+        let (prior, old_capture, old_baseline) = {
+            let mut d = w.data.lock().unwrap();
+            let mut previous = d.rounds[0].clone();
+            previous.id = id();
+            previous.decision = "accepted".into();
+            d.rounds.insert(0, previous.clone());
+            // Stale comparison/confirmation must not survive a baseline replacement.
+            let r = d.rounds.last_mut().unwrap();
+            r.candidate = Some(r.baseline.clone());
+            r.comparison = Some(json!({"old":"comparison"}));
+            r.correctness = "passed".into();
+            w.save(&d).unwrap();
+            (serde_json::to_value(previous).unwrap(), serde_json::to_value(&d.captures[0]).unwrap(), d.rounds[1].baseline.clone())
+        };
+        workflow::bind_capture(w.clone(), public_capture("isolated-peak.json"), "a".into(), None).await.unwrap();
+        let baseline = {
+            let d = w.data.lock().unwrap();
+            assert_eq!(d.rounds.len(), 2);
+            assert_eq!(serde_json::to_value(&d.rounds[0]).unwrap(), prior);
+            assert_eq!(serde_json::to_value(&d.captures[0]).unwrap(), old_capture);
+            let r = &d.rounds[1];
+            assert_eq!(r.id, rid);
+            assert_ne!(r.baseline, old_baseline);
+            assert!(r.reports.is_empty() && r.tasks.is_empty() && r.runs.is_empty());
+            assert!(r.task_verifications.is_empty() && r.candidate.is_none() && r.comparison.is_none());
+            assert_eq!(r.task_version, 8);
+            assert_eq!(r.tests, vec!["Public.EditMode"]);
+            assert_eq!(r.correctness, "pending");
+            assert_eq!(r.decision, "pending");
+            assert!(r.workflow.stage.is_empty() && r.workflow.status.is_empty() && r.workflow.reason.is_none());
+            assert_eq!(r.workflow.analysis_agent, "claude-code");
+            assert_eq!(r.workflow.localization_agent, "codex");
+            assert_eq!(d.budgets["cpuMs"], 16.0);
+            assert!(!workflow::ready_report(r));
+            r.baseline.clone()
+        };
+        assert!(w.begin_mode(&rid, "codex".into(), Some(String::new())).unwrap_err().contains("需要完整工程定位报告"));
+        assert!(!workflow::export_round(&w, &rid).unwrap().contains("SENTINEL"));
+        assert_eq!(std::fs::read(temp.0.join("project/Assets/Work.cs")).unwrap(), b"class Work {}");
+        let directory = w.directory.clone();
+        drop(w);
+        let reopened = Workspace::open(directory).unwrap();
+        let d = reopened.data.lock().unwrap();
+        assert_eq!(d.rounds.len(), 2);
+        assert_eq!(serde_json::to_value(&d.rounds[0]).unwrap(), prior);
+        assert_eq!(d.rounds[1].id, rid);
+        assert_eq!(d.rounds[1].baseline, baseline);
+        assert!(d.rounds[1].reports.is_empty() && d.rounds[1].tasks.is_empty());
+        assert_eq!(d.rounds[1].tests, vec!["Public.EditMode"]);
+    }
+}
+
 #[tokio::test]
 async fn workflow_replacing_inherited_a_preserves_history_and_survives_reopen() {
     let (temp, w, rid) = setup(b"class Work { int number = 1; }");
+    let tasks = w.data.lock().unwrap().rounds[0].tasks.clone();
     workflow::bind_capture(w.clone(), public_capture("editor-dump.json"), "a".into(), None).await.unwrap();
+    w.data.lock().unwrap().rounds[0].tasks = tasks;
     let run = w.begin(&rid, "public-test".into()).unwrap();
     replace(&w, &run, "number = 1", "number = 2").unwrap();
     finish(&w, &run);
@@ -902,6 +998,7 @@ async fn workflow_replacing_inherited_a_preserves_history_and_survives_reopen() 
 async fn workflow_failed_or_cancelled_a_import_preserves_memory_and_manifest() {
     let (temp, w, _rid) = setup(b"class Work {}");
     workflow::bind_capture(w.clone(), public_capture("editor-dump.json"), "a".into(), None).await.unwrap();
+    seed_diagnosis(&w, "interrupted");
     let before = serde_json::to_value(&*w.data.lock().unwrap()).unwrap();
     let manifest = w.directory.join("optimization.json");
     let bytes = std::fs::read(&manifest).unwrap();
@@ -932,6 +1029,7 @@ async fn workflow_failed_or_cancelled_a_import_preserves_memory_and_manifest() {
     std::fs::set_permissions(&manifest, permissions).unwrap();
     workflow::bind_capture(w.clone(), public_capture("isolated-peak.json"), "a".into(), None).await.unwrap();
     assert_ne!(serde_json::to_value(&*w.data.lock().unwrap()).unwrap(), before);
+    assert!(w.data.lock().unwrap().rounds[0].reports.is_empty());
     assert!(!w.busy.load(Ordering::SeqCst));
 }
 
@@ -954,12 +1052,53 @@ async fn workflow_a_replacement_rejects_started_finished_and_busy_rounds() {
         let report = unity_profiler_analysis_agent_lib::reports::Report::new(id(), "fixture".into(), "public-test".into(), None, &d.captures[0].snapshot);
         d.rounds[0].reports.push(report);
     }
-    assert!(workflow::bind_capture(w.clone(), public_capture("isolated-peak.json"), "a".into(), None).await.unwrap_err().contains("已开始分析"));
+    assert!(workflow::bind_capture(w.clone(), public_capture("isolated-peak.json"), "a".into(), None).await.unwrap_err().contains("任务正在运行"));
     w.data.lock().unwrap().rounds[0].reports.clear();
-    let run = w.begin(&rid, "public-test".into()).unwrap();
+    seed_diagnosis(&w, "completed");
+    let run = w.begin_mode(&rid, "public-test".into(), Some(String::new())).unwrap();
     finish(&w, &run);
-    assert!(workflow::bind_capture(w.clone(), public_capture("isolated-peak.json"), "a".into(), None).await.unwrap_err().contains("已开始分析"));
+    for status in ["investigated", "failed", "cancelled", "interrupted"] {
+        w.data.lock().unwrap().rounds[0].runs[0].status = status.into();
+        assert!(workflow::bind_capture(w.clone(), public_capture("isolated-peak.json"), "a".into(), None).await.unwrap_err().contains("已开始优化"));
+    }
     assert_eq!(w.data.lock().unwrap().rounds[0].baseline, before);
+}
+
+#[tokio::test]
+async fn workflow_a_replacement_revalidates_round_before_commit() {
+    for change in ["identity", "decision", "running", "runs"] {
+        let (_temp, w, rid) = setup(b"class Work {}");
+        workflow::bind_capture(w.clone(), public_capture("editor-dump.json"), "a".into(), None).await.unwrap();
+        seed_diagnosis(&w, "completed");
+        let run_id = w.begin_mode(&rid, "public-test".into(), Some(String::new())).unwrap();
+        finish(&w, &run_id);
+        let run = w.data.lock().unwrap().rounds[0].runs.pop().unwrap();
+        w.save(&w.data.lock().unwrap()).unwrap();
+        let baseline = w.data.lock().unwrap().rounds[0].baseline.clone();
+        let bytes = std::fs::read(w.directory.join("optimization.json")).unwrap();
+        let weak = Arc::downgrade(&w);
+        w.observation.lock().unwrap().notify = Some(Arc::new(move |_, event| {
+            if event["stage"] == "save" && event["status"] == "running" {
+                let w = weak.upgrade().unwrap();
+                let mut d = w.data.lock().unwrap();
+                let r = d.rounds.last_mut().unwrap();
+                match change {
+                    "identity" => r.id = id(),
+                    "decision" => r.decision = "accepted".into(),
+                    "running" => r.reports[0].status = "running".into(),
+                    "runs" => r.runs.push(run.clone()),
+                    _ => unreachable!(),
+                }
+            }
+        }));
+        assert!(workflow::bind_capture(w.clone(), public_capture("isolated-peak.json"), "a".into(), None).await.is_err());
+        let d = w.data.lock().unwrap();
+        assert_eq!(d.rounds[0].baseline, baseline);
+        assert_eq!(d.captures.len(), 1);
+        assert_eq!(d.rounds[0].reports.len(), 2);
+        assert_eq!(std::fs::read(w.directory.join("optimization.json")).unwrap(), bytes);
+        assert!(!w.busy.load(Ordering::SeqCst));
+    }
 }
 
 #[tokio::test]
