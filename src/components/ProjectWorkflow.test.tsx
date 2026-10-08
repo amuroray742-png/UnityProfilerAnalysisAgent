@@ -63,6 +63,49 @@ function withBaseline(){
 function nextProject(){
  const p=withBaseline();p.rounds[0].candidate='b';p.rounds[0].decision='accepted';p.rounds.push({...round(),id:'next',baseline:'b'});return p;
 }
+function diagnosedProject(status='interrupted'){
+ const p=nextProject(),r=p.rounds[1];
+ r.reports=[{reportId:'old-performance',stage:'performance',status:'completed',agentId:'claude-code'},{reportId:'old-project',stage:'project',status,agentId:'codex',parentReportId:'old-performance'}];
+ r.workflow={stage:'project',status,reason:'旧诊断原因',analysisAgent:'claude-code',localizationAgent:'codex'};
+ return p;
+}
+it.each(['completed','failed','cancelled','interrupted'])('offers A replacement after %s diagnosis without starting AI',async status=>{
+ mock(diagnosedProject(status));render(<ProjectWorkflow/>);
+ const replace=await screen.findByText('重新导入 A');expect(replace).not.toBeDisabled();
+ expect(screen.getByLabelText('本轮 A 录制')).toHaveTextContent('b.json');
+ expect(screen.getByText('重新导入会放弃本轮已有诊断与定位结果，轮次编号不变，需要重新诊断。')).toBeVisible();
+ if(status==='completed')expect(screen.getByText('开始优化')).toBeVisible();else expect(screen.getByText('继续诊断定位')).toBeVisible();
+ expect(vi.mocked(invoke).mock.calls.some(c=>['analyze','startAutomatic'].includes((c[1] as {action?:{op:string}})?.action?.op??''))).toBe(false);
+});
+it.each(['completed','interrupted'])('abandons %s diagnosis in the same round and requires fresh manual diagnosis',async status=>{
+ let p=diagnosedProject(status);const prior=structuredClone(p.rounds[0]);vi.mocked(open).mockResolvedValue('fresh.json');
+ vi.mocked(invoke).mockImplementation(async(name,args)=>{
+  if(name==='list_agents')return agents;const a=(args as {action?:{op:string}})?.action;
+  if(a?.op==='recent')return [];if(a?.op==='activity')return {available:false,rows:[],nextCursor:0,hasMore:false};
+  if(a?.op==='bind'){
+   p=structuredClone(p);p.captures.push({...p.captures[0],id:'fresh',path:'fresh.json',snapshot:{fileName:'fresh.json',frameCount:7,unityVersion:'6000.3'}});
+   p.rounds[1]={...round(),id:'next',baseline:'fresh',taskVersion:2,workflow:{stage:'',status:'',reason:null,analysisAgent:'claude-code',localizationAgent:'codex'}};
+  }
+  return p;
+ });
+ render(<ProjectWorkflow/>);fireEvent.click(await screen.findByText('查看本轮 A 指标'));expect(await screen.findByText('指标 b')).toBeInTheDocument();
+ fireEvent.change(screen.getByLabelText('A 帧区间'),{target:{value:'10-20'}});fireEvent.change(screen.getByLabelText('设备'),{target:{value:'旧设备'}});fireEvent.click(screen.getByLabelText('已核对两份录制的复现条件'));
+ fireEvent.click(screen.getByText('重新导入 A'));
+ const diagnose=await screen.findByText('一键诊断并定位');await waitFor(()=>expect(diagnose).not.toBeDisabled());
+ expect(screen.getByText('公开工程 · 第 2 轮')).toBeVisible();expect(screen.getByLabelText('本轮 A 录制')).toHaveTextContent('fresh.json');
+ expect(screen.queryByText('开始优化')).not.toBeInTheDocument();expect(screen.queryByText('旧诊断原因')).not.toBeInTheDocument();expect(screen.queryByLabelText('工作阶段')).not.toBeInTheDocument();
+ expect(screen.queryByText('指标 b')).not.toBeInTheDocument();expect(screen.getByLabelText('A 帧区间')).toHaveValue('');expect(screen.getByLabelText('设备')).toHaveValue('');expect(screen.getByLabelText('已核对两份录制的复现条件')).not.toBeChecked();
+ expect(p.rounds).toHaveLength(2);expect(p.rounds[0]).toEqual(prior);
+ expect(vi.mocked(invoke).mock.calls.some(c=>['analyze','startAutomatic'].includes((c[1] as {action?:{op:string}})?.action?.op??''))).toBe(false);
+ expect(screen.getByLabelText('分析 AI')).toHaveValue('claude-code');expect(screen.getByLabelText('定位 AI')).toHaveValue('codex');
+ fireEvent.click(diagnose);await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workflow_command',{action:{op:'analyze',roundId:'next',analysisAgent:'claude-code',localizationAgent:'codex',restart:false}}));
+});
+it('preserves an existing diagnosis when A file selection is cancelled',async()=>{
+ const p=diagnosedProject('completed'),before=structuredClone(p);mock(p);vi.mocked(open).mockResolvedValue(null);render(<ProjectWorkflow/>);
+ fireEvent.click(await screen.findByText('重新导入 A'));await waitFor(()=>expect(open).toHaveBeenCalled());await waitFor(()=>expect(screen.getByText('重新导入 A')).not.toBeDisabled());
+ expect(screen.getByText('开始优化')).toBeVisible();expect(screen.getByText('旧诊断原因')).toBeVisible();expect(p).toEqual(before);
+ expect(vi.mocked(invoke).mock.calls.some(c=>(c[1] as {action?:{op:string}})?.action?.op==='bind')).toBe(false);
+});
 it('starts the next round with B and offers replacement beside diagnosis without starting AI',async()=>{
  const p=withBaseline();p.rounds[0].candidate='b';p.rounds[0].decision='accepted';const next=nextProject();next.parseProgress={projectId:'p',roundId:'r',operationId:'old-import',stage:'save',status:'completed',done:1,total:1};
  vi.mocked(invoke).mockImplementation(async(name,args)=>{if(name==='list_agents')return agents;const a=(args as {action?:{op:string}})?.action;if(a?.op==='recent')return [];if(a?.op==='next')return next;return p;});
@@ -88,15 +131,15 @@ it('offers replacement in round one and preserves A when the file dialog is canc
  mock(withBaseline());vi.mocked(open).mockResolvedValue(null);render(<ProjectWorkflow/>);const replace=await screen.findByText('重新导入 A');fireEvent.click(replace);await waitFor(()=>expect(open).toHaveBeenCalled());await waitFor(()=>expect(replace).not.toBeDisabled());expect(screen.getByLabelText('本轮 A 录制')).toHaveTextContent('a.json');expect(vi.mocked(invoke).mock.calls.some(c=>(c[1] as {action:{op:string}})?.action?.op==='bind')).toBe(false);
 });
 it.each(['解析失败','导入已取消','保存失败'])('preserves the inherited A and allows retry after %s',async error=>{
- const p=nextProject();vi.mocked(open).mockResolvedValue('fresh.json');vi.mocked(invoke).mockImplementation(async(name,args)=>{if(name==='list_agents')return agents;const a=(args as {action?:{op:string}})?.action;if(a?.op==='recent')return [];if(a?.op==='bind')throw error;return p;});render(<ProjectWorkflow/>);fireEvent.click(await screen.findByText('重新导入 A'));expect(await screen.findByText(error)).toBeInTheDocument();expect(screen.getByLabelText('本轮 A 录制')).toHaveTextContent('b.json');expect(screen.getByText('沿用上一轮 B')).toBeVisible();expect(screen.getByText('重新导入 A')).not.toBeDisabled();expect(screen.getByText('一键诊断并定位')).not.toBeDisabled();
+ const p=diagnosedProject(),before=structuredClone(p);vi.mocked(open).mockResolvedValue('fresh.json');vi.mocked(invoke).mockImplementation(async(name,args)=>{if(name==='list_agents')return agents;const a=(args as {action?:{op:string}})?.action;if(a?.op==='recent')return [];if(a?.op==='activity')return {available:false,rows:[],nextCursor:0,hasMore:false};if(a?.op==='bind')throw error;return p;});render(<ProjectWorkflow/>);fireEvent.click(await screen.findByText('重新导入 A'));expect(await screen.findByText(error)).toBeInTheDocument();expect(screen.getByLabelText('本轮 A 录制')).toHaveTextContent('b.json');expect(screen.getByText('沿用上一轮 B')).toBeVisible();expect(screen.getByText('重新导入 A')).not.toBeDisabled();expect(screen.getByText('继续诊断定位')).not.toBeDisabled();expect(screen.getByText('旧诊断原因')).toBeVisible();expect(p).toEqual(before);
 });
 it('blocks duplicate imports and diagnosis while choosing and importing a new A',async()=>{
  let select!:(p:string)=>void,finish!:(p:Project)=>void;const p=nextProject();mock(p);vi.mocked(open).mockImplementation(()=>new Promise(resolve=>{select=resolve;}));
  render(<ProjectWorkflow/>);const replace=await screen.findByText('重新导入 A');fireEvent.click(replace);expect(replace).toBeDisabled();expect(screen.getByText('一键诊断并定位')).toBeDisabled();
  vi.mocked(invoke).mockImplementation(async(name,args)=>{if((args as {action:{op:string}})?.action?.op==='bind')return new Promise(resolve=>{finish=resolve;});return name==='list_agents'?agents:p;});select('fresh.json');await waitFor(()=>expect(screen.getByText('取消导入')).toBeInTheDocument());expect(replace).toBeDisabled();expect(screen.getByText('一键诊断并定位')).toBeDisabled();finish(p);await waitFor(()=>expect(replace).not.toBeDisabled());expect(open).toHaveBeenCalledTimes(1);
 });
-it.each(['reports','runs','accepted','rolled_back','running'] as const)('does not allow replacement after %s',async state=>{
- const p=withBaseline(),r=p.rounds[0];if(state==='reports')r.reports=[{stage:'performance',agentId:'codex',status:'failed'}];else if(state==='runs')r.runs=[{id:'run',agentId:'codex',sessionId:'s',status:'cancelled',reason:null,createdAt:'',checks:[],changes:[]}];else if(state==='running')p.busy=true;else r.decision=state;
+it.each(['reports','workflow','failed','cancelled','interrupted','accepted','rolled_back','running'] as const)('does not allow replacement after %s',async state=>{
+ const p=withBaseline(),r=p.rounds[0];if(state==='reports')r.reports=[{stage:'performance',agentId:'codex',status:'running'}];else if(state==='workflow')r.workflow={stage:'performance',status:'running',reason:null,analysisAgent:'codex',localizationAgent:'codex'};else if(['failed','cancelled','interrupted'].includes(state))r.runs=[{id:'run',agentId:'codex',sessionId:'s',status:state,reason:null,createdAt:'',checks:[],changes:[]}];else if(state==='running')p.busy=true;else r.decision=state;
  mock(p);render(<ProjectWorkflow/>);await screen.findByText('公开工程 · 第 1 轮');expect(screen.queryByText('重新导入 A')).not.toBeInTheDocument();expect(screen.queryByText('替换本轮 A')).not.toBeInTheDocument();
 });
 it('shows rolled-back inheritance and restores a saved replacement without starting AI',async()=>{
