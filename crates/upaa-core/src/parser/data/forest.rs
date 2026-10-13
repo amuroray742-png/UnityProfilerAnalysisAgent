@@ -93,7 +93,9 @@ fn build_node(
         return Err("invalid children count");
     }
     let info = markers.get(&raw.marker_id);
-    let name = info.map(|m| m.name.clone()).unwrap_or_else(|| format!("marker#{}", raw.marker_id));
+    let name = info
+        .map(|m| m.name.clone())
+        .unwrap_or_else(|| format!("marker#{}", raw.marker_id));
     let category = info
         .and_then(|m| cat_name(m.category_id))
         .unwrap_or("")
@@ -159,9 +161,9 @@ mod tests {
         // root (PlayerLoop, total=20ms) -> [Update (5ms), Render (3ms)]
         // self should be 20 - 8 = 12ms
         let samples = vec![
-            disk(1, 20_000_000.0, 0, 2),    // PlayerLoop root
-            disk(2, 5_000_000.0, 0, 0),     // Update leaf
-            disk(3, 3_000_000.0, 0, 0),     // Render leaf
+            disk(1, 20_000_000.0, 0, 2), // PlayerLoop root
+            disk(2, 5_000_000.0, 0, 0),  // Update leaf
+            disk(3, 3_000_000.0, 0, 0),  // Render leaf
         ];
         let forest = build_forest(&samples, &markers, 0);
         assert_eq!(forest.len(), 1);

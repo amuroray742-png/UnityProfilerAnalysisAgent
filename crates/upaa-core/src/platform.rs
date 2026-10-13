@@ -69,4 +69,3 @@ fn mac_command_directories() -> Vec<PathBuf> {
     }
     directories
 }
-

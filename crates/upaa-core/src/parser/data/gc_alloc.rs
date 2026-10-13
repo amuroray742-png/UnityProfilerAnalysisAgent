@@ -12,8 +12,8 @@ use std::collections::HashMap;
 use byteorder::{ByteOrder, LittleEndian};
 
 use super::constants::MAX_GC_ALLOC_BYTES;
-use super::samples::DiskSample;
 use super::markers::MarkerInfo;
+use super::samples::DiskSample;
 
 /// 把 GC.Alloc metadata 归因到对应 sample。
 ///
@@ -21,7 +21,12 @@ use super::markers::MarkerInfo;
 /// - `metadata_start`: 当前 reader 游标位置相对于 body 的字节偏移  
 /// - `samples`: 主线程采样（mut；`gc_alloc_bytes` 字段会被设置）
 /// - `markers`: marker ID → MarkerInfo，用于识别 GC.Alloc 采样
-pub fn associate(body: &[u8], metadata_start: usize, samples: &mut [DiskSample], markers: &HashMap<u32, MarkerInfo>) {
+pub fn associate(
+    body: &[u8],
+    metadata_start: usize,
+    samples: &mut [DiskSample],
+    markers: &HashMap<u32, MarkerInfo>,
+) {
     // 1. 收集所有 GC.Alloc 采样索引
     let mut gc_indexes: HashMap<i32, ()> = HashMap::new();
     for (i, s) in samples.iter().enumerate() {
@@ -41,18 +46,10 @@ pub fn associate(body: &[u8], metadata_start: usize, samples: &mut [DiskSample],
         let mut run: HashMap<i32, u32> = HashMap::new();
         let mut pos = metadata_start + alignment;
         while pos + 8 <= body.len() {
-            let index = i32::from_le_bytes([
-                body[pos],
-                body[pos + 1],
-                body[pos + 2],
-                body[pos + 3],
-            ]);
-            let size = u32::from_le_bytes([
-                body[pos + 4],
-                body[pos + 5],
-                body[pos + 6],
-                body[pos + 7],
-            ]);
+            let index =
+                i32::from_le_bytes([body[pos], body[pos + 1], body[pos + 2], body[pos + 3]]);
+            let size =
+                u32::from_le_bytes([body[pos + 4], body[pos + 5], body[pos + 6], body[pos + 7]]);
             pos += 8;
             let wanted = gc_indexes.contains_key(&index);
             let duplicate = run.contains_key(&index);
@@ -105,7 +102,13 @@ mod tests {
 
     fn gc_marker_map() -> HashMap<u32, MarkerInfo> {
         let mut m = HashMap::new();
-        m.insert(7, MarkerInfo { name: "GC.Alloc".into(), category_id: 17 });
+        m.insert(
+            7,
+            MarkerInfo {
+                name: "GC.Alloc".into(),
+                category_id: 17,
+            },
+        );
         m
     }
 
@@ -113,9 +116,27 @@ mod tests {
     fn associates_strict_match() {
         let body = synth_metadata_body();
         let mut samples = vec![
-            DiskSample { marker_id: 7, total_ns: 0.0, start_ns: 0, children: 0, gc_alloc_bytes: 0 },
-            DiskSample { marker_id: 9, total_ns: 0.0, start_ns: 0, children: 0, gc_alloc_bytes: 0 },
-            DiskSample { marker_id: 7, total_ns: 0.0, start_ns: 0, children: 0, gc_alloc_bytes: 0 },
+            DiskSample {
+                marker_id: 7,
+                total_ns: 0.0,
+                start_ns: 0,
+                children: 0,
+                gc_alloc_bytes: 0,
+            },
+            DiskSample {
+                marker_id: 9,
+                total_ns: 0.0,
+                start_ns: 0,
+                children: 0,
+                gc_alloc_bytes: 0,
+            },
+            DiskSample {
+                marker_id: 7,
+                total_ns: 0.0,
+                start_ns: 0,
+                children: 0,
+                gc_alloc_bytes: 0,
+            },
         ];
         let markers = gc_marker_map();
         associate(&body, 8, &mut samples, &markers);
@@ -128,11 +149,35 @@ mod tests {
     fn incomplete_match_silently_dropped() {
         let body = synth_metadata_body();
         let mut samples = vec![
-            DiskSample { marker_id: 7, total_ns: 0.0, start_ns: 0, children: 0, gc_alloc_bytes: 0 },
-            DiskSample { marker_id: 9, total_ns: 0.0, start_ns: 0, children: 0, gc_alloc_bytes: 0 },
-            DiskSample { marker_id: 7, total_ns: 0.0, start_ns: 0, children: 0, gc_alloc_bytes: 0 },
+            DiskSample {
+                marker_id: 7,
+                total_ns: 0.0,
+                start_ns: 0,
+                children: 0,
+                gc_alloc_bytes: 0,
+            },
+            DiskSample {
+                marker_id: 9,
+                total_ns: 0.0,
+                start_ns: 0,
+                children: 0,
+                gc_alloc_bytes: 0,
+            },
+            DiskSample {
+                marker_id: 7,
+                total_ns: 0.0,
+                start_ns: 0,
+                children: 0,
+                gc_alloc_bytes: 0,
+            },
             // 额外的 GC.Alloc 没有 metadata
-            DiskSample { marker_id: 7, total_ns: 0.0, start_ns: 0, children: 0, gc_alloc_bytes: 0 },
+            DiskSample {
+                marker_id: 7,
+                total_ns: 0.0,
+                start_ns: 0,
+                children: 0,
+                gc_alloc_bytes: 0,
+            },
         ];
         let markers = gc_marker_map();
         associate(&body, 8, &mut samples, &markers);

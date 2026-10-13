@@ -120,9 +120,7 @@ fn compute_max_consec(run: &[CandidatePair]) -> usize {
     let mut max_consec = 1usize;
     let mut cur_consec = 1usize;
     for w in run.windows(2) {
-        if w[1].body_offset == w[0].body_offset + 8
-            && w[1].sample_index == w[0].sample_index + 1
-        {
+        if w[1].body_offset == w[0].body_offset + 8 && w[1].sample_index == w[0].sample_index + 1 {
             cur_consec += 1;
             if cur_consec > max_consec {
                 max_consec = cur_consec;

@@ -1,5 +1,5 @@
-use sha2::{Digest,Sha256};
-use std::{path::Path,fs::File,sync::atomic::AtomicBool};
+use sha2::{Digest, Sha256};
+use std::{fs::File, path::Path, sync::atomic::AtomicBool};
 pub fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }

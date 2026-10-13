@@ -457,7 +457,12 @@ impl ProjectScope {
     pub async fn query(self: &Arc<Self>, name: &str, args: Value) -> Result<Value, String> {
         self.query_with_editor(name, args, None).await
     }
-    pub async fn query_with_editor(self: &Arc<Self>, name: &str, args: Value, external: Option<Value>) -> Result<Value, String> {
+    pub async fn query_with_editor(
+        self: &Arc<Self>,
+        name: &str,
+        args: Value,
+        external: Option<Value>,
+    ) -> Result<Value, String> {
         files::check(&self.cancelled)?;
         if name == "project_propose_tasks" {
             let mut tasks: Vec<crate::proposal::Task> =
@@ -495,16 +500,20 @@ impl ProjectScope {
             let path = args["path"].as_str().ok_or("缺少 path")?;
             let sampled = if let Some(data) = external {
                 editor::validate(&data, &self.root)?;
-                if data["path"] != path { return Err("Editor resource identity mismatch".into()); }
+                if data["path"] != path {
+                    return Err("Editor resource identity mismatch".into());
+                }
                 Ok(data)
-            } else { editor::inspect(
-                &self.root,
-                path,
-                args["start"].as_u64().unwrap_or(0) as usize,
-                args["limit"].as_u64().unwrap_or(20) as usize,
-                &self.cancelled,
-            )
-            .await };
+            } else {
+                editor::inspect(
+                    &self.root,
+                    path,
+                    args["start"].as_u64().unwrap_or(0) as usize,
+                    args["limit"].as_u64().unwrap_or(20) as usize,
+                    &self.cancelled,
+                )
+                .await
+            };
             // Do not combine an older offline object/GUID with a newer Editor observation.
             let check = self.clone();
             let target = path.to_owned();

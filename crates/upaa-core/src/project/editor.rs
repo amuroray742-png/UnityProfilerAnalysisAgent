@@ -169,7 +169,12 @@ async fn invoke(
     Ok(data)
 }
 #[cfg(not(feature = "unity-cli"))]
-async fn invoke(_root: &Path, _command: &str, _request: Value, _cancel: &AtomicBool) -> Result<Value, String> {
+async fn invoke(
+    _root: &Path,
+    _command: &str,
+    _request: Value,
+    _cancel: &AtomicBool,
+) -> Result<Value, String> {
     Err("Editor evidence is supplied by the host; Unity CLI is disabled".into())
 }
 pub fn validate(data: &Value, root: &Path) -> Result<(), String> {

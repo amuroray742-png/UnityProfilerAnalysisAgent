@@ -33,21 +33,13 @@ pub fn find_all(body: &[u8]) -> Vec<RawCounter> {
             if pos + 16 > body.len() {
                 break;
             }
-            let count = u32::from_le_bytes([
-                body[pos + 4],
-                body[pos + 5],
-                body[pos + 6],
-                body[pos + 7],
-            ]);
+            let count =
+                u32::from_le_bytes([body[pos + 4], body[pos + 5], body[pos + 6], body[pos + 7]]);
             if count != MEMORY_COUNTER_COUNT {
                 break;
             }
-            let value_type = u32::from_le_bytes([
-                body[pos + 8],
-                body[pos + 9],
-                body[pos + 10],
-                body[pos + 11],
-            ]);
+            let value_type =
+                u32::from_le_bytes([body[pos + 8], body[pos + 9], body[pos + 10], body[pos + 11]]);
             let size = u32::from_le_bytes([
                 body[pos + 12],
                 body[pos + 13],
@@ -110,8 +102,8 @@ fn _suppress_unused() {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::constants::MEMORY_COUNTER_COUNT;
+    use super::*;
 
     fn push_record(buf: &mut Vec<u8>, id: u32, value_type: u32, value: u64) {
         let size: u32 = if value_type == 2 { 4 } else { 8 };

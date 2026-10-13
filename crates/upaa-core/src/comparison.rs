@@ -1,7 +1,7 @@
-use crate::{capture::*,storage};
-use std::{collections::BTreeMap,path::PathBuf,sync::atomic::AtomicBool};
 use crate::parser::Frame;
+use crate::{capture::*, storage};
 use serde_json::{json, Value};
+use std::{collections::BTreeMap, path::PathBuf, sync::atomic::AtomicBool};
 pub const METRICS: [&str; 8] = [
     "cpuMs",
     "frameMs",
@@ -139,8 +139,7 @@ mod tests {
     use super::*;
     #[test]
     fn comparison_zero_missing_and_conditions() {
-        let data =
-            bytes::Bytes::from_static(include_bytes!("../tests/fixtures/editor-dump.json"));
+        let data = bytes::Bytes::from_static(include_bytes!("../tests/fixtures/editor-dump.json"));
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let p = runtime
             .block_on(crate::parser::json::parse(
