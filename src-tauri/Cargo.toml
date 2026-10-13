@@ -17,6 +17,7 @@ sha2 = "0.10"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+upaa-core = { path = "../crates/upaa-core", features = ["unity-cli"] }
 # Tauri v2 桌面壳
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"

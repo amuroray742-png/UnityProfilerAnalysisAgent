@@ -4259,6 +4259,27 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "upaa-core",
+ "uuid",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "upaa-core"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "bytes",
+ "chrono",
+ "dirs 5.0.1",
+ "futures",
+ "prost",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
  "uuid",
  "windows-sys 0.61.2",
 ]

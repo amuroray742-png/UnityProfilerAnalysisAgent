@@ -1,0 +1,27 @@
+[package]
+name = "upaa-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+[features]
+default = []
+unity-cli = []
+[dependencies]
+futures = "0.3"
+chrono = { version="0.4", features=["serde"] }
+bytes = "1"
+serde = { version="1", features=["derive"] }
+serde_json = "1"
+thiserror = "1"
+sha2 = "0.10"
+tokio = { version="1", features=["full"] }
+byteorder = "1"
+prost = "0.13"
+uuid = { version="1", features=["v4","serde"] }
+dirs = "5"
+tracing = "0.1"
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version="0.61", features=["Win32_Storage_FileSystem", "Win32_Foundation"] }
+[[bin]]
+name="upaa-engine"
+path="src/bin/engine.rs"

@@ -17,42 +17,10 @@ use std::{
     sync::{atomic::AtomicBool, Arc, Mutex},
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Task {
-    pub id: String,
-    pub kind: String,
-    pub title: String,
-    pub evidence: String,
-    pub files: BTreeMap<String, String>,
-    pub instructions: String,
-    pub acceptance: String,
-    pub constraints: String,
-    pub selected: bool,
-}
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Conditions {
-    pub device: String,
-    pub platform: String,
-    pub scenario: String,
-    pub operation: String,
-    pub build: String,
-    pub quality: String,
-    pub resolution: String,
-    pub profiling: String,
-    pub code_version: String,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Capture {
-    pub id: String,
-    pub path: PathBuf,
-    pub hash: String,
-    pub conditions: Conditions,
-    pub snapshot: crate::extractor::MetricsSnapshot,
-    pub frames: Vec<crate::parser::Frame>,
-}
+pub use upaa_core::proposal::Task;
+
+pub use upaa_core::capture::{Conditions, Capture};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Change {
