@@ -37,3 +37,10 @@ it('unmounted capture ignores delayed evidence and errors remain retryable', asy
  fireEvent.click(screen.getByText('帧证据与调用路径对比'));fireEvent.click(screen.getByText('读取帧证据'));
  await screen.findByRole('alert');expect(screen.getByText('读取帧证据')).not.toBeDisabled();
 });
+
+it('shows zero-call average as unavailable and distinguishes calls from per-call time',async()=>{
+ vi.mocked(compareFrames).mockResolvedValue({frameIndex:10,baselineFrameIndex:12,thread:{threadIndex:0,threadId:'1',name:'Main Thread',group:null,sampleCount:2},rows:[{path:['Main Thread','Work'],baseline:{calls:0,inclusiveMs:0,meanInclusiveMs:null,selfMs:0,selfValidSamples:0,gcBytes:'0'},current:{calls:2,inclusiveMs:4,meanInclusiveMs:2,selfMs:4,selfValidSamples:2,gcBytes:'0'},inclusiveDeltaMs:4,selfDeltaMs:4,gcDeltaBytes:'0'}],total:1,nextStart:null,interpretation:'仅观测'});
+ render(<FrameEvidence fileId="capture" frame={10} thread={null} frames={[{frameIndex:10},{frameIndex:12}]}/>);
+ fireEvent.click(screen.getByText('帧证据与调用路径对比'));fireEvent.click(screen.getByText('比较调用路径'));
+ expect(await screen.findByText('— → 2.0000')).toBeVisible();expect(screen.getByText('0 → 2')).toBeVisible();
+});

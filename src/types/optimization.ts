@@ -1,5 +1,5 @@
 // Persistent optimization view DTOs; backup bytes remain in Rust.
-export interface OptimizationTask {id:string;kind:string;title:string;evidence:string;files:Record<string,string>;instructions:string;acceptance:string;constraints:string;selected:boolean}
+export interface OptimizationTask {markerNames?:string[];id:string;kind:string;title:string;evidence:string;files:Record<string,string>;instructions:string;acceptance:string;constraints:string;selected:boolean}
 export interface Conditions {device:string;platform:string;scenario:string;operation:string;build:string;quality:string;resolution:string;profiling:string;codeVersion:string}
 export interface Capture {id:string;path:string;conditions:Conditions;snapshot:{fileName:string;frameCount:number;unityVersion:string|null}}
 export interface Run {automatic?:boolean;tasks?:OptimizationTask[];text?:string;textPartial?:boolean;requirements?:string;id:string;agentId:string;sessionId:string;status:string;reason:string|null;createdAt:string;checks:{status:string;reason?:string;checkedRevision?:number}[];changes:{taskId?:string|null;kind?:string;path:string;state:string;beforeHash:string;afterHash:string}[]}
@@ -7,7 +7,7 @@ export interface Round {workflow?:{stage:string;status:string;reason:string|null
 export type Statistic = 'mean'|'p50'|'p95'|'p99'|'max';
 export interface Stat {mean:number|null;p50:number|null;p95:number|null;p99:number|null;max:number|null;validFrames:number;totalFrames:number}
 export interface HotspotPage {rows:{roleAndPath:[string|null,string,string[]];a:{inclusiveMsPerFrame:number;callsPerFrame:number}|null;b:{inclusiveMsPerFrame:number;callsPerFrame:number}|null;deltaInclusiveMsPerFrame:number|null;association:string}[];nextStart:number|null;total:number;status?:string;reason?:string}
-export interface Comparison {baseline:string;candidate:string;hotspots:HotspotPage;comparability:string;scope:string;unknown:string[];mismatch:string[];metrics:{metric:string;a:Stat;b:Stat;delta:Record<Statistic,{absolute:number|null;percent:number|null}>;verdict:string}[]}
+export interface Comparison {sampling?:SamplingObservation;baseline:string;candidate:string;hotspots:HotspotPage;comparability:string;scope:string;unknown:string[];mismatch:string[];metrics:{metric:string;a:Stat;b:Stat;delta:Record<Statistic,{absolute:number|null;percent:number|null}>;verdict:string}[]}
 export interface Project {parseProgress?:ParseProgress|null;version?:number;rootAvailable?:boolean;saveError?:string|null;id:string;name:string;root:string;directory:string;busy:boolean;budgets:Record<string,number>;captures:Capture[];rounds:Round[]}
 export interface ParseProgress {projectId:string;roundId:string;operationId:string;stage:string;done:number|null;total:number|null;status:string;reason?:string|null}
 export interface ActivityRow {projectId:string;roundId:string;runId:string;sequence:number;nextCursor:number;time:string;event:{kind:string;text?:string;agentId?:string;sessionId?:string;callId?:string;tool?:string;status?:string;args?:Record<string,unknown>;error?:string;message?:string}}
@@ -17,4 +17,10 @@ export interface UnityPluginStatus {
  state:'missing'|'installed'|'migrate'|'conflict'|'interrupted'; reason:string; version:string; bundleHash:string;
  lockWarning:string|null; record:{id:string;status:string;reason:string|null;bundleHash:string}|null;
  editor?:{status:string;reason?:string|null};
+}
+
+export interface SamplingObservation {
+ scope:string;
+ rows:{taskId:string;name:string|null;status:'manual'|'unavailable'|'observed'|'notObserved';reason?:string;totalPaths?:number;truncated?:boolean;
+ matches:{roleAndPath:[string|null,string,string[]];observation:{callsPerFrame:number;inclusiveMsPerFrame:number;gcBytesPerFrame:number|null;observedFrames:number;totalFrames:number}}[]}[];
 }

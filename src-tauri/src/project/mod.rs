@@ -465,6 +465,7 @@ impl ProjectScope {
             }
             let receipts = self.read_receipts.lock().unwrap();
             for t in &mut tasks {
+                crate::optimization::sampling::validate_names(&t.kind, &t.marker_names)?;
                 t.selected = false;
                 if t.kind == "investigate" {
                     t.files.clear();
@@ -479,7 +480,7 @@ impl ProjectScope {
             }
             *self.task_drafts.lock().unwrap() = tasks;
             return Ok(
-                json!({"saved":true,"authorized":false,"message":"候选任务已保存，需要用户选择并确认，当前会话不能写工程"}),
+                json!({"saved":true,"authorized":false,"message":"候选任务已保存，用户点击开始优化后由独立修改会话处理，当前会话不能写工程"}),
             );
         }
         let scope = self.clone();
@@ -806,6 +807,6 @@ pub fn schemas() -> Value {
         json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})
     };
     let mut result = json!({"tools":[tool("project_summary","工程/Editor 身份、版本、采集范围与覆盖警告",json!({}),vec![]),tool("project_files","分页列出工程文件，不扫描外部包磁盘",json!({}),vec![]),tool("project_search","只读字面量搜索；名称匹配不是性能因果证明",json!({"query":{"type":"string"}}),vec!["query"]),tool("project_read","带行号、哈希读取文本；行从 1 开始，最多400行；检查nextStart和lineTruncated",json!({"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1,"maximum":400}}),vec!["path"]),tool("project_asset","资源序列化对象分页及 Editor 当前资源摘要；与录制当帧不同，检查缺失与变化",json!({"path":{"type":"string"}}),vec!["path"]),tool("project_references","离线原始引用分页，incoming/outgoing；覆盖始终 partial，不证明运行中加载",json!({"path":{"type":"string"},"direction":{"type":"string","enum":["incoming","outgoing"]}}),vec!["path"])]});
-    result["tools"].as_array_mut().unwrap().push(json!({"name":"project_propose_tasks","description":"保存结构化候选任务，不授权编辑。仅 optimize/marker/investigate；文件映射必须来自 project_read 的真实 path/hash。用户后续选择任务及修改 Agent。", "inputSchema":{"type":"object","properties":{"tasks":{"type":"array","maxItems":20,"items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["optimize","marker","investigate"]},"title":{"type":"string"},"evidence":{"type":"string"},"files":{"type":"object","additionalProperties":{"type":"string"}},"instructions":{"type":"string"},"acceptance":{"type":"string"},"constraints":{"type":"string"},"selected":{"type":"boolean"}},"required":["id","kind","title","evidence","files","instructions","acceptance","constraints","selected"],"additionalProperties":false}}},"required":["tasks"],"additionalProperties":false}}));
+    result["tools"].as_array_mut().unwrap().push(json!({"name":"project_propose_tasks","description":"保存结构化候选任务，不授权编辑。仅 optimize/marker/investigate；文件映射必须来自 project_read 的真实 path/hash。用户后续选择修改 Agent 并点击开始优化。", "inputSchema":{"type":"object","properties":{"tasks":{"type":"array","maxItems":20,"items":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["optimize","marker","investigate"]},"title":{"type":"string"},"evidence":{"type":"string"},"files":{"type":"object","additionalProperties":{"type":"string"}},"instructions":{"type":"string"},"acceptance":{"type":"string"},"markerNames":{"type":"array","maxItems":3,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":200},"description":"Marker 任务实际使用的固定采样名称；重录 B 后精确查询，不代表问题已解决"},"constraints":{"type":"string"},"selected":{"type":"boolean"}},"required":["id","kind","title","evidence","files","instructions","acceptance","constraints","selected"],"additionalProperties":false}}},"required":["tasks"],"additionalProperties":false}}));
     result
 }

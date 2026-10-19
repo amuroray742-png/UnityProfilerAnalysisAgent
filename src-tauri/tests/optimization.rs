@@ -44,6 +44,7 @@ fn setup(bytes: &[u8]) -> (Temp, Arc<Workspace>, String) {
         candidate: None,
         reports: vec![],
         tasks: vec![Task {
+            marker_names: vec![],
             id: "t".into(),
             kind: "optimize".into(),
             title: "公开已有代码替换".into(),
@@ -871,6 +872,7 @@ fn seed_diagnosis(w: &Workspace, status: &str) -> Vec<String> {
     let r = d.rounds.last_mut().unwrap();
     r.reports = vec![performance, project];
     r.tasks = vec![Task {
+        marker_names: vec![],
         id: "old-task".into(), kind: "investigate".into(), title: "旧诊断任务".into(),
         evidence: "旧录制".into(), files: BTreeMap::new(), instructions: "调查".into(),
         acceptance: "核对".into(), constraints: String::new(), selected: true,
@@ -1423,4 +1425,58 @@ fn activity_write_failure_sets_unsaved_state(){
     let mut permissions=std::fs::metadata(&path).unwrap().permissions();permissions.set_readonly(true);std::fs::set_permissions(&path,permissions).unwrap();
     assert!(w.activity(&pid,&rid,&run,&DiagnoseEvent::Chunk{text:"after".into()}).is_err());assert!(w.save_error.lock().unwrap().is_some());
     let mut permissions=std::fs::metadata(&path).unwrap().permissions();permissions.set_readonly(false);std::fs::set_permissions(path,permissions).unwrap();
+}
+
+#[tokio::test]
+async fn marker_names_survive_storage_and_match_only_exact_leaf_paths() {
+    use unity_profiler_analysis_agent_lib::optimization::sampling;
+    let (_temp, w, _round, run) = automatic_setup();
+    let request = json!({"id":"t", "kind":"marker", "title":"观察真实路径", "evidence":"公开录制",
+        "instructions":"固定同步范围", "acceptance":"重录并核对", "marker_names":["Work", "Absent"]});
+    w.edit_query(&run,"optimization_task", request.clone()).unwrap();
+    let tasks = w.data.lock().unwrap().rounds[0].runs[0].tasks.clone();
+    assert_eq!(tasks[0].marker_names, ["Work", "Absent"]);
+    for names in [json!(["Work","Work"]), json!([" "]), json!(["a","b","c","d"])] {
+        let mut bad=request.clone();bad["marker_names"]=names;
+        assert!(w.edit_query(&run,"optimization_task",bad).is_err());
+    }
+    let mut old = serde_json::to_value(&tasks[0]).unwrap();
+    old.as_object_mut().unwrap().remove("markerNames");
+    let old: Task=serde_json::from_value(old).unwrap();
+    assert!(old.marker_names.is_empty());
+    assert_eq!(sampling::observe(&[old], &Ok(BTreeMap::new()))["rows"][0]["status"], "manual");
+    let file=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/editor-dump.json");
+    let p=unity_profiler_analysis_agent_lib::parser::parse_file(&file).await.unwrap();
+    let capture=Capture {id:"b".into(),path:file.clone(),hash:storage::hash(&std::fs::read(&file).unwrap()),conditions:Default::default(),snapshot:unity_profiler_analysis_agent_lib::extractor::extract(&p),frames:p.frames};
+    let mut paths=comparison::paths(&capture,None).await.unwrap();
+    // A child under Work must not count as another Work observation.
+    paths.insert(serde_json::to_string(&("", "Main Thread", vec!["Work", "Child"])).unwrap(),json!({}));
+    paths.insert(serde_json::to_string(&("", "Main Thread", vec!["Work.Extra"])).unwrap(),json!({}));
+    let result=sampling::observe(&tasks,&Ok(paths));
+    assert_eq!(result["rows"][0]["status"],"observed");
+    assert_eq!(result["rows"][0]["totalPaths"],1);
+    assert_eq!(result["rows"][1]["status"],"notObserved");
+    assert_eq!(sampling::observe(&tasks,&Err("录制已变化".into()))["rows"][0]["status"],"unavailable");
+    finish(&w,&run);
+    let directory=w.directory.clone();drop(w);
+    let restored=Workspace::open(directory).unwrap();
+    assert_eq!(restored.data.lock().unwrap().rounds[0].tasks[0].marker_names,["Work","Absent"]);
+}
+
+#[tokio::test]
+async fn replacing_b_discards_old_sampling_acceptance_only_after_success() {
+    let (_temp,w,rid)=setup(b"class Work {}");
+    workflow::bind_capture(w.clone(),public_capture("editor-dump.json"),"a".into(),None).await.unwrap();
+    seed_diagnosis(&w,"completed");
+    let run=w.begin_mode(&rid,"public-test".into(),Some(String::new())).unwrap();
+    finish(&w,&run);
+    workflow::bind_capture(w.clone(),public_capture("editor-dump.json"),"b".into(),None).await.unwrap();
+    { let mut d=w.data.lock().unwrap(); d.rounds[0].task_verifications.insert("marker".into(),"passed".into()); }
+    let old=w.data.lock().unwrap().rounds[0].candidate.clone();
+    assert!(workflow::bind_capture(w.clone(),w.directory.join("missing.json"),"b".into(),None).await.is_err());
+    assert_eq!(w.data.lock().unwrap().rounds[0].task_verifications["marker"],"passed");
+    workflow::bind_capture(w.clone(),public_capture("isolated-peak.json"),"b".into(),None).await.unwrap();
+    let d=w.data.lock().unwrap();
+    assert_ne!(d.rounds[0].candidate,old);
+    assert!(d.rounds[0].task_verifications.is_empty());
 }

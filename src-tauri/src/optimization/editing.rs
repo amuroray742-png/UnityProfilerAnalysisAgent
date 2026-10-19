@@ -75,6 +75,7 @@ pub fn validate_tasks(tasks: &[Task], root: &Path) -> Result<(), String> {
     }
     let mut ids = std::collections::HashSet::new();
     for t in tasks {
+        super::sampling::validate_names(&t.kind, &t.marker_names)?;
         if !ids.insert(&t.id)
             || !["optimize", "marker"].contains(&t.kind.as_str())
             || t.title.is_empty()
