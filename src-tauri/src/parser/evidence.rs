@@ -294,6 +294,7 @@ impl FrameStore {
         let result=sorted.iter().skip(start).take(limit).map(|(path,v)|json!({"path":path,
             "baseline":v[0].json(gc_valid),"current":v[1].json(gc_valid),
             "inclusiveDeltaMs":v[1].inclusive_ms-v[0].inclusive_ms,
+            "callsDelta":v[1].calls as i128-v[0].calls as i128,
             "selfDeltaMs":if v.iter().all(|x|x.calls==x.self_valid){Some(v[1].self_ms-v[0].self_ms)}else{None},
             "gcDeltaBytes":gc_valid.then(||(v[1].gc_bytes as i128-v[0].gc_bytes as i128).to_string())})).collect();
         let mut page = bounded_page(result, start, sorted.len())?;
@@ -315,6 +316,7 @@ struct Totals {
 impl Totals {
     fn json(&self, gc_valid: bool) -> Value {
         json!({"calls":self.calls,"inclusiveMs":self.inclusive_ms,
+        "meanInclusiveMs":(self.calls>0).then(||self.inclusive_ms/self.calls as f64),
         "selfMs":(self.calls==self.self_valid).then_some(self.self_ms),"selfValidSamples":self.self_valid,
         "gcBytes":gc_valid.then(||self.gc_bytes.to_string())})
     }

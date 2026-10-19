@@ -210,6 +210,7 @@ pub async fn bind_capture(
         let r = d.rounds.last_mut().unwrap();
         r.candidate = Some(cid);
         r.comparison = None;
+        r.task_verifications.clear();
     }
     if let Err(e) = w.save(&d) {
         progress.fail(&e);

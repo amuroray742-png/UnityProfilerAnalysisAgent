@@ -7,6 +7,7 @@ pub mod commands;
 pub mod comparison;
 pub mod editing;
 pub mod session;
+pub mod sampling;
 pub mod storage;
 pub mod workflow;
 use crate::reports::Report;
@@ -27,6 +28,9 @@ pub struct Task {
     pub files: BTreeMap<String, String>,
     pub instructions: String,
     pub acceptance: String,
+    /// Exact fixed names expected in a new recording; absent in older archives.
+    #[serde(default)]
+    pub marker_names: Vec<String>,
     pub constraints: String,
     pub selected: bool,
 }

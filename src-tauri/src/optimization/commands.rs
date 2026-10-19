@@ -457,6 +457,7 @@ pub async fn optimization_command(
                 .ok_or("轮次不存在")?;
             // Users may refine goals, not silently broaden a diagnosed file set.
             for t in &tasks {
+                super::sampling::validate_names(&t.kind, &t.marker_names)?;
                 let original = r
                     .tasks
                     .iter()
@@ -478,6 +479,7 @@ pub async fn optimization_command(
                     .map(|t| serde_json::to_string(t).unwrap())
                     .collect::<Vec<_>>()
             {
+                r.comparison = None;
                 r.task_version += 1;
                 r.task_verifications.clear();
             }
@@ -796,7 +798,7 @@ pub async fn optimization_command(
             range_b,
             confirmed,
         } => {
-            let (a, b, budgets) = {
+            let (a, b, budgets, tasks) = {
                 let d = w.data.lock().unwrap();
                 let r = d
                     .rounds
@@ -816,20 +818,20 @@ pub async fn optimization_command(
                 if a.id == b.id {
                     return Err("请选择另一份录制".into());
                 }
-                (a.clone(), b.clone(), d.budgets.clone())
+                (a.clone(), b.clone(), d.budgets.clone(), r.tasks.clone())
             };
             let mut result = comparison::compare(&a, &b, range_a, range_b, confirmed, &budgets)?;
-            result["hotspots"] = match (
-                comparison::paths(&a, range_a).await,
-                comparison::paths(&b, range_b).await,
-            ) {
+            let a_paths = comparison::paths(&a, range_a).await;
+            let b_paths = comparison::paths(&b, range_b).await;
+            result["sampling"] = super::sampling::observe(&tasks, &b_paths);
+            result["hotspots"] = match (a_paths, b_paths) {
                 (Ok(a), Ok(b)) => comparison::associate(a, b),
-                (a, b) => {
-                    json!({"status":"unavailable","reason":format!("{:?}; {:?}",a.err(),b.err())})
-                }
+                (a, b) => json!({"status":"unavailable","reason":format!("{:?}; {:?}",a.err(),b.err())}),
             };
             let mut d = w.data.lock().unwrap();
             let r = d.rounds.iter_mut().find(|r| r.id == round_id).unwrap();
+            // A new capture or frame selection requires a fresh manual conclusion.
+            r.task_verifications.clear();
             r.candidate = Some(candidate_id);
             if r.tasks.iter().any(|t| t.selected)
                 && r.tasks

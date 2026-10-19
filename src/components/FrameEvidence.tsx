@@ -52,10 +52,11 @@ export function FrameEvidence({ fileId, frame, thread, frames }: {
     <p><label>对照帧 <select aria-label="对照帧" disabled={busy} value={baseline} onChange={e => { setBaseline(Number(e.target.value)); setComparison(null); }}>
       {frames.filter(f => f.frameIndex !== frame).map(f => <option key={f.frameIndex} value={f.frameIndex}>{f.frameIndex}</option>)}
     </select></label>{' '}<button disabled={busy || baseline === frame} onClick={() => load('compare')}>比较调用路径</button></p>
+    <p>先比较调用次数，再比较单次平均耗时。平均变慢不代表每次都慢；Self 包含等待及未细分工作。</p>
     {comparison && <>
       <p>帧 {comparison.frameIndex} 对比 {comparison.baselineFrameIndex} · {comparison.thread.name} · {comparison.total} 条路径。{comparison.interpretation}</p>
-      <div style={{ overflowX: 'auto' }}><table className="hotspot-table" aria-label="调用路径对比"><thead><tr><th>完整路径</th><th>调用次数（对照 → 当前）</th><th>Inclusive Δ ms</th><th>Self Δ ms</th><th>直接 GC Δ B</th></tr></thead>
-        <tbody>{comparison.rows.map((r,i) => <tr key={i}><td style={{ overflowWrap: 'anywhere' }}>{r.path.join(' → ')}</td><td>{r.baseline.calls} → {r.current.calls}</td><td>{r.inclusiveDeltaMs.toFixed(4)}</td><td>{r.selfDeltaMs === null ? '—' : r.selfDeltaMs.toFixed(4)}</td><td>{r.gcDeltaBytes ?? '—'}</td></tr>)}</tbody></table></div>
+      <div style={{ overflowX: 'auto' }}><table className="hotspot-table" aria-label="调用路径对比"><thead><tr><th>完整路径</th><th>调用次数（对照 → 当前）</th><th>单次平均 ms（对照 → 当前）</th><th>Inclusive Δ ms</th><th>Self Δ ms</th><th>直接 GC Δ B</th></tr></thead>
+        <tbody>{comparison.rows.map((r,i) => <tr key={i}><td style={{ overflowWrap: 'anywhere' }}>{r.path.join(' → ')}</td><td>{r.baseline.calls} → {r.current.calls}</td><td>{r.baseline.meanInclusiveMs==null?'—':r.baseline.meanInclusiveMs.toFixed(4)} → {r.current.meanInclusiveMs==null?'—':r.current.meanInclusiveMs.toFixed(4)}</td><td>{r.inclusiveDeltaMs.toFixed(4)}</td><td>{r.selfDeltaMs === null ? '—' : r.selfDeltaMs.toFixed(4)}</td><td>{r.gcDeltaBytes ?? '—'}</td></tr>)}</tbody></table></div>
       <button disabled={busy} onClick={() => load('compare')}>对比首页</button>{' '}
       <button disabled={busy || comparison.nextStart === null} onClick={() => load('compare', comparison.nextStart!)}>下一页路径</button>
     </>}

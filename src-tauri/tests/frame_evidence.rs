@@ -34,6 +34,9 @@ async fn identical_marker_names_keep_distinct_parent_paths_and_missing_gc_is_not
         .filter(|r| r["path"].as_array().unwrap().last() == Some(&json!("Same")))
         .collect();
     assert_eq!(same.len(), 2);
+    assert_eq!(same[0]["baseline"]["meanInclusiveMs"], 1.);
+    assert_eq!(same[0]["current"]["meanInclusiveMs"], 3.);
+    assert_eq!(same[0]["callsDelta"], 0);
     assert_ne!(same[0]["path"], same[1]["path"]);
     assert_eq!(same[0]["inclusiveDeltaMs"], 2.);
     assert_eq!(same[1]["inclusiveDeltaMs"], 1.);
@@ -60,6 +63,9 @@ async fn self_uses_full_children_before_depth_filter_and_comparison_retains_path
     assert_eq!(zero.samples[0].self_ms, Some(zero.samples[0].total_ms));
     let comparison = store.compare(10, 12, None, 0, 50).unwrap();
     assert_eq!(comparison["baselineFrameIndex"], 12);
+    let absent = comparison["rows"].as_array().unwrap().iter().find(|r| r["baseline"]["calls"] == 0).unwrap();
+    assert!(absent["baseline"]["meanInclusiveMs"].is_null());
+    assert!(absent["current"]["meanInclusiveMs"].is_number());
     assert!(comparison["rows"]
         .as_array()
         .unwrap()
@@ -192,4 +198,27 @@ async fn editor_metadata_matches_production() {
         truth["frames"].as_array().unwrap().len(),
         timer.elapsed()
     );
+}
+
+#[tokio::test]
+async fn repeated_calls_and_slower_calls_are_distinguishable() {
+    let frames: Vec<_> = [(1, vec![1.0]), (2, vec![1.0, 1.0]), (3, vec![2.0])]
+        .into_iter().map(|(index,times)| {
+            let mut samples=vec![json!({"sample_index":0,"marker_id":1,"marker_name":"Main Thread","time_ms":10.0,"start_time_ms":0.0,"children_count":times.len(),"metadata_count":0})];
+            for (i,time) in times.iter().enumerate() {
+                samples.push(json!({"sample_index":i+1,"marker_id":2,"marker_name":"Work","time_ms":time,"start_time_ms":i as f64*3.0,"children_count":0,"metadata_count":0}));
+            }
+            json!({"frame_index":index,"frame_time_ms":10,"sample_count_total":samples.len(),"gc_alloc_bytes_total":0,"threads":[{"thread_index":0,"thread_id":1,"thread_name":"Main Thread","gc_alloc_total_bytes":0,"samples":samples}]})
+        }).collect();
+    let bytes=Bytes::from(serde_json::to_vec(&json!({"unity_version":"6000.3.23f1","frame_count":3,"frames":frames})).unwrap());
+    let p=parser::json::parse(&bytes,"calls.json",bytes.len() as u64).await.unwrap();
+    let store=p.details.unwrap();
+    let find=|v:Value|v["rows"].as_array().unwrap().iter().find(|r|r["path"].as_array().unwrap().last()==Some(&json!("Work"))).unwrap().clone();
+    let more=find(store.compare(2,1,None,0,50).unwrap());
+    let slower=find(store.compare(3,1,None,0,50).unwrap());
+    assert_eq!(more["inclusiveDeltaMs"],slower["inclusiveDeltaMs"]);
+    assert_eq!(more["callsDelta"],1);
+    assert_eq!(more["current"]["meanInclusiveMs"],1.0);
+    assert_eq!(slower["callsDelta"],0);
+    assert_eq!(slower["current"]["meanInclusiveMs"],2.0);
 }
