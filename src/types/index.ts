@@ -149,7 +149,7 @@ export interface MetadataValue {
 }
 export interface EvidenceRow { threadIndex: number; threadId: string; thread: string; sampleIndex: number; markerId: number; marker: string; isCounter: boolean; metadataCount: number; metadata: MetadataValue[]; metadataTruncated: boolean; metadataReason?: string | null }
 export interface EvidencePage { frameIndex: number; source: string; rows: EvidenceRow[]; total: number; nextStart: number | null; scope: string }
-export interface PathTotals { calls: number; inclusiveMs: number; selfMs: number | null; selfValidSamples: number; gcBytes: string | null }
+export interface PathTotals { meanInclusiveMs?: number | null; calls: number; inclusiveMs: number; selfMs: number | null; selfValidSamples: number; gcBytes: string | null }
 export interface ComparePage { frameIndex: number; baselineFrameIndex: number; thread: ThreadInfo; rows: { path: string[]; baseline: PathTotals; current: PathTotals; inclusiveDeltaMs: number; selfDeltaMs: number | null; gcDeltaBytes: string | null }[]; total: number; nextStart: number | null; interpretation: string }
 export interface FlowPage {
   available: boolean;

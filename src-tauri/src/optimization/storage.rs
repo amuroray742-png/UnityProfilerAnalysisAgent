@@ -128,7 +128,11 @@ impl Workspace {
         }
         let root_lease = root_lease(&root)?;
         let data = Project {
-            version: 3,
+            version: 4,
+            scenes: vec![],
+            active_scene_id: String::new(),
+            code_revision: 0,
+            run_sequence: 0,
             id: id(),
             name,
             root,
@@ -163,7 +167,7 @@ impl Workspace {
             return Err("优化项目超过读取上限".into());
         }
         let mut data = super::archive::load(&directory, &bytes)?;
-        if ![1, 2, 3].contains(&data.version) {
+        if ![1, 2, 3, 4].contains(&data.version) {
             return Err("不支持的优化项目版本".into());
         }
         // A missing Unity project must not prevent reading the archive.
@@ -171,7 +175,8 @@ impl Workspace {
         // an archive to a different Unity project; read-only history remains usable.
         let root_lease = root_lease(&data.root)?;
         let legacy = data.version < 3;
-        if legacy {
+        let migrate = data.version < 4;
+        if migrate {
             let backup = directory.join(format!("optimization.v{}.backup.json", data.version));
             if !backup.exists() {
                 let mut f = OpenOptions::new()
@@ -183,8 +188,9 @@ impl Workspace {
                     .and_then(|_| f.sync_all())
                     .map_err(|e| e.to_string())?;
             }
-            data.version = 3;
+            super::scenes::migrate(&mut data);
         }
+        super::scenes::validate(&data)?;
         for round in &mut data.rounds {
             if legacy
                 && !round.runs.is_empty()

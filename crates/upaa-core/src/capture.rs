@@ -16,6 +16,10 @@ pub struct Conditions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capture {
+    #[serde(default)]
+    pub scene_id: String,
+    #[serde(default)]
+    pub code_revision: Option<u64>,
     pub id: String,
     pub path: PathBuf,
     pub hash: String,

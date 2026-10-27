@@ -121,6 +121,8 @@ impl Engine {
                     id.clone(),
                     Recording {
                         capture: Capture {
+                            scene_id: String::new(),
+                            code_revision: None,
                             id,
                             path,
                             hash: expected_hash,

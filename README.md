@@ -2,7 +2,7 @@
 
 当前 `.data` 契约见[解析修复与版本边界](docs/data-parser-current.md)：限定 2022.3 / 6000.3.x，未验证版本显式标记；新增内存 Counter、未知区段查询、帧缓存和导入取消。2022.3 候选线程后缀及新增内存指标仍待真实录制对照，GPU 暂不考虑。下列历史验收只适用于其注明的范围。
 
-当前主流程：**新建／打开优化项目 → 导入 A → 一键诊断并定位 → 选择修改 AI → 开始优化 → 手动重录 B → 对比 → 接受或回退 → 下一轮**。每轮报告和修改记录自动存档，重开项目可继续。首次使用请看[非程序员简单使用说明](docs/quick-start.md)，更多细节见[完整使用说明](docs/optimization-loop.md)。
+当前主流程：**新建／打开优化项目 → 创建／选择命名场景 → 导入 A → 一键诊断并定位 → 选择修改 AI → 开始优化 → 手动重录 B → 对比 → 接受或回退 → 下一轮**。每个场景独立保存轮次、目标与历史；每轮报告和修改记录自动存档，重开项目恢复上次场景。场景间共用工程代码，其他场景修改后需要重录。首次使用请看[非程序员简单使用说明](docs/quick-start.md)，更多细节见[完整使用说明](docs/optimization-loop.md)。
 
 面向 Unity Profiler 离线录制的本地桌面分析原型，使用 Tauri 2、React / TypeScript 和 Rust。已有验收基线是 **Windows 上的 Unity 6000.3 可信分析**，通过 ACP Agent 与 MCP 数据查询辅助诊断。新增 macOS 桌面适配、命令检测、会话进程回收、插件安装及 Apple Silicon / Intel CI，开发和验证范围见 [macOS 支持说明](docs/macos-support.md)。
 
@@ -87,7 +87,7 @@ macOS 上执行 `npm run tauri:build -- --bundles app,dmg`，生成 `src-tauri/t
 ## 当前使用流程
 
 1. 点击 **新建优化项目**，选择 Unity 工程目录；已有项目从首页最近列表或 **打开优化项目** 进入。
-2. **导入录制 A**：可用 Unity 6000.3.23f1 / 6000.3.9f1 `.data` 或 [Editor dump JSON](docs/unity-scripts/ExtractProfilerDump.README.md)。支持范围、估算及缺失指标详见[布局验证](docs/unity6-layout-research.md)。
+2. 在“优化场景”中新建并命名测试情境（如“主城跑图”），填写复现说明，确认录制来自当前代码后，**导入录制 A**：可用 Unity 6000.3.23f1 / 6000.3.9f1 `.data` 或 [Editor dump JSON](docs/unity-scripts/ExtractProfilerDump.README.md)。支持范围、估算及缺失指标详见[布局验证](docs/unity6-layout-research.md)。
 3. 可先在“Unity 插件”区域检查并安装工程内嵌插件（需关闭目标 Editor），随后打开 Unity 等待编译；提交插件目录及包配置后，团队不依赖个人目录。未安装也可离线分析。选择已安装并登录的分析 AI，点击 **一键诊断并定位**。两阶段分别开启会话；Editor 不可用时继续离线定位并说明缺口。
 4. 定位完成后独立选择修改 AI，点击 **开始优化**。无需逐项授权代码路径；每次使用新会话，修改与新增均记录备份。
 5. 查看结果，自行复测玩法并录制 B。**导入复测录制 B → 对比 A 与 B → 接受或回退 → 开始下一轮**。

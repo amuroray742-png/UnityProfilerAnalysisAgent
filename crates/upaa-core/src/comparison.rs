@@ -149,6 +149,8 @@ mod tests {
             ))
             .unwrap();
         let mut a = Capture {
+            scene_id: String::new(),
+            code_revision: Some(0),
             id: "a".into(),
             path: PathBuf::new(),
             hash: String::new(),

@@ -16,6 +16,7 @@ pub struct Progress {
 }
 pub fn new_round(baseline: String) -> Round {
     Round {
+        scene_id: String::new(),
         workflow: Progress::default(),
         task_version: 1,
         task_verifications: BTreeMap::new(),
@@ -38,10 +39,7 @@ fn round_mut<'a>(d: &'a mut Project, id: &str) -> Result<&'a mut Round, String> 
         .ok_or("轮次不存在".into())
 }
 fn live_round(d: &Project, id: &str) -> Result<(), String> {
-    if d.rounds.last().is_none_or(|r| r.id != id) {
-        return Err("历史轮次只读，请继续当前轮次".into());
-    }
-    Ok(())
+    scenes::round_access(d, id, true)
 }
 pub fn project_available(root: &Path) -> Result<(), String> {
     if root.canonicalize().ok().as_deref() != Some(root)
@@ -87,17 +85,26 @@ fn progress(
 }
 pub fn next_round(w: &Workspace) -> Result<(), String> {
     let mut d = w.data.lock().unwrap();
-    let r = d.rounds.last().ok_or("尚无轮次")?;
+    scenes::access(&d, &d.active_scene_id)?;
+    let r = scenes::current(&d, &d.active_scene_id).ok_or("尚无轮次")?;
+    if scenes::unresolved(r) {
+        return Err("请先解决本轮修改冲突".into());
+    }
     let baseline = match r.decision.as_str() {
         "accepted" => r.candidate.clone().ok_or("接受前需要导入 B 并完成对比")?,
         "rolled_back" => r.baseline.clone(),
         _ => return Err("请先接受或成功回退当前轮次".into()),
     };
-    if !d.captures.iter().any(|c| c.id == baseline) {
+    if !d
+        .captures
+        .iter()
+        .any(|c| c.id == baseline && c.scene_id == d.active_scene_id)
+    {
         return Err("基线录制索引不存在，不能开始下一轮".into());
     }
     let rolled = r.decision == "rolled_back";
     let mut next = new_round(baseline);
+    next.scene_id = d.active_scene_id.clone();
     if rolled {
         next.workflow.reason = Some("已沿用原 A；若当前工程与原录制不同，请导入新的 A".into());
     }
@@ -105,8 +112,9 @@ pub fn next_round(w: &Workspace) -> Result<(), String> {
     w.save(&d)
 }
 
-fn validate_capture_binding(d: &Project, role: &str) -> Result<(), String> {
-    if let Some(r) = d.rounds.last() {
+fn validate_capture_binding(d: &Project, scene: &str, role: &str) -> Result<(), String> {
+    scenes::access(d, scene)?;
+    if let Some(r) = scenes::current(d, scene) {
         if r.decision != "pending" {
             return Err("本轮已结束，请开始下一轮".into());
         }
@@ -140,13 +148,15 @@ pub async fn bind_capture(
     if !["a", "b"].contains(&role.as_str()) {
         return Err("录制角色无效".into());
     }
+    let scene = w.data.lock().unwrap().active_scene_id.clone();
     let rid = {
         let d = w.data.lock().unwrap();
-        validate_capture_binding(&d, &role)?;
-        w.busy.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        validate_capture_binding(&d, &scene, &role)?;
+        w.busy
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .map_err(|_| "任务正在运行，请先停止")?;
         w.cancelled.store(false, Ordering::SeqCst);
-        d.rounds.last().map(|r| r.id.clone())
+        scenes::current(&d, &scene).map(|r| r.id.clone())
     };
     struct ImportGuard(Arc<Workspace>);
     impl Drop for ImportGuard {
@@ -155,41 +165,47 @@ pub async fn bind_capture(
         }
     }
     let _import_guard = ImportGuard(w.clone());
-    let progress =
-        observation::ParseProgress::new(w.clone(), rid.clone().unwrap_or_default(), operation_id.unwrap_or_else(id));
-    let c = match commands::capture_observed(
-        path,
-        Conditions::default(),
-        Some(progress.clone()),
+    let progress = observation::ParseProgress::new(
+        w.clone(),
+        rid.clone().unwrap_or_default(),
+        operation_id.unwrap_or_else(id),
     )
-    .await
-    {
-        Ok(c) => c,
-        Err(e) => {
-            progress.fail(&e);
-            return Err(e);
-        }
-    };
+    .with_scene(scene.clone());
+    let mut c =
+        match commands::capture_observed(path, Conditions::default(), Some(progress.clone())).await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                progress.fail(&e);
+                return Err(e);
+            }
+        };
     progress.update("save", None, None, "running", None);
     let mut saved = w.data.lock().unwrap();
     if w.cancelled.load(Ordering::SeqCst) {
         progress.fail("导入已取消");
         return Err("导入已取消".into());
     }
-    let validation = if saved.rounds.last().map(|r| &r.id) != rid.as_ref() {
+    let validation = if scenes::current(&saved, &scene).map(|r| &r.id) != rid.as_ref() {
         Err("当前轮次已变化，请重新导入".into())
     } else {
-        validate_capture_binding(&saved, &role)
+        validate_capture_binding(&saved, &scene, &role)
     };
     if let Err(e) = validation {
         progress.fail(&e);
         return Err(e);
     }
     let mut d = saved.clone();
+    c.scene_id = scene.clone();
+    c.code_revision = Some(d.code_revision);
+    if let Some(s) = d.scenes.iter().find(|s| s.id == scene) {
+        c.conditions.scenario = s.name.clone();
+        c.conditions.operation = s.description.clone();
+    }
     let cid = c.id.clone();
     d.captures.push(c);
     if role == "a" {
-        if let Some(r) = d.rounds.last_mut() {
+        if let Some(r) = d.rounds.iter_mut().rev().find(|r| r.scene_id == scene) {
             r.baseline = cid;
             r.reports.clear();
             r.tasks.clear();
@@ -204,12 +220,20 @@ pub async fn bind_capture(
                 ..Progress::default()
             };
         } else {
-            d.rounds.push(new_round(cid));
+            let mut r = new_round(cid);
+            r.scene_id = scene.clone();
+            d.rounds.push(r);
         }
     } else {
-        let r = d.rounds.last_mut().unwrap();
+        let r = d
+            .rounds
+            .iter_mut()
+            .rev()
+            .find(|r| r.scene_id == scene)
+            .unwrap();
         r.candidate = Some(cid);
         r.comparison = None;
+        r.task_verifications.clear();
     }
     if let Err(e) = w.save(&d) {
         progress.fail(&e);
@@ -229,9 +253,27 @@ pub async fn bind_capture(
 )]
 pub enum Action {
     Recent,
-    PluginStatus { project_id: String },
-    PluginInstall { project_id: String },
-    PluginRecords { project_id: String },
+    SceneCreate {
+        name: String,
+        description: String,
+    },
+    SceneEdit {
+        name: String,
+        description: String,
+    },
+    SceneSelect,
+    SceneComplete {
+        completed: bool,
+    },
+    PluginStatus {
+        project_id: String,
+    },
+    PluginInstall {
+        project_id: String,
+    },
+    PluginRecords {
+        project_id: String,
+    },
     Activity {
         round_id: String,
         run_id: String,
@@ -260,6 +302,8 @@ pub enum Action {
         path: PathBuf,
         role: String,
         operation_id: Option<String>,
+        #[serde(default)]
+        current_code_confirmed: bool,
     },
     Analyze {
         round_id: String,
@@ -316,6 +360,7 @@ fn remember(app: &tauri::AppHandle, w: &Workspace) -> Result<(), String> {
 #[tauri::command(rename_all = "camelCase")]
 pub async fn workflow_command(
     action: Action,
+    scene_id: Option<String>,
     app: tauri::AppHandle,
     state: tauri::State<'_, commands::OptimizationState>,
     app_state: tauri::State<'_, crate::state::AppState>,
@@ -367,18 +412,102 @@ pub async fn workflow_command(
         .await
         .clone()
         .ok_or("请先新建或打开优化项目")?;
-    if let Action::PluginStatus { project_id } | Action::PluginInstall { project_id } | Action::PluginRecords { project_id } = &action {
-        if w.data.lock().unwrap().id != *project_id { return Err("工程身份已变化，请重新打开状态".into()); }
-        if w.busy.load(Ordering::SeqCst) { return Err("请先停止当前任务，再检查或安装插件".into()); }
-        if !app_state.0.lock().await.active_sessions.is_empty() { return Err("请先停止诊断会话".into()); }
+    if matches!(
+        action,
+        Action::SceneCreate { .. }
+            | Action::SceneEdit { .. }
+            | Action::SceneSelect
+            | Action::SceneComplete { .. }
+    ) {
+        let mut saved = w.data.lock().unwrap();
+        let mut d = saved.clone();
+        let sid = scene_id.as_deref().unwrap_or("");
+        match action {
+            Action::SceneCreate { name, description } => {
+                if w.busy.load(Ordering::SeqCst) {
+                    return Err("请先停止当前任务".into());
+                }
+                scenes::create(&mut d, name, description)?;
+            }
+            Action::SceneSelect => {
+                scenes::select(&mut d, sid)?;
+            }
+            Action::SceneEdit { name, description } => {
+                scenes::edit(&mut d, sid, name, description)?;
+            }
+            Action::SceneComplete { completed } => {
+                if w.busy.load(Ordering::SeqCst) || d.rounds.iter().any(scenes::unresolved) {
+                    return Err("请先结束任务并接受或回退修改".into());
+                }
+                scenes::complete(&mut d, sid, completed)?;
+            }
+            _ => unreachable!(),
+        }
+        w.save(&d)?;
+        *saved = d;
+        drop(saved);
+        return Ok(commands::view(&w));
+    }
+    {
+        let d = w.data.lock().unwrap();
+        let rid = match &action {
+            Action::Analyze { round_id, .. }
+            | Action::Activity { round_id, .. }
+            | Action::RunText { round_id, .. }
+            | Action::Change { round_id, .. }
+            | Action::Report { round_id, .. }
+            | Action::Export { round_id, .. } => Some(round_id),
+            _ => None,
+        };
+        if let Some(rid) = rid {
+            let r = d.rounds.iter().find(|r| &r.id == rid).ok_or("轮次不存在")?;
+            if scene_id.as_ref().is_some_and(|s| s != &r.scene_id) {
+                return Err("轮次不属于此场景".into());
+            }
+            if matches!(action, Action::Analyze { .. }) && scene_id.as_ref() != Some(&r.scene_id) {
+                return Err("需要明确场景身份".into());
+            }
+        }
+        if matches!(action, Action::Bind { .. } | Action::Next) {
+            if scene_id.as_ref() != Some(&d.active_scene_id) {
+                return Err("场景已切换，请重新操作".into());
+            }
+            scenes::access(&d, &d.active_scene_id)?;
+        }
+    }
+    if let Action::PluginStatus { project_id }
+    | Action::PluginInstall { project_id }
+    | Action::PluginRecords { project_id } = &action
+    {
+        if w.data.lock().unwrap().id != *project_id {
+            return Err("工程身份已变化，请重新打开状态".into());
+        }
+        if w.busy.load(Ordering::SeqCst) {
+            return Err("请先停止当前任务，再检查或安装插件".into());
+        }
+        if !app_state.0.lock().await.active_sessions.is_empty() {
+            return Err("请先停止诊断会话".into());
+        }
         let install = matches!(action, Action::PluginInstall { .. });
         let records = matches!(action, Action::PluginRecords { .. });
         let work = w.clone();
-        let result = tokio::task::spawn_blocking(move || if install { plugin::install(&work) } else { plugin::status(&work) }).await.map_err(|e|e.to_string())??;
-        if records { return Ok(json!(result.record)); }
-        let root=w.data.lock().unwrap().root.clone();
-        let mut value=json!(result);
-        value["editor"]=json!(crate::project::editor::status(&root, &std::sync::atomic::AtomicBool::new(false)).await);
+        let result = tokio::task::spawn_blocking(move || {
+            if install {
+                plugin::install(&work)
+            } else {
+                plugin::status(&work)
+            }
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        if records {
+            return Ok(json!(result.record));
+        }
+        let root = w.data.lock().unwrap().root.clone();
+        let mut value = json!(result);
+        value["editor"] = json!(
+            crate::project::editor::status(&root, &std::sync::atomic::AtomicBool::new(false)).await
+        );
         return Ok(value);
     }
     {
@@ -406,7 +535,7 @@ pub async fn workflow_command(
                 return Err("工作记录不属于此轮次".into());
             }
         }
-        let page = observation::read(&w.directory, run_id, *cursor)?;
+        let mut page = observation::read(&w.directory, run_id, *cursor)?;
         let pid = w.data.lock().unwrap().id.clone();
         if page["rows"].as_array().is_some_and(|rows| {
             rows.iter().any(|r| {
@@ -414,6 +543,24 @@ pub async fn workflow_command(
             })
         }) {
             return Err("活动日志身份不匹配".into());
+        }
+        let sid = w
+            .data
+            .lock()
+            .unwrap()
+            .rounds
+            .iter()
+            .find(|r| r.id == *round_id)
+            .unwrap()
+            .scene_id
+            .clone();
+        if let Some(rows) = page["rows"].as_array_mut() {
+            for row in rows {
+                if row.get("sceneId").is_some_and(|v| v != &json!(sid)) {
+                    return Err("活动场景身份不匹配".into());
+                }
+                row["sceneId"] = json!(sid);
+            }
         }
         return Ok(page);
     }
@@ -582,7 +729,11 @@ pub async fn workflow_command(
             path,
             role,
             operation_id,
+            current_code_confirmed,
         } => {
+            if !current_code_confirmed {
+                return Err("请确认录制来自当前工程代码".into());
+            }
             bind_capture(w.clone(), path, role, operation_id).await?;
         }
         Action::Analyze {
@@ -947,8 +1098,19 @@ pub fn export_round(w: &Workspace, rid: &str) -> Result<String, String> {
     let d = w.data.lock().unwrap();
     let r = d.rounds.iter().find(|r| r.id == rid).ok_or("轮次不存在")?;
     let mut text = format!(
-        "# {} · 本轮优化记录\n\n工程：{}\n\n玩法确认：{} · 决定：{}\n\n",
+        "# {} · {} · 第 {} 轮优化记录\n\n工程：{}\n\n玩法确认：{} · 决定：{}\n\n",
         d.name,
+        d.scenes
+            .iter()
+            .find(|s| s.id == r.scene_id)
+            .map(|s| s.name.as_str())
+            .unwrap_or("默认场景"),
+        d.rounds
+            .iter()
+            .filter(|q| q.scene_id == r.scene_id)
+            .position(|q| q.id == rid)
+            .unwrap_or(0)
+            + 1,
         d.root.display(),
         r.correctness,
         r.decision

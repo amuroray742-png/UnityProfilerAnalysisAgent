@@ -14,19 +14,19 @@ export function activityBlocks(rows:ActivityRow[]){
  }
  return blocks;
 }
-export function WorkActivity({projectId,roundId,runId,agent,stage,status,startedAt,onStop}:{projectId:string;roundId:string;runId:string;agent:string;stage:string;status:string;startedAt?:string;onStop?:()=>void}){
+export function WorkActivity({sceneId,projectId,roundId,runId,agent,stage,status,startedAt,onStop}:{sceneId?:string;projectId:string;roundId:string;runId:string;agent:string;stage:string;status:string;startedAt?:string;onStop?:()=>void}){
  const [rows,setRows]=useState<ActivityRow[]>([]),[available,setAvailable]=useState(true),[error,setError]=useState(''),[more,setMore]=useState(false),[limited,setLimited]=useState(false),[follow,setFollow]=useState(true),[tick,setTick]=useState(Date.now());
  const cursor=useRef(0),box=useRef<HTMLDivElement>(null),loadRef=useRef<()=>void>(()=>{});
  const running=status==='running';const liveStatus=useRef(running);liveStatus.current=running;
  useEffect(()=>{
   let live=true,busy=false,followUpdates=liveStatus.current;cursor.current=0;setRows([]);setAvailable(true);setError('');setFollow(true);setMore(false);setLimited(false);
-  async function load(){if(!live||busy)return;busy=true;try{const p=await invoke<ActivityPage>('workflow_command',{action:{op:'activity',roundId,runId,cursor:cursor.current}});if(!live)return;
-   const valid=p.rows.filter(r=>r.projectId===projectId&&r.roundId===roundId&&r.runId===runId&&r.sequence>=cursor.current);
+  async function load(){if(!live||busy)return;busy=true;try{const p=await invoke<ActivityPage>('workflow_command',{...(sceneId?{sceneId}:{}),action:{op:'activity',roundId,runId,cursor:cursor.current}});if(!live)return;
+   const valid=p.rows.filter(r=>r.projectId===projectId&&(!sceneId||r.sceneId===sceneId)&&r.roundId===roundId&&r.runId===runId&&r.sequence>=cursor.current);
    setRows(old=>{const ids=new Set(old.map(r=>r.sequence));return [...old,...valid.filter(r=>!ids.has(r.sequence))];});cursor.current=p.nextCursor;setAvailable(p.available);setMore(p.hasMore);setLimited(!!p.limited);setError('');followUpdates=liveStatus.current||(followUpdates&&p.hasMore);
   }catch(e){if(live)setError(String(e));}finally{busy=false;}}
   loadRef.current=()=>{void load();};void load();
   const timer=setInterval(()=>{if(live&&followUpdates){setTick(Date.now());void load();}},650);
-  const unlisten=listen<ActivityRow>('workflow-activity',e=>{if(e.payload.projectId===projectId&&e.payload.roundId===roundId&&e.payload.runId===runId)void load();}).catch(()=>()=>{});
+  const unlisten=listen<ActivityRow>('workflow-activity',e=>{if(e.payload.projectId===projectId&&(!sceneId||e.payload.sceneId===sceneId)&&e.payload.roundId===roundId&&e.payload.runId===runId)void load();}).catch(()=>()=>{});
   return()=>{live=false;if(timer)clearInterval(timer);void unlisten.then(f=>f());};
  },[projectId,roundId,runId]);
  useEffect(()=>{if(follow&&box.current)box.current.scrollTop=box.current.scrollHeight;},[rows,follow]);

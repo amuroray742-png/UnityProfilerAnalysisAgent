@@ -133,6 +133,8 @@ impl Workspace {
                 evidence: String,
                 instructions: String,
                 acceptance: String,
+                #[serde(default)]
+                marker_names: Vec<String>,
             }
             let task: Request = serde_json::from_value(args).map_err(|e| e.to_string())?;
             if !["optimize", "marker", "investigate"].contains(&task.kind.as_str())
@@ -162,6 +164,7 @@ impl Workspace {
             {
                 return Err("任务过大".into());
             }
+            super::sampling::validate_names(&task.kind, &task.marker_names)?;
             let next = Task {
                 id: task.id.clone(),
                 kind: task.kind.clone(),
@@ -170,6 +173,7 @@ impl Workspace {
                 files: BTreeMap::new(),
                 instructions: task.instructions,
                 acceptance: task.acceptance,
+                marker_names: task.marker_names,
                 constraints: run.requirements.clone(),
                 selected: task.kind != "investigate",
             };
@@ -253,6 +257,7 @@ impl Workspace {
         let count = additions.len();
         let start = run.changes.len();
         run.changes.extend(additions.clone());
+        scenes::touch_run(&mut data, run_id)?;
         if let Err(e) = self.save(&data) {
             data.rounds
                 .iter_mut()

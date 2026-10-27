@@ -11,6 +11,9 @@ pub struct Task {
     pub files: BTreeMap<String, String>,
     pub instructions: String,
     pub acceptance: String,
+    /// Fixed sampling names; absent in older archives.
+    #[serde(default)]
+    pub marker_names: Vec<String>,
     pub constraints: String,
     pub selected: bool,
 }
@@ -70,6 +73,7 @@ pub fn validate_tasks(tasks: &[Task], root: &Path) -> Result<(), String> {
     }
     let mut ids = std::collections::HashSet::new();
     for t in tasks {
+        validate_names(&t.kind, &t.marker_names)?;
         if !ids.insert(&t.id)
             || !["optimize", "marker"].contains(&t.kind.as_str())
             || t.title.is_empty()
@@ -88,6 +92,25 @@ pub fn validate_tasks(tasks: &[Task], root: &Path) -> Result<(), String> {
                 return Err(format!("{p} 已变化，请重新读取并确认任务"));
             }
         }
+    }
+    Ok(())
+}
+
+pub fn validate_names(kind: &str, names: &[String]) -> Result<(), String> {
+    let mut seen = std::collections::HashSet::new();
+    if names.len() > 3
+        || (!names.is_empty() && kind != "marker")
+        || names.iter().any(|name| {
+            name.trim().is_empty()
+                || name.len() > 200
+                || name.chars().any(char::is_control)
+                || !seen.insert(name)
+        })
+    {
+        return Err(
+            "仅 Marker 任务可记录最多 3 个不同的固定采样名称（每个 1..200 字节，无控制字符）"
+                .into(),
+        );
     }
     Ok(())
 }

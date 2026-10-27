@@ -206,7 +206,7 @@ impl Workspace {
         event: &crate::acp_client::DiagnoseEvent,
     ) -> Result<(), String> {
         use crate::acp_client::DiagnoseEvent::*;
-        let (pid, rid) = {
+        let (pid, rid, sid) = {
             let d = self.data.lock().unwrap();
             let Some(r) = d.rounds.iter().find(|r| {
                 r.runs
@@ -215,7 +215,7 @@ impl Workspace {
             }) else {
                 return Ok(());
             };
-            (d.id.clone(), r.id.clone())
+            (d.id.clone(), r.id.clone(), r.scene_id.clone())
         };
         let mut d = self.data.lock().unwrap();
         let run = d
@@ -241,7 +241,7 @@ impl Workspace {
                 return Err(error);
             }
         }
-        self.activity(&pid, &rid, run_id, event)?;
+        self.activity_in(&sid, &pid, &rid, run_id, event)?;
         match event {
             SessionCreated { acp_session_id } => run.session_id = acp_session_id.clone(),
             Chunk { text } => {
@@ -314,7 +314,7 @@ pub fn schemas() -> Value {
         {"name":"optimization_context","description":"默认分页读取本轮持久化任务、限制、检查及既有修改。编辑前读完任务页面。报告正文及资源证据用 report_id 按需分页读取，不续接聊天历史。","inputSchema":{"type":"object","properties":{"start":{"type":"integer","minimum":0},"report_id":{"type":"string"}},"additionalProperties":false}},
         {"name":"optimization_read","description":"读取本会话允许的工程代码（自动模式可继续调查），编辑必须先读取，返回行号和当前指纹，按 nextStart 续页。","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1}},"required":["path"],"additionalProperties":false}},
         {"name":"optimization_replace","description":"在批准文件中唯一原文替换，保留编码与换行，持久化备份后原子写入。必须先读取最新指纹；不允许新增/删除/改名。取消保留已写改动。","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"},"path":{"type":"string"},"expected_hash":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["task_id","path","expected_hash","old_text","new_text"],"additionalProperties":false}},
-        {"name":"optimization_task","description":"自动优化会话记录或更新内部任务。调查后补充证据再执行，不需要用户逐项勾选。","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["optimize","marker","investigate"]},"title":{"type":"string"},"evidence":{"type":"string"},"instructions":{"type":"string"},"acceptance":{"type":"string"}},"required":["id","kind","title","evidence","instructions","acceptance"],"additionalProperties":false}},
+        {"name":"optimization_task","description":"自动优化会话记录或更新内部任务。调查后补充证据再执行，不需要用户逐项勾选。","inputSchema":{"type":"object","properties":{"id":{"type":"string"},"kind":{"type":"string","enum":["optimize","marker","investigate"]},"title":{"type":"string"},"evidence":{"type":"string"},"instructions":{"type":"string"},"acceptance":{"type":"string"},"marker_names":{"type":"array","maxItems":3,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":200},"description":"Marker 任务实际使用的固定采样名称；重录 B 后精确查询，不代表问题已解决"}},"required":["id","kind","title","evidence","instructions","acceptance"],"additionalProperties":false}},
         {"name":"optimization_create","description":"自动模式在 Assets 下新增代码和必要目录，后端管理 meta 与回退；绝不覆盖已有文件。先记录有证据的任务。","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"},"path":{"type":"string"},"content":{"type":"string"}},"required":["task_id","path","content"],"additionalProperties":false}},
         {"name":"optimization_check","description":"请求匹配工程的固定编译/Shader 检查与用户选择的 EditMode 测试，每个新会话最多 3 次。检查未完成不能宣称通过。","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}
     ]})
