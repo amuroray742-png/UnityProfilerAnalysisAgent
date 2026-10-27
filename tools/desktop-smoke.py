@@ -21,6 +21,8 @@ import urllib.error
 def main():
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser()
+    parser.add_argument('--scene-reopen', type=Path, help='Reopen previous public scene acceptance records in a fresh application process')
+    parser.add_argument('--scenes', action='store_true', help='Public scene hierarchy UI and IPC acceptance, no Agent')
     parser.add_argument('--plugin-install', action='store_true', help='Public embedded plugin install and migration')
     parser.add_argument('--application', type=Path, default=root / 'src-tauri/target/release/unity-profiler-analysis-agent.exe')
     parser.add_argument('--driver', type=Path, default=root / '.cache/webdriver/bin/tauri-driver.exe')
@@ -90,7 +92,7 @@ def main():
     for path in (args.application, args.driver, args.native_driver):
         if not path.is_file():
             raise FileNotFoundError(path)
-    output = root / '.cache' / ('desktop-diagnosed-a' if args.replace_diagnosed_a else 'desktop-plugin' if args.plugin_install else 'desktop-history-replay' if args.history_replay else 'desktop-progress' if args.history_progress else 'desktop-history' if args.history_activity else 'desktop-workflow-saved' if args.workflow_saved else 'desktop-workflow' if args.project_workflow else 'desktop-optimization-saved' if args.optimization_saved else 'desktop-optimization' if args.optimization_loop else 'desktop-reports' if args.report_source else 'desktop-render' if args.render_input else 'desktop-memory' if args.measure_input else 'desktop-ui' if args.ui else 'desktop-smoke')
+    output = root / '.cache' / ('desktop-scenes-reopen' if args.scene_reopen else 'desktop-scenes' if args.scenes else 'desktop-diagnosed-a' if args.replace_diagnosed_a else 'desktop-plugin' if args.plugin_install else 'desktop-history-replay' if args.history_replay else 'desktop-progress' if args.history_progress else 'desktop-history' if args.history_activity else 'desktop-workflow-saved' if args.workflow_saved else 'desktop-workflow' if args.project_workflow else 'desktop-optimization-saved' if args.optimization_saved else 'desktop-optimization' if args.optimization_loop else 'desktop-reports' if args.report_source else 'desktop-render' if args.render_input else 'desktop-memory' if args.measure_input else 'desktop-ui' if args.ui else 'desktop-smoke')
     output.mkdir(parents=True, exist_ok=True)
     def port():
         with socket.socket() as sock:
@@ -173,6 +175,9 @@ def main():
             assert data['released']
             report['checks'] += ['public dump real IPC CPU/GC/null metrics', 'nested tree real IPC byte values', 'released capture no longer queryable']
             report['checks'].append('frame 10 exposes Worker and its 8 B allocation; frame 12 has only Main Thread')
+            if args.scenes or args.scene_reopen:
+                from desktop_scene_checks import run_scenes
+                run_scenes(js,lambda method,path,body=None: request(method,f'/session/{session}'+path,body),root,output,report,args.scene_reopen)
             if args.ui:
                 from desktop_ui_checks import run_ui
                 report['scope'] = 'Release rendered UI and real backend; only native picker response substituted; excludes native picker and MSI'

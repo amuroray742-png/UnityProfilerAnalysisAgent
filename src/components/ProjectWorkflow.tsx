@@ -1,3 +1,4 @@
+import { ScenePanel } from './ScenePanel';
 import { SamplingReview } from './SamplingReview';
 import { UnityPluginPanel } from './UnityPluginPanel';
 import { useEffect, useRef, useState } from 'react';
@@ -28,7 +29,10 @@ export function stepOf(round?:Round):number {
  return 1;
 }
 export function ProjectWorkflow(){
- const [project,setProject]=useState<Project|null>(null),[recents,setRecents]=useState<Recent[]>([]),[agents,setAgents]=useState<AgentPreset[]>([]);
+ const [storedProject,setProject]=useState<Project|null>(null),[recents,setRecents]=useState<Recent[]>([]),[agents,setAgents]=useState<AgentPreset[]>([]);
+ const scene=storedProject?.scenes?.find(s=>s.id===storedProject.activeSceneId);
+ const project=storedProject?.scenes?{...storedProject,rounds:storedProject.rounds.filter(r=>r.sceneId===scene?.id),captures:storedProject.captures.filter(c=>c.sceneId===scene?.id),budgets:scene?.budgets??{}}:storedProject;
+ const [captureConfirmed,setCaptureConfirmed]=useState(false);
  const [operation,setOperation]=useState(''),[loading,setLoading]=useState(false),[error,setError]=useState(''),[creating,setCreating]=useState(false),[root,setRoot]=useState(''),[name,setName]=useState(''),[directory,setDirectory]=useState('');
  const [analysis,setAnalysis]=useState(''),[localization,setLocalization]=useState(''),[modifier,setModifier]=useState(''),[requirements,setRequirements]=useState('');
  const [statistic,setStatistic]=useState<Statistic>('p95');
@@ -40,32 +44,34 @@ export function ProjectWorkflow(){
  const current=project?.rounds.at(-1),round=current;
  const [pluginBusy,setPluginBusy]=useState(false);
  const [pickingCapture,setPickingCapture]=useState(false);
- const busy=loading||pluginBusy||pickingCapture||!!project?.busy, step=stepOf(current),run=round?.runs.at(-1);
+ const sceneReadOnly=!!project?.scenes&&(!scene||scene.completed||!!scene.blockedBy);
+ const busy=loading||pluginBusy||pickingCapture||!!project?.busy||sceneReadOnly, step=stepOf(current),run=round?.runs.at(-1);
  const finished=!!current&&['accepted','rolled_back'].includes(current.decision);
  const baseline=project?.captures.find(c=>c.id===current?.baseline),previous=project?.rounds.at(-2);
  const inherited=previous?.decision==='accepted'&&previous.candidate===current?.baseline?'沿用上一轮 B':previous?.decision==='rolled_back'&&previous.baseline===current?.baseline?'沿用上一轮 A（上一轮已回退）':null;
  const canReplaceA=!!current&&current.decision==='pending'&&!current.runs.length&&current.workflow?.status!=='running'&&!current.reports.some(p=>p.status==='running');
  const replacementHint=current?.reports.length?'重新导入会放弃本轮已有诊断与定位结果，轮次编号不变，需要重新诊断。':'可直接使用本轮 A，或重新导入录制；开始优化后不能替换 A。';
  const complete=readyReport(current);
- useEffect(()=>{setConfirmed(false);setBRange('');},[current?.candidate]);
- const available=(id:string)=>!!agents.find(a=>a.id===id&&a.available);
+ useEffect(()=>{setConfirmed(false);setBRange('');setCaptureConfirmed(false);},[current?.candidate]);
+ useEffect(()=>{setCaptureConfirmed(false);},[project?.codeRevision,current?.runs.length]);
+ const available=(id:string)=>!scene?.needsRecording&&!!agents.find(a=>a.id===id&&a.available);
  async function refreshRecent(){setRecents(await invoke<Recent[]>('workflow_command',{action:{op:'recent'}}));}
  useEffect(()=>{let live=true;Promise.all([invoke<Project|null>('optimization_command',{action:{op:'get'}}),invoke<AgentPreset[]>('list_agents'),invoke<Recent[]>('workflow_command',{action:{op:'recent'}})]).then(([p,a,r])=>{if(live){setProject(p);setAgents(a);setRecents(r);setAnalysis(a.find(a=>a.available)?.id??'');}}).catch(e=>{if(live)setError(String(e));});return()=>{live=false;};},[]);
  useEffect(()=>{if(!project)return;let live=true;const timer=setInterval(()=>{const generation=epoch.current;invoke<Project>('optimization_command',{action:{op:'get'}}).then(p=>{if(live&&generation===epoch.current)setProject(p);}).catch(e=>{if(live)setError(String(e));});},1200);return()=>{live=false;clearInterval(timer);};},[project?.id]);
- useEffect(()=>{setBudgets(project?.budgets??{});setTests(current?.tests.join('\n')??'');setModifier(current?.runs.at(-1)?.agentId??'');setRequirements(current?.runs.at(-1)?.requirements??'');},[project?.id,current?.id]);
- useEffect(()=>{setInspect(false);setARange('');setBRange('');setConfirmed(false);setConditions({});},[project?.id,current?.id,current?.baseline]);
+ useEffect(()=>{setBudgets(project?.budgets??{});setTests(current?.tests.join('\n')??'');setModifier(current?.runs.at(-1)?.agentId??'');setRequirements(current?.runs.at(-1)?.requirements??'');},[project?.id,project?.activeSceneId,current?.id]);
+ useEffect(()=>{setInspect(false);setARange('');setBRange('');setConfirmed(false);setConditions({});setCaptureConfirmed(false);},[project?.id,project?.activeSceneId,current?.id,current?.baseline]);
  useEffect(()=>{if(!current)return;const a=current.workflow?.analysisAgent;if(a)setAnalysis(a);setLocalization(current.workflow?.localizationAgent&&current.workflow.localizationAgent!==a?current.workflow.localizationAgent:'');},[current?.id]);
  useEffect(()=>{const a=current?.reports.filter(p=>p.stage==='project'&&p.status==='completed').at(-1)?.agentId;if(a)setModifier(previous=>previous||a);},[current?.reports.length,current?.id]);
- useEffect(()=>{let alive=true;const pending=listen<ParseProgress>('workflow-progress',e=>{const p=e.payload,active=projectRef.current;if(alive&&active&&p.projectId===active.id&&(p.roundId===''||p.roundId===active.rounds.at(-1)?.id)&&(!parseOperation.current||p.operationId===parseOperation.current))setParseProgress(p);});return()=>{alive=false;void pending.then(f=>f()).catch(()=>{});};},[]);
- useEffect(()=>{if(project?.parseProgress){const p=project.parseProgress;if((p.roundId===current?.id||(p.roundId===''&&project.rounds.length<=1))&&(!parseOperation.current||parseOperation.current===p.operationId))setParseProgress(p);}},[project?.parseProgress,current?.id]);
- useEffect(()=>{parseOperation.current=null;setParseProgress(null);setView('current');},[project?.id]);
- async function call(command:string,action:Record<string,unknown>){if(inFlight.current)return;if(action.op==='startAutomatic'){parseOperation.current=null;setParseProgress(null);}inFlight.current=true;setOperation(String(action.op));setLoading(true);setError('');++epoch.current;try{const p=await invoke<Project|null>(command,{action});setProject(p);if(action.op==='next'){parseOperation.current=null;setParseProgress(null);}return p;}catch(e){setError(String(e));return undefined;}finally{++epoch.current;inFlight.current=false;setLoading(false);setOperation('');}}
+ useEffect(()=>{let alive=true;const pending=listen<ParseProgress>('workflow-progress',e=>{const p=e.payload,active=projectRef.current;if(alive&&active&&p.projectId===active.id&&(!p.sceneId||p.sceneId===active.activeSceneId)&&(p.roundId===''||p.roundId===active.rounds.at(-1)?.id)&&(!parseOperation.current||p.operationId===parseOperation.current))setParseProgress(p);});return()=>{alive=false;void pending.then(f=>f()).catch(()=>{});};},[]);
+ useEffect(()=>{if(project?.parseProgress){const p=project.parseProgress;if((!p.sceneId||p.sceneId===project.activeSceneId)&&(p.roundId===current?.id||(p.roundId===''&&project.rounds.length<=1))&&(!parseOperation.current||parseOperation.current===p.operationId))setParseProgress(p);}},[project?.parseProgress,current?.id]);
+ useEffect(()=>{parseOperation.current=null;setParseProgress(null);setView('current');},[project?.id,project?.activeSceneId]);
+ async function call(command:string,action:Record<string,unknown>,sceneId=project?.activeSceneId){if(inFlight.current)return;if(action.op==='startAutomatic'){parseOperation.current=null;setParseProgress(null);}inFlight.current=true;setOperation(String(action.op));setLoading(true);setError('');++epoch.current;try{const p=await invoke<Project|null>(command,{action,...(sceneId?{sceneId}: {})});setProject(p);if(action.op==='next'||action.op==='sceneSelect'){setCaptureConfirmed(false);parseOperation.current=null;setParseProgress(null);}return p;}catch(e){setError(String(e));return undefined;}finally{++epoch.current;inFlight.current=false;setLoading(false);setOperation('');}}
  async function stop(){try{await invoke('optimization_command',{action:{op:'cancel'}});}catch(e){setError(String(e));}}
  const flow=(action:Record<string,unknown>)=>call('workflow_command',action);
  const opt=(action:Record<string,unknown>)=>call('optimization_command',action);
  async function chooseRoot(){try{const path=await open({directory:true,title:'选择 Unity 工程根目录'});if(typeof path==='string'){setRoot(path);setName(path.replace(/[\\/]+$/,'').split(/[\\/]/).at(-1)??'优化项目');}}catch(e){setError(String(e));}}
  async function openProject(path?:string){try{const directory=path??await open({directory:true,title:'打开优化项目存档目录'});if(typeof directory==='string'){await flow({op:'open',directory});}}catch(e){setError(String(e));}}
- async function importCapture(role:'a'|'b'){if(busy)return;setPickingCapture(true);try{const path=await open({multiple:false,title:role==='a'?'选择优化前录制 A':'选择重新录制的 B',filters:[{name:'Profiler',extensions:['data','json','raw','pd3u']}]});if(typeof path==='string'){const operationId=crypto.randomUUID();parseOperation.current=operationId;setParseProgress({projectId:project!.id,roundId:current?.id??'',operationId,stage:'verify',status:'running',done:null,total:null});await flow({op:'bind',path,role,operationId});}}catch(e){setError(String(e));}finally{setPickingCapture(false);}}
+ async function importCapture(role:'a'|'b'){if(busy)return;if(project?.scenes&&!captureConfirmed){setError('请先确认录制来自当前工程代码');return;}setPickingCapture(true);try{const path=await open({multiple:false,title:role==='a'?'选择优化前录制 A':'选择重新录制的 B',filters:[{name:'Profiler',extensions:['data','json','raw','pd3u']}]});if(typeof path==='string'){const operationId=crypto.randomUUID();parseOperation.current=operationId;setParseProgress({projectId:project!.id,roundId:current?.id??'',operationId,sceneId:project?.activeSceneId,stage:'verify',status:'running',done:null,total:null});await flow({op:'bind',path,role,operationId,...(project?.scenes?{currentCodeConfirmed:true}:{})});}}catch(e){setError(String(e));}finally{setPickingCapture(false);}}
  async function analyze(restart=false){parseOperation.current=null;setParseProgress(null);if(current)await flow({op:'analyze',roundId:current.id,analysisAgent:analysis,localizationAgent:localization||analysis,restart});}
  async function compare(){if(!current)return;try{const parse=(s:string)=>{if(!s.trim())return null;const n=s.split('-').map(Number);if(n.length!==2||n.some(n=>!Number.isSafeInteger(n)||n<0)||n[0]>n[1])throw Error('帧区间应为起始帧-结束帧');return n;};const rangeA=parse(aRange),rangeB=parse(bRange);if(await saveOptions())await opt({op:'compare',roundId:current.id,candidateId:current.candidate,rangeA,rangeB,confirmed});}catch(e){setError(String(e));}}
  async function saveOptions(){if(!current)return;return opt({op:'update',roundId:current.id,tasks:current.tasks,budgets,conditions:Object.fromEntries((project?.captures??[]).map(c=>[c.id,{...c.conditions,...conditions[c.id]}])),tests:tests.split('\n').map(t=>t.trim()).filter(Boolean)});}
@@ -78,13 +84,15 @@ export function ProjectWorkflow(){
  {!project?<section className="workflow-card"><h2>优化项目</h2><p>先选择你的 Unity 工程。每一轮报告和修改记录都会自动保存在本机。</p><div className="workflow-actions"><button disabled={busy} onClick={()=>setCreating(true)}>新建优化项目</button><button disabled={busy} onClick={()=>openProject()}>打开优化项目</button></div>
  {creating&&<form onSubmit={async e=>{e.preventDefault();const p=await flow({op:'create',root,name:name.trim()||'优化项目',directory:directory||null});if(p)setCreating(false);}}><label>Unity 工程目录<input value={root} onChange={e=>setRoot(e.target.value)} placeholder="包含 Assets、Packages、ProjectSettings 的目录"/></label><button type="button" onClick={chooseRoot}>选择工程目录</button><label>项目名称<input value={name} onChange={e=>setName(e.target.value)}/></label><details><summary>高级设置：存档位置</summary><p>默认保存在应用数据目录，不能放在 Unity 工程内。</p><input aria-label="存档位置" value={directory} onChange={e=>setDirectory(e.target.value)}/><button type="button" onClick={async()=>{const d=await open({directory:true,title:'选择工程之外的空存档目录'});if(typeof d==='string')setDirectory(d);}}>选择存档位置</button></details><button className="primary" disabled={busy||!root.trim()} type="submit">创建并进入</button></form>}
  <h3>最近项目</h3>{recents.length?recents.map(r=><button className="recent-project" key={r.id} disabled={busy} onClick={()=>openProject(r.directory)}><strong>{r.name}</strong><span>{r.root}</span></button>):<p>还没有优化项目。</p>}</section>:<>
- <section className="workflow-card project-summary"><div className="workflow-heading"><div><h2>{project.name} · 第 {project.rounds.length||1} 轮</h2><p>{project.root}</p><p role="status">{project.saveError?`存档失败：${project.saveError}`:loading?'正在处理并保存…':'记录已自动保存到本机'}</p></div><button disabled={busy} onClick={goHome}>返回项目首页</button></div></section>
+ <section className="workflow-card project-summary"><div className="workflow-heading"><div><h2>{project.name}{scene?` · ${scene.name}`:null} · 第 {project.rounds.length||1} 轮</h2><p>{project.root}</p><p role="status">{project.saveError?`存档失败：${project.saveError}`:loading?'正在处理并保存…':'记录已自动保存到本机'}</p></div><button disabled={loading||pluginBusy||pickingCapture||project.busy} onClick={goHome}>返回项目首页</button></div></section>
+ {storedProject?.scenes&&<ScenePanel project={storedProject} pending={loading||pickingCapture||pluginBusy} onAction={(action,sid)=>call('workflow_command',action,sid)}/>}
  <nav className="project-tabs" aria-label="项目页面"><button aria-pressed={view==='current'} onClick={()=>setView('current')}>当前工作</button><button aria-pressed={view==='history'} onClick={()=>setView('history')}>历史轮次</button></nav>
- {view==='history'&&<HistoryPanel key={project.id} project={project}/>}
+ {view==='history'&&<HistoryPanel key={`${project.id}:${project.activeSceneId}`} project={project}/>}
  <div hidden={view!=='current'}>
  <UnityPluginPanel key={project.id} projectId={project.id} busy={loading||!!project.busy} onBusy={setPluginBusy}/>
  <section className="workflow-card">
  {project.rootAvailable===false&&<div role="alert">Unity 工程不可用，目前只能查看存档；恢复原目录后再继续。</div>}
+ {project.scenes&&!sceneReadOnly&&<label><input type="checkbox" checked={captureConfirmed} onChange={e=>setCaptureConfirmed(e.target.checked)}/>我确认即将导入的录制来自当前工程代码（文件导入时间不能证明录制时间）</label>}
  <ol className="workflow-steps">{['导入录制','诊断定位','优化代码','重录对比','本轮结论'].map((s,i)=><li key={s} aria-current={i===step?'step':undefined} className={i===step?'active':''}>{i+1}. {s}</li>)}</ol>
  {current?.workflow?.reason&&<p className="workflow-note">{current?.workflow?.reason}</p>}
  {project.busy||operation==='startAutomatic'?<div className="workflow-running"><h3>{pluginBusy?'正在检查或安装 Unity 插件…':current?.workflow?.status==='running'?(current?.workflow?.stage==='project'?'正在定位工程中的问题…':'正在诊断性能热点…'):'AI 正在优化和检查代码…'}</h3><p>记录持续保存。停止后可重新打开项目继续。</p>{!pluginBusy&&!current?.reports.some(p=>p.status==='running')&&!current?.runs.some(r=>r.status==='running')&&<button onClick={stop}>停止当前任务</button>}</div>:<div className="workflow-primary">
@@ -98,7 +106,7 @@ export function ProjectWorkflow(){
  {current?.runs.length&&!finished?<button disabled={busy||project.rootAvailable===false} onClick={()=>opt({op:'rollback',roundId:current.id})}>回退本轮修改</button>:null}
  </section>
  <ParseProgressPanel value={parseProgress}/>
- {current&&<CurrentActivity project={project} round={current} onStop={stop}/>}
+ {current&&<CurrentActivity key={`${project.id}:${scene?.id}:${current.id}`} project={project} round={current} onStop={stop}/>}
  {current?.runs.length?<section className="workflow-card"><h3>本轮优化结果</h3>{current.decision==='rolled_back'&&<p>代码已回退。以下是回退前的修改与检查记录，不代表当前仍保留这些修改。</p>}<p>改了什么：涉及 {new Set(current.runs.flatMap(r=>r.changes).filter(c=>!c.path.endsWith('.meta')&&c.kind!=='directory').map(c=>c.path)).size} 个代码文件。</p><ul>{current.tasks.filter(t=>t.kind!=='investigate').slice(0,3).map(t=><li key={t.id}>{t.title}</li>)}</ul><p>检查是否通过：{current.runs.at(-1)?.checks.length?label(current.runs.at(-1)!.checks.at(-1)!.status):'尚未编译验证'}{current.tests.length?'':'（未配置测试，仅检查编译）'}</p><p>{current.runs.at(-1)?.reason}</p><details><summary>查看 AI 的优化说明</summary><DiagnosisStream text={current.runs.at(-1)?.text??''} isStreaming={!!project.busy}/>{current.runs.at(-1)?.textPartial&&<p>此处为预览，完整报告可查看记录或导出。</p>}</details>{current.decision!=='rolled_back'&&current.tasks.some(t=>t.kind==='marker')&&<p>包含新增采样点，需要重新录制；补点不代表性能已经改善。</p>}</section>:null}
  {current&&<SamplingReview key={`${current.id}:${current.candidate}`} round={current} busy={busy} onVerify={(taskId,status)=>opt({op:'verifyTask',roundId:current.id,taskId,status})}/>}
  {current?.comparison&&<section className="workflow-card"><h3>A / B 对比</h3><p>性能结论：{current.performanceStatus}</p><p>{current.comparison.comparability} · 条件未知：{current.comparison.unknown.map(s=>conditionNames[s]??s).join('、')||'无'} · 条件不同：{current.comparison.mismatch.map(s=>conditionNames[s]??s).join('、')||'无'}</p><details><summary>查看其他分布统计</summary><label>统计口径<select value={statistic} onChange={e=>setStatistic(e.target.value as Statistic)}>{(['mean','p50','p95','p99','max'] as Statistic[]).map(s=><option key={s} value={s}>{s.toUpperCase()}</option>)}</select></label></details><table><thead><tr><th>指标 {statistic.toUpperCase()}</th><th>A（有效帧）</th><th>B（有效帧）</th><th>变化 B − A</th></tr></thead><tbody>{current.comparison.metrics.map(m=><tr key={m.metric}><td>{metricNames[m.metric]??m.metric}</td><td>{m.a[statistic]??'—'}（{m.a.validFrames}/{m.a.totalFrames}）</td><td>{m.b[statistic]??'—'}（{m.b.validFrames}/{m.b.totalFrames}）</td><td>{m.delta[statistic].absolute??'—'} / {m.delta[statistic].percent==null?'—':`${m.delta[statistic].percent.toFixed(1)}%`}</td></tr>)}</tbody></table><p>单次差异不能证明修改因果；请同时核对玩法与复现条件。</p></section>}
@@ -123,5 +131,5 @@ function CurrentActivity({project,round,onStop}:{project:Project;round:Round;onS
  useEffect(()=>{setSelected(latest??'');},[latest]);
  const active=sessions.find(s=>s.id===selected)??sessions.at(-1);
  if(!active)return null;
- return <><label>工作阶段<select aria-label="工作阶段" value={active.id} onChange={e=>setSelected(e.target.value)}>{sessions.map(s=><option key={s.id} value={s.id}>{s.stage} · {s.agent} · {label(s.status)}</option>)}</select></label><WorkActivity projectId={project.id} roundId={round.id} runId={active.id} stage={active.stage} agent={active.agent} status={active.status} startedAt={active.time} onStop={onStop}/></>;
+ return <><label>工作阶段<select aria-label="工作阶段" value={active.id} onChange={e=>setSelected(e.target.value)}>{sessions.map(s=><option key={s.id} value={s.id}>{s.stage} · {s.agent} · {label(s.status)}</option>)}</select></label><WorkActivity sceneId={round.sceneId} projectId={project.id} roundId={round.id} runId={active.id} stage={`${project.scenes?.find(s=>s.id===round.sceneId)?.name??''} · 第 ${project.rounds.findIndex(r=>r.id===round.id)+1} 轮 · ${active.stage}`} agent={active.agent} status={active.status} startedAt={active.time} onStop={onStop}/></>;
 }

@@ -106,6 +106,25 @@ impl Workspace {
         run: &str,
         event: &DiagnoseEvent,
     ) -> Result<(), String> {
+        let scene = self
+            .data
+            .lock()
+            .unwrap()
+            .rounds
+            .iter()
+            .find(|r| r.id == round)
+            .map(|r| r.scene_id.clone())
+            .unwrap_or_default();
+        self.activity_in(&scene, project, round, run, event)
+    }
+    pub fn activity_in(
+        &self,
+        scene: &str,
+        project: &str,
+        round: &str,
+        run: &str,
+        event: &DiagnoseEvent,
+    ) -> Result<(), String> {
         if let DiagnoseEvent::Chunk { text } = event {
             if text.len() > 16384 {
                 let mut rest = text.as_str();
@@ -114,7 +133,8 @@ impl Workspace {
                     while !rest.is_char_boundary(end) {
                         end -= 1;
                     }
-                    self.activity(
+                    self.activity_in(
+                        scene,
                         project,
                         round,
                         run,
@@ -145,7 +165,7 @@ impl Workspace {
             if offset >= ACTIVITY_LIMIT - 4096 {
                 return Ok(());
             }
-            let mut row = json!({"projectId":project,"roundId":round,"runId":run,"sequence":offset,"time":chrono::Utc::now().to_rfc3339(),"event":event});
+            let mut row = json!({"sceneId":scene,"projectId":project,"roundId":round,"runId":run,"sequence":offset,"time":chrono::Utc::now().to_rfc3339(),"event":event});
             let mut bytes = serde_json::to_vec(&row).map_err(|e| e.to_string())?;
             if offset + bytes.len() as u64 + 1 >= ACTIVITY_LIMIT - 4096 {
                 row["event"] = json!({"kind":"limited","message":"工作过程达到 10 MiB，后续活动未记录；完整报告和实际修改仍单独保存。"});
@@ -219,18 +239,34 @@ pub struct ParseProgress {
     project: String,
     round: String,
     operation: String,
+    scene: String,
     last: Arc<Mutex<Option<Instant>>>,
 }
 impl ParseProgress {
     pub fn new(w: Arc<Workspace>, round: String, operation: String) -> Self {
-        let project = w.data.lock().unwrap().id.clone();
+        let (project, scene) = {
+            let d = w.data.lock().unwrap();
+            (
+                d.id.clone(),
+                d.rounds
+                    .iter()
+                    .find(|r| r.id == round)
+                    .map(|r| r.scene_id.clone())
+                    .unwrap_or_else(|| d.active_scene_id.clone()),
+            )
+        };
         Self {
             workspace: w,
             project,
+            scene,
             round,
             operation,
             last: Arc::new(Mutex::new(None)),
         }
+    }
+    pub fn with_scene(mut self, scene: String) -> Self {
+        self.scene = scene;
+        self
     }
     pub fn update(
         &self,
@@ -240,7 +276,14 @@ impl ParseProgress {
         status: &str,
         reason: Option<String>,
     ) {
-        if status=="running" && self.workspace.cancelled.load(std::sync::atomic::Ordering::SeqCst){return;}
+        if status == "running"
+            && self
+                .workspace
+                .cancelled
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
         let mut last = self.last.lock().unwrap();
         let mut obs = self.workspace.observation.lock().unwrap();
         let same = obs.progress.as_ref().is_some_and(|v| {
@@ -254,7 +297,7 @@ impl ParseProgress {
             return;
         }
         *last = Some(Instant::now());
-        let row = json!({"projectId":self.project,"roundId":self.round,"operationId":self.operation,"stage":stage,"done":done,"total":total,"status":status,"reason":reason});
+        let row = json!({"sceneId":self.scene,"projectId":self.project,"roundId":self.round,"operationId":self.operation,"stage":stage,"done":done,"total":total,"status":status,"reason":reason});
         obs.progress = Some(row.clone());
         if let Some(notify) = &obs.notify {
             notify("workflow-progress", row);

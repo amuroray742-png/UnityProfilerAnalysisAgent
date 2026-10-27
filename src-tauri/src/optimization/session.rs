@@ -206,7 +206,7 @@ impl Workspace {
         event: &crate::acp_client::DiagnoseEvent,
     ) -> Result<(), String> {
         use crate::acp_client::DiagnoseEvent::*;
-        let (pid, rid) = {
+        let (pid, rid, sid) = {
             let d = self.data.lock().unwrap();
             let Some(r) = d.rounds.iter().find(|r| {
                 r.runs
@@ -215,7 +215,7 @@ impl Workspace {
             }) else {
                 return Ok(());
             };
-            (d.id.clone(), r.id.clone())
+            (d.id.clone(), r.id.clone(), r.scene_id.clone())
         };
         let mut d = self.data.lock().unwrap();
         let run = d
@@ -241,7 +241,7 @@ impl Workspace {
                 return Err(error);
             }
         }
-        self.activity(&pid, &rid, run_id, event)?;
+        self.activity_in(&sid, &pid, &rid, run_id, event)?;
         match event {
             SessionCreated { acp_session_id } => run.session_id = acp_session_id.clone(),
             Chunk { text } => {

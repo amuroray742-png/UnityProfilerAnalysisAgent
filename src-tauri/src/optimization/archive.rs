@@ -55,7 +55,7 @@ pub fn save(dir: &Path, data: &Project) -> Result<(), String> {
         plain(&dir.join(folder))?;
     }
     let mut value = serde_json::to_value(data).map_err(|e| e.to_string())?;
-    value["version"] = json!(3);
+    value["version"] = json!(4);
     for capture in value["captures"].as_array_mut().unwrap() {
         *capture = object(dir, capture)?;
     }
@@ -78,7 +78,7 @@ pub fn save(dir: &Path, data: &Project) -> Result<(), String> {
 }
 pub fn load(dir: &Path, bytes: &[u8]) -> Result<Project, String> {
     let mut v: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-    if v["version"] == 3 {
+    if v["version"] == 3 || v["version"] == 4 {
         for c in v["captures"].as_array_mut().ok_or("缺少录制索引")? {
             *c = resolve(dir, c)?;
         }

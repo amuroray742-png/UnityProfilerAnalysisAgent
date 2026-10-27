@@ -257,6 +257,7 @@ impl Workspace {
         let count = additions.len();
         let start = run.changes.len();
         run.changes.extend(additions.clone());
+        scenes::touch_run(&mut data, run_id)?;
         if let Err(e) = self.save(&data) {
             data.rounds
                 .iter_mut()

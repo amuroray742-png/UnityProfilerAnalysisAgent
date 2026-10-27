@@ -1,13 +1,14 @@
 //! Persistent optimization workspaces. No Agent owns the edit/rollback ledger.
-pub mod plugin;
 pub mod archive;
-pub mod observation;
 pub mod automatic;
 pub mod commands;
 pub mod comparison;
 pub mod editing;
-pub mod session;
+pub mod observation;
+pub mod plugin;
 pub mod sampling;
+pub mod scenes;
+pub mod session;
 pub mod storage;
 pub mod workflow;
 use crate::reports::Report;
@@ -50,6 +51,10 @@ pub struct Conditions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capture {
+    #[serde(default)]
+    pub scene_id: String,
+    #[serde(default)]
+    pub code_revision: Option<u64>,
     pub id: String,
     pub path: PathBuf,
     pub hash: String,
@@ -78,6 +83,8 @@ fn modify_kind() -> String {
 #[serde(rename_all = "camelCase")]
 pub struct Run {
     #[serde(default)]
+    pub sequence: u64,
+    #[serde(default)]
     pub automatic: bool,
     #[serde(default)]
     pub requirements: String,
@@ -101,6 +108,8 @@ pub struct Run {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Round {
+    #[serde(default)]
+    pub scene_id: String,
     #[serde(default)]
     pub workflow: workflow::Progress,
     #[serde(default)]
@@ -155,6 +164,14 @@ impl Round {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
+    #[serde(default)]
+    pub scenes: Vec<scenes::Scene>,
+    #[serde(default)]
+    pub active_scene_id: String,
+    #[serde(default)]
+    pub code_revision: u64,
+    #[serde(default)]
+    pub run_sequence: u64,
     pub version: u32,
     pub id: String,
     pub name: String,

@@ -34,8 +34,23 @@ fn setup(bytes: &[u8]) -> (Temp, Arc<Workspace>, String) {
     }
     std::fs::write(root.join("Assets/Work.cs"), bytes).unwrap();
     let w = Arc::new(Workspace::create(save, root, "公开测试".into()).unwrap());
+    {
+        let mut d = w.data.lock().unwrap();
+        scenes::create(&mut d, "测试场景".into(), String::new()).unwrap();
+        d.scenes[0].id = "test-scene".into(); d.active_scene_id = "test-scene".into();
+        let c = std::thread::spawn(|| {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let path = public_capture("editor-dump.json");
+            let p = rt.block_on(parser::parse_file(&path)).unwrap();
+            Capture { scene_id: "test-scene".into(), code_revision: Some(0), id: "a".into(),
+                hash: storage::hash(&std::fs::read(&path).unwrap()), path, conditions: Default::default(),
+                snapshot: extractor::extract(&p), frames: p.frames }
+        }).join().unwrap();
+        d.captures.push(c);
+    }
     let rid = id();
     w.data.lock().unwrap().rounds.push(Round {
+        scene_id: "test-scene".into(),
         workflow: Default::default(),
         task_version: 1,
         task_verifications: BTreeMap::new(),
@@ -193,9 +208,10 @@ fn later_round_dependency_prevents_old_backup_overwrite() {
     let run = w.begin(&second, "b".into()).unwrap();
     replace(&w, &run, "2", "3").unwrap();
     finish(&w, &run);
-    assert!(w.rollback(&r).unwrap_err().contains("后续"));
+    assert!(w.rollback(&r).unwrap_err().contains("历史"));
     w.rollback(&second).unwrap();
-    w.rollback(&r).unwrap();
+    assert!(w.rollback(&r).unwrap_err().contains("历史"));
+    assert_eq!(editing::read(&w.data.lock().unwrap().root, "Assets/Work.cs").unwrap(), b"class Work { int number = 2; }");
 }
 #[tokio::test]
 async fn diagnostic_store_cannot_access_edit_tools() {
@@ -400,8 +416,8 @@ async fn cross_capture_paths_ignore_numeric_ids_and_do_not_pair_renamed_markers(
     std::fs::write(&path_b, input.to_string()).unwrap();
     async fn capture(path: PathBuf) -> Capture {
         let p = parser::parse_file(&path).await.unwrap();
-        Capture {
-            id: id(),
+        Capture { scene_id: "test-scene".into(), code_revision: Some(0),
+id: id(),
             hash: storage::file_hash(&path, &std::sync::atomic::AtomicBool::new(false)).unwrap(),
             path,
             conditions: Conditions::default(),
@@ -460,6 +476,9 @@ fn restart_reconciles_prepared_writes_and_new_runs_invalidate_old_verdicts() {
         w.data.lock().unwrap().rounds[0].runs[0].changes[0].state,
         "applied"
     );
+    assert!(w.begin(&r, "b".into()).unwrap_err().contains("历史"));
+    // A still-pending round may retry; a finalized round must remain immutable.
+    w.data.lock().unwrap().rounds[0].decision = "pending".into();
     let retry = w.begin(&r, "b".into()).unwrap();
     assert_ne!(retry, run);
     let d = w.data.lock().unwrap();
@@ -725,7 +744,7 @@ fn version_one_migrates_with_original_backup() {
     let original = std::fs::read(directory.join("optimization.json")).unwrap();
     drop(w);
     let w = Workspace::open(directory.clone()).unwrap();
-    assert_eq!(w.data.lock().unwrap().version, 3);
+    assert_eq!(w.data.lock().unwrap().version, 4);
     assert_eq!(
         std::fs::read(directory.join("optimization.v1.backup.json")).unwrap(),
         original
@@ -823,8 +842,8 @@ async fn workflow_next_requires_decision_and_uses_correct_baseline() {
     let (_t, w, _r) = setup(b"class Work {}");
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/editor-dump.json");
     let profile = parser::parse_file(&path).await.unwrap();
-    w.data.lock().unwrap().captures.push(Capture {
-        id: "b".into(),
+    w.data.lock().unwrap().captures.push(Capture { scene_id: "test-scene".into(), code_revision: Some(0),
+id: "b".into(),
         path,
         hash: "test".into(),
         conditions: Conditions::default(),
@@ -1096,7 +1115,7 @@ async fn workflow_a_replacement_revalidates_round_before_commit() {
         assert!(workflow::bind_capture(w.clone(), public_capture("isolated-peak.json"), "a".into(), None).await.is_err());
         let d = w.data.lock().unwrap();
         assert_eq!(d.rounds[0].baseline, baseline);
-        assert_eq!(d.captures.len(), 1);
+        assert_eq!(d.captures.len(), 2);
         assert_eq!(d.rounds[0].reports.len(), 2);
         assert_eq!(std::fs::read(w.directory.join("optimization.json")).unwrap(), bytes);
         assert!(!w.busy.load(Ordering::SeqCst));
@@ -1188,6 +1207,7 @@ async fn automatic_real_agent(agent: &str) {
         .join(format!("../.cache/automatic-records-{}", id()));
     std::fs::create_dir(&records).unwrap();
     let w = Arc::new(Workspace::create(records, root.clone(), "公开自动优化验收".into()).unwrap());
+    scenes::create(&mut w.data.lock().unwrap(), "自动优化场景".into(), String::new()).unwrap();
     let (_fixture, template, r, _) = automatic_setup();
     let mut round = template.data.lock().unwrap().rounds[0].clone();
     round.runs.clear();
@@ -1447,7 +1467,8 @@ async fn marker_names_survive_storage_and_match_only_exact_leaf_paths() {
     assert_eq!(sampling::observe(&[old], &Ok(BTreeMap::new()))["rows"][0]["status"], "manual");
     let file=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/editor-dump.json");
     let p=unity_profiler_analysis_agent_lib::parser::parse_file(&file).await.unwrap();
-    let capture=Capture {id:"b".into(),path:file.clone(),hash:storage::hash(&std::fs::read(&file).unwrap()),conditions:Default::default(),snapshot:unity_profiler_analysis_agent_lib::extractor::extract(&p),frames:p.frames};
+    let capture=Capture { scene_id: "test-scene".into(), code_revision: Some(0),
+id:"b".into(),path:file.clone(),hash:storage::hash(&std::fs::read(&file).unwrap()),conditions:Default::default(),snapshot:unity_profiler_analysis_agent_lib::extractor::extract(&p),frames:p.frames};
     let mut paths=comparison::paths(&capture,None).await.unwrap();
     // A child under Work must not count as another Work observation.
     paths.insert(serde_json::to_string(&("", "Main Thread", vec!["Work", "Child"])).unwrap(),json!({}));
@@ -1479,4 +1500,340 @@ async fn replacing_b_discards_old_sampling_acceptance_only_after_success() {
     let d=w.data.lock().unwrap();
     assert_ne!(d.rounds[0].candidate,old);
     assert!(d.rounds[0].task_verifications.is_empty());
+}
+
+#[tokio::test]
+async fn scenes_keep_rounds_baselines_budgets_and_history_separate() {
+    let (_t, w, first) = setup(b"class Work {}");
+    {
+        let mut d = w.data.lock().unwrap();
+        scenes::edit(
+            &mut d,
+            "test-scene",
+            "主城跑图".into(),
+            "进入主城后绕广场一圈".into(),
+        )
+        .unwrap();
+        d.scenes[0].budgets.insert("cpuMs".into(), 16.0);
+        d.rounds[0].decision = "rolled_back".into();
+    }
+    workflow::next_round(&w).unwrap();
+    {
+        let mut d = w.data.lock().unwrap();
+        assert_eq!(d.rounds[1].baseline, "a");
+        d.rounds[1].decision = "rolled_back".into();
+        scenes::complete(&mut d, "test-scene", true).unwrap();
+        assert!(scenes::access(&d, "test-scene").is_err());
+        scenes::create(&mut d, "百人战斗".into(), "固定角色进入战斗".into()).unwrap();
+    }
+    workflow::bind_capture(
+        w.clone(),
+        public_capture("isolated-peak.json"),
+        "a".into(),
+        None,
+    )
+    .await
+    .unwrap();
+    let (directory, y) = {
+        let d = w.data.lock().unwrap();
+        let y = d.active_scene_id.clone();
+        assert_eq!(d.rounds.iter().filter(|r| r.scene_id == y).count(), 1);
+        assert_eq!(
+            d.rounds
+                .iter()
+                .filter(|r| r.scene_id == "test-scene")
+                .count(),
+            2
+        );
+        assert_eq!(d.rounds[0].id, first);
+        assert!(d.scenes[1].budgets.is_empty());
+        assert_ne!(d.rounds[2].baseline, "a");
+        let c = d
+            .captures
+            .iter()
+            .find(|c| c.id == d.rounds[2].baseline)
+            .unwrap();
+        assert_eq!(c.conditions.scenario, "百人战斗");
+        assert_eq!(c.conditions.operation, "固定角色进入战斗");
+        (w.directory.clone(), y)
+    };
+    assert!(workflow::export_round(&w, &first)
+        .unwrap()
+        .contains("主城跑图 · 第 1 轮"));
+    drop(w);
+    let w = Workspace::open(directory).unwrap();
+    let mut d = w.data.lock().unwrap();
+    assert_eq!(d.active_scene_id, y);
+    assert!(d.scenes[0].completed);
+    scenes::select(&mut d, "test-scene").unwrap();
+    scenes::complete(&mut d, "test-scene", false).unwrap();
+    assert!(scenes::access(&d, "test-scene").is_ok());
+    w.save(&d).unwrap();
+}
+
+#[tokio::test]
+async fn scenes_block_unsettled_edits_and_require_new_recording_after_other_scene_edits() {
+    let (_t, w, x_round) = setup(b"class Work { int number = 1; }");
+    let y = {
+        let mut d = w.data.lock().unwrap();
+        let y = scenes::create(&mut d, "Y".into(), String::new()).unwrap();
+        scenes::select(&mut d, "test-scene").unwrap();
+        y
+    };
+    let run = w.begin(&x_round, "fixture".into()).unwrap();
+    replace(&w, &run, "number = 1", "number = 2").unwrap();
+    finish(&w, &run);
+    {
+        let mut d = w.data.lock().unwrap();
+        assert_eq!(scenes::blocker(&d, &y).as_deref(), Some("test-scene"));
+        assert!(scenes::complete(&mut d, "test-scene", true).is_err());
+        scenes::edit(&mut d, &y, "战斗".into(), "说明仍可编辑".into()).unwrap();
+        scenes::select(&mut d, &y).unwrap();
+    }
+    assert!(workflow::bind_capture(
+        w.clone(),
+        public_capture("editor-dump.json"),
+        "a".into(),
+        None
+    )
+    .await
+    .unwrap_err()
+    .contains("接受或回退"));
+    w.rollback(&x_round).unwrap();
+    w.data.lock().unwrap().rounds[0].decision = "rolled_back".into();
+    workflow::bind_capture(
+        w.clone(),
+        public_capture("editor-dump.json"),
+        "a".into(),
+        None,
+    )
+    .await
+    .unwrap();
+    let y_round = {
+        let mut d = w.data.lock().unwrap();
+        let tasks = d.rounds[0].tasks.clone();
+        let r = d.rounds.last_mut().unwrap();
+        r.tasks = tasks;
+        r.id.clone()
+    };
+    let run = w.begin(&y_round, "fixture".into()).unwrap();
+    replace(&w, &run, "number = 1", "number = 3").unwrap();
+    finish(&w, &run);
+    w.rollback(&y_round).unwrap();
+    {
+        let mut d = w.data.lock().unwrap();
+        d.rounds.last_mut().unwrap().decision = "rolled_back".into();
+        scenes::select(&mut d, "test-scene").unwrap();
+        assert!(scenes::stale(&d, &d.captures[0])); // rollback does not restore freshness
+    }
+    workflow::next_round(&w).unwrap();
+    let rid = w.data.lock().unwrap().rounds.last().unwrap().id.clone();
+    assert!(w
+        .begin(&rid, "fixture".into())
+        .unwrap_err()
+        .contains("重新录制"));
+    assert!(scenes::round_access(&w.data.lock().unwrap(), &rid, true).is_err());
+    let old = w
+        .data
+        .lock()
+        .unwrap()
+        .rounds
+        .last()
+        .unwrap()
+        .baseline
+        .clone();
+    assert!(workflow::bind_capture(
+        w.clone(),
+        w.directory.join("missing.json"),
+        "a".into(),
+        None
+    )
+    .await
+    .is_err());
+    assert_eq!(w.data.lock().unwrap().rounds.last().unwrap().baseline, old);
+    workflow::bind_capture(
+        w.clone(),
+        public_capture("editor-dump.json"),
+        "a".into(),
+        None,
+    )
+    .await
+    .unwrap();
+    let d = w.data.lock().unwrap();
+    assert!(scenes::round_access(&d, &rid, true).is_ok());
+    assert_eq!(d.rounds[0].baseline, "a");
+    assert_eq!(d.rounds[0].runs[0].status, "rolled_back");
+}
+
+#[test]
+fn scene_names_ownership_and_global_rollback_order_are_checked() {
+    let (_t, w, x) = setup(b"class Work { int number = 1; }");
+    {
+        let mut d = w.data.lock().unwrap();
+        assert!(scenes::create(&mut d, "  ".into(), String::new()).is_err());
+        assert!(scenes::create(&mut d, "测试场景".into(), String::new()).is_err());
+        assert!(scenes::create(&mut d, "场".repeat(81), String::new()).is_err());
+        assert!(scenes::create(&mut d, "Y".into(), "字".repeat(4001)).is_err());
+        assert!(scenes::select(&mut d, "missing").is_err());
+    }
+    let first = w.begin(&x, "fixture".into()).unwrap();
+    replace(&w, &first, "1", "2").unwrap();
+    finish(&w, &first);
+    {
+        let mut d = w.data.lock().unwrap();
+        d.rounds[0].decision = "accepted".into();
+        let y = scenes::create(&mut d, "Y".into(), String::new()).unwrap();
+        let mut r = d.rounds[0].clone();
+        r.id = id();
+        r.scene_id = y.clone();
+        r.decision = "pending".into();
+        r.runs.clear();
+        let mut c = d.captures[0].clone();
+        c.id = id();
+        c.scene_id = y.clone();
+        c.code_revision = Some(d.code_revision);
+        r.baseline = c.id.clone();
+        r.tasks[0].files.insert(
+            "Assets/Work.cs".into(),
+            storage::hash(b"class Work { int number = 2; }"),
+        );
+        d.captures.push(c);
+        d.rounds.push(r);
+        assert!(scenes::validate(&d).is_ok());
+        d.rounds[1].candidate = Some("a".into());
+        assert!(scenes::validate(&d).is_err());
+        d.rounds[1].candidate = None;
+    }
+    let y_round = w.data.lock().unwrap().rounds[1].id.clone();
+    let second = w.begin(&y_round, "fixture".into()).unwrap();
+    replace(&w, &second, "2", "3").unwrap();
+    finish(&w, &second);
+    {
+        let mut d = w.data.lock().unwrap();
+        assert!(d.rounds[1].runs[0].sequence > d.rounds[0].runs[0].sequence);
+        // Simulate an interleaved storage order; dependency checks must use execution sequence.
+        d.rounds[1].decision = "accepted".into();
+        d.rounds[0].decision = "pending".into();
+        d.rounds.swap(0, 1);
+    }
+    assert!(w.rollback(&x).unwrap_err().contains("后续"));
+    assert_eq!(
+        editing::read(&w.data.lock().unwrap().root, "Assets/Work.cs").unwrap(),
+        b"class Work { int number = 3; }"
+    );
+}
+
+#[test]
+fn all_legacy_versions_migrate_once_with_original_manifest_and_unknown_freshness() {
+    for version in [1, 2, 3] {
+        let (_t, w, rid) = setup(b"class Work {}");
+        let dir = w.directory.clone();
+        {
+            let mut d = w.data.lock().unwrap();
+            d.budgets.insert("cpuMs".into(), 20.0);
+            w.save(&d).unwrap();
+            let mut v: serde_json::Value = if version == 3 {
+                serde_json::from_slice(&std::fs::read(dir.join("optimization.json")).unwrap())
+                    .unwrap()
+            } else {
+                serde_json::to_value(&*d).unwrap()
+            };
+            v["version"] = json!(version);
+            for key in ["scenes", "activeSceneId", "codeRevision", "runSequence"] {
+                v.as_object_mut().unwrap().remove(key);
+            }
+            storage::atomic(
+                &dir.join("optimization.json"),
+                &serde_json::to_vec(&v).unwrap(),
+            )
+            .unwrap();
+        }
+        let old = std::fs::read(dir.join("optimization.json")).unwrap();
+        drop(w);
+        let w = Workspace::open(dir.clone()).unwrap();
+        let sid = {
+            let d = w.data.lock().unwrap();
+            assert_eq!(d.version, 4);
+            assert_eq!(d.scenes.len(), 1);
+            assert_eq!(d.scenes[0].name, "默认场景");
+            assert_eq!(d.scenes[0].budgets["cpuMs"], 20.0);
+            assert_eq!(d.rounds[0].id, rid);
+            assert!(d.captures[0].code_revision.is_none());
+            assert!(scenes::round_access(&d, &rid, true).is_err());
+            assert_eq!(d.captures[0].scene_id, d.scenes[0].id);
+            d.scenes[0].id.clone()
+        };
+        assert_eq!(
+            std::fs::read(dir.join(format!("optimization.v{version}.backup.json"))).unwrap(),
+            old
+        );
+        assert!(workflow::export_round(&w, &rid)
+            .unwrap()
+            .contains("默认场景"));
+        drop(w);
+        let w = Workspace::open(dir).unwrap();
+        let d = w.data.lock().unwrap();
+        assert_eq!(d.scenes.len(), 1);
+        assert_eq!(d.scenes[0].id, sid);
+    }
+}
+
+#[test]
+fn failed_scene_migration_keeps_old_manifest_and_empty_projects_get_one_scene() {
+    let (_t, w, _) = setup(b"class Work {}");
+    let dir = w.directory.clone();
+    let mut v = serde_json::to_value(&*w.data.lock().unwrap()).unwrap();
+    v["version"] = json!(2);
+    v["rounds"] = json!([]);
+    v["captures"] = json!([]);
+    let original = serde_json::to_vec(&v).unwrap();
+    storage::atomic(&dir.join("optimization.json"), &original).unwrap();
+    drop(w);
+    // A non-file at the object destination makes the new v4 save fail.
+    let objects = dir.join("objects");
+    let saved_objects = dir.join("original-objects");
+    std::fs::rename(&objects, &saved_objects).unwrap();
+    std::fs::write(&objects, b"not a directory").unwrap();
+    assert!(Workspace::open(dir.clone()).is_err());
+    assert_eq!(
+        std::fs::read(dir.join("optimization.json")).unwrap(),
+        original
+    );
+    std::fs::remove_file(&objects).unwrap();
+    std::fs::rename(&saved_objects, &objects).unwrap();
+    let w = Workspace::open(dir.clone()).unwrap();
+    assert_eq!(w.data.lock().unwrap().scenes.len(), 1);
+    drop(w);
+    let w = Workspace::open(dir).unwrap();
+    let d = w.data.lock().unwrap();
+    assert_eq!(d.scenes.len(), 1);
+    assert!(d.rounds.is_empty());
+}
+
+
+#[tokio::test]
+async fn selecting_another_scene_during_import_does_not_redirect_capture_or_progress() {
+    let (_t, w, rid) = setup(b"class Work {}");
+    let y = {
+        let mut d = w.data.lock().unwrap();
+        let y = scenes::create(&mut d, "Y".into(), String::new()).unwrap();
+        scenes::select(&mut d, "test-scene").unwrap();
+        y
+    };
+    let weak = Arc::downgrade(&w);
+    let selected = y.clone();
+    w.observation.lock().unwrap().notify = Some(Arc::new(move |_, event| {
+        if event["stage"] == "save" && event["status"] == "running" {
+            let w = weak.upgrade().unwrap();
+            scenes::select(&mut w.data.lock().unwrap(), &selected).unwrap();
+        }
+    }));
+    workflow::bind_capture(w.clone(), public_capture("isolated-peak.json"), "a".into(), Some("scene-import".into())).await.unwrap();
+    let d = w.data.lock().unwrap();
+    assert_eq!(d.active_scene_id, y);
+    assert!(scenes::current(&d, &y).is_none());
+    let r = d.rounds.iter().find(|r|r.id==rid).unwrap();
+    assert_eq!(r.scene_id, "test-scene");
+    assert_eq!(d.captures.iter().find(|c|c.id==r.baseline).unwrap().scene_id, "test-scene");
+    assert_eq!(w.observation.lock().unwrap().progress.as_ref().unwrap()["sceneId"], "test-scene");
 }

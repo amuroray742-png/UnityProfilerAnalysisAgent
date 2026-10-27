@@ -26,3 +26,7 @@
 .work-activity .diagnosis-stream{min-height:0;border:0}.parse-progress progress{width:100%;height:16px;accent-color:#60a5fa}
 @media(max-width:800px){.history-layout{grid-template-columns:1fr}.round-list{flex-direction:row;overflow:auto}.round-list button{min-width:190px}}
 .project-summary{padding:14px 22px}.project-summary h2{font-size:20px}.workflow-running{padding:8px 0}.workflow-running p{margin:6px 0;color:var(--text-secondary)}.parse-complete{font-size:13px;color:var(--text-secondary);margin:8px 0}.stream-tail{white-space:pre-wrap;overflow-wrap:anywhere}.file-diff{line-height:1.65}
+
+.scene-list { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+.scene-list button { display: flex; flex-direction: column; gap: 6px; text-align: left; min-width: 180px; }
+.scene-list button[aria-pressed="true"] { border-color: #60a5fa; background: #1e3a5f; }

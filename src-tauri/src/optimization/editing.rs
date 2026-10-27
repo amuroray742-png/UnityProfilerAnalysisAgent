@@ -111,6 +111,9 @@ impl Workspace {
         if self.busy.load(Ordering::SeqCst) {
             return Err("已有优化任务运行".into());
         }
+        scenes::round_access(&d, round_id, true)?;
+        d.run_sequence += 1;
+        let sequence = d.run_sequence;
         let round = d
             .rounds
             .iter()
@@ -140,6 +143,7 @@ impl Workspace {
         }
         let id = id();
         let run = Run {
+            sequence,
             automatic: requirements.is_some(),
             requirements: requirements.unwrap_or_default(),
             read_receipts: BTreeMap::new(),
@@ -330,6 +334,7 @@ impl Workspace {
             after: after.clone(),
             state: "prepared".into(),
         });
+        scenes::touch_run(&mut d, run_id)?;
         if let Err(error) = self.save(&d) {
             d.rounds
                 .iter_mut()
@@ -363,6 +368,7 @@ impl Workspace {
             return Err("请先停止运行".into());
         }
         let mut d = self.data.lock().unwrap();
+        scenes::round_access(&d, round_id, false)?;
         let root = d.root.clone();
         let index = d
             .rounds
@@ -375,9 +381,16 @@ impl Workspace {
             .flat_map(|r| &r.changes)
             .map(|c| c.path.clone())
             .collect();
-        if d.rounds[index + 1..]
+        let sequence = d.rounds[index]
+            .runs
+            .iter()
+            .map(|r| r.sequence)
+            .max()
+            .unwrap_or(0);
+        if d.rounds
             .iter()
             .flat_map(|r| &r.runs)
+            .filter(|r| r.sequence > sequence)
             .flat_map(|r| &r.changes)
             .any(|c| {
                 c.state != "rolled_back"
@@ -392,6 +405,15 @@ impl Workspace {
             return Err("后续轮次修改了相同文件，请先回退后续轮次".into());
         }
         super::automatic::preflight_rollback(&root, &d.rounds[index].runs)?;
+        if d.rounds[index].runs.iter().any(|r| {
+            r.changes
+                .iter()
+                .any(|c| c.state != "rolled_back" && c.state != "not_applied")
+        }) {
+            let scene = d.rounds[index].scene_id.clone();
+            scenes::touch(&mut d, &scene)?;
+            self.save(&d)?;
+        }
         // Walk revisions backwards. Stop on conflicts, retain prior restored entries.
         for ri in (0..d.rounds[index].runs.len()).rev() {
             for ci in (0..d.rounds[index].runs[ri].changes.len()).rev() {
