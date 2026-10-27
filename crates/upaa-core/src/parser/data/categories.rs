@@ -10,15 +10,16 @@ pub type CategoryId = u16;
 /// 把 category ID 解析成可读分类名；未知 ID 返回 `None`。
 pub fn name(id: CategoryId) -> Option<&'static str> {
     let n = cn(id);
-    if n.is_empty() { None } else { Some(n) }
+    if n.is_empty() {
+        None
+    } else {
+        Some(n)
+    }
 }
 
 /// 已知的 category 集合，便于 `accumulate_cpu` 累计时跳过未知项。
 pub fn is_known(id: CategoryId) -> bool {
-    matches!(
-        id,
-        0 | 1 | 4 | 5 | 6 | 17 | 18 | 26 | 27 | 33 | 35
-    )
+    matches!(id, 0 | 1 | 4 | 5 | 6 | 17 | 18 | 26 | 27 | 33 | 35)
 }
 
 #[cfg(test)]

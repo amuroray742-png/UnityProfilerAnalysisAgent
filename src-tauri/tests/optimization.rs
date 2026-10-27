@@ -350,6 +350,20 @@ async fn project_tasks_require_actual_code_read_and_are_not_authorizations() {
         .await
         .unwrap();
     assert_eq!(scope.context()["taskDrafts"][0]["selected"], false);
+    let mut marker = scope.context()["taskDrafts"][0].clone();
+    marker["kind"] = json!("marker");
+    marker["markerNames"] = json!(["Work.Fixed"]);
+    scope.query("project_propose_tasks", json!({"tasks":[marker.clone()]})).await.unwrap();
+    assert_eq!(scope.context()["taskDrafts"][0]["markerNames"], json!(["Work.Fixed"]));
+    for kind in ["optimize", "investigate"] {
+        let mut invalid = marker.clone();
+        invalid["kind"] = json!(kind);
+        assert!(scope.query("project_propose_tasks", json!({"tasks":[invalid]})).await.is_err());
+    }
+    marker["markerNames"] = json!(["Work.Fixed", "Work.Fixed"]);
+    assert!(scope.query("project_propose_tasks", json!({"tasks":[marker]})).await.is_err());
+    assert_eq!(scope.context()["taskDrafts"][0]["markerNames"], json!(["Work.Fixed"]));
+
     assert!(scope
         .query("optimization_replace", json!({}))
         .await

@@ -30,3 +30,5 @@ _legacy_scaffold/
 # Legacy / dead Rust module placeholders (replaced by src-tauri/src/acp_client.rs)
 src-tauri/src/_acp_client_legacy/
 src-tauri/src/acp_client_stub*.rs
+
+crates/*/target/

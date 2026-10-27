@@ -58,6 +58,7 @@ async fn read_capped(mut input: impl AsyncRead + Unpin) -> Result<Vec<u8>, Strin
         Ok(bytes)
     }
 }
+#[cfg(feature = "unity-cli")]
 async fn invoke(
     root: &Path,
     command: &str,
@@ -166,6 +167,15 @@ async fn invoke(
         validate(&data, root)?;
     }
     Ok(data)
+}
+#[cfg(not(feature = "unity-cli"))]
+async fn invoke(
+    _root: &Path,
+    _command: &str,
+    _request: Value,
+    _cancel: &AtomicBool,
+) -> Result<Value, String> {
+    Err("Editor evidence is supplied by the host; Unity CLI is disabled".into())
 }
 pub fn validate(data: &Value, root: &Path) -> Result<(), String> {
     if data["protocolVersion"] != 1 {

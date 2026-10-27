@@ -170,3 +170,11 @@ Unity 固定检查协议与只读采集协议分开版本化。编译、相关 S
 构建阶段将插件字节与 SHA-256 清单编入程序，安装前校验；以工程内嵌包部署并保留 meta。首次写入前将 manifest 原始／目标字节及工程身份保存到独立 `plugin-install.json`，校验暂存目录后发布，最后仅移除插件的旧 `file:` 依赖项。失败保留中断记录，继续安装核对原始／目标指纹；已有不同内容、Git／registry 来源及外部变动不会被覆盖。lock 文件只检查、不重写，由 Unity 解析。
 
 内嵌包状态与 Editor ready 状态独立；程序不自动安装 CLI、升级 Unity 或修改其他依赖。团队共享验收见[插件验收](evidence/plugin-install-validation.md)。
+
+## Shared headless core for IdeaBuilder
+
+`crates/upaa-core` owns the parser, extractor, bounded performance queries, read-only project index and A/B comparison. The desktop re-exports these modules and uses the same implementations. The optional `unity-cli` feature preserves desktop Editor enrichment; the default standalone engine has no CLI, ACP or file-editing workspace.
+
+Build with `cargo build --manifest-path crates/upaa-core/Cargo.toml --locked --release --bin upaa-engine`. The engine consumes UTF-8 JSON lines `{id, request}` and returns `{id, result}` or `{id, error}`. Operations are `info`, `open`, `prepare_project`, `query`, `compare`, `close`; `cancel` interrupts a running import. Requests are bounded to 64 KiB. Only `.data` and supported `.json` inputs are accepted; `open` verifies the supplied SHA-256 before and after parsing. Queries expose only fixed performance and read-only project operations. Editor evidence must be supplied by the host and passes project, version, platform and asset fingerprint checks.
+
+The host owns recordings, provenance declarations, AI roles, write permissions and acceptance. Engine comparison is an observation, not a business approval. `statisticMethod=upaa-round-index-v1` remains separate from IdeaBuilder Android nearest-rank receipts. New engine tests use public synthetic fixtures; they do not establish new recording-version or device validation.

@@ -1,26 +1,9 @@
 //! Re-recording observations, deliberately separate from manual task acceptance.
 use super::Task;
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
-pub fn validate_names(kind: &str, names: &[String]) -> Result<(), String> {
-    let mut seen = HashSet::new();
-    if names.len() > 3
-        || (!names.is_empty() && kind != "marker")
-        || names.iter().any(|name| {
-            name.trim().is_empty()
-                || name.len() > 200
-                || name.chars().any(char::is_control)
-                || !seen.insert(name)
-        })
-    {
-        return Err(
-            "仅 Marker 任务可记录最多 3 个不同的固定采样名称（每个 1..200 字节，无控制字符）"
-                .into(),
-        );
-    }
-    Ok(())
-}
+pub use upaa_core::proposal::validate_names;
 
 pub fn observe(tasks: &[Task], paths: &Result<BTreeMap<String, Value>, String>) -> Value {
     let mut rows = Vec::new();
