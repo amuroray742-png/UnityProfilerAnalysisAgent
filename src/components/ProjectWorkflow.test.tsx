@@ -1,6 +1,7 @@
-import {render,screen,fireEvent,waitFor,cleanup,within} from '@testing-library/react';
+import {render,screen,fireEvent,waitFor,cleanup,within,act} from '@testing-library/react';
 import {beforeEach,afterEach,it,expect,vi} from 'vitest';
 import {invoke} from '@tauri-apps/api/core';
+import {listen} from '@tauri-apps/api/event';
 import {open,save} from '@tauri-apps/plugin-dialog';
 import {ProjectWorkflow,stepOf,readyReport} from './ProjectWorkflow';
 import type {Project,Round} from '../types/optimization';
@@ -145,4 +146,59 @@ it.each(['reports','workflow','failed','cancelled','interrupted','accepted','rol
 it('shows rolled-back inheritance and restores a saved replacement without starting AI',async()=>{
  const p=nextProject();p.rounds[0].decision='rolled_back';p.rounds[1].baseline='a';mock(p);const view=render(<ProjectWorkflow/>);expect(await screen.findByText('沿用上一轮 A（上一轮已回退）')).toBeVisible();view.unmount();
  p.captures.push({...p.captures[0],id:'fresh',path:'fresh.json',snapshot:{fileName:'fresh.json',frameCount:7,unityVersion:'6000.3'}});p.rounds[1].baseline='fresh';mock(p);render(<ProjectWorkflow/>);expect(await within(await screen.findByLabelText('本轮 A 录制')).findByText(/fresh.json · 7 帧/)).toBeVisible();expect(screen.queryByText('沿用上一轮 A（上一轮已回退）')).not.toBeInTheDocument();expect(vi.mocked(invoke).mock.calls.some(c=>(c[1] as {action:{op:string}})?.action?.op==='analyze')).toBe(false);
+});
+
+
+function sceneProject() {
+ const p=withBaseline();
+ p.activeSceneId='x';p.version=4;p.codeRevision=0;
+ p.scenes=[{id:'x',name:'主城跑图',description:'绕广场一圈',completed:false,budgets:{cpuMs:16},roundCount:1,needsRecording:false,blockedBy:null,unresolved:false,latestStatus:'pending'},
+ {id:'y',name:'百人战斗',description:'固定队伍进入',completed:false,budgets:{},roundCount:0,needsRecording:false,blockedBy:null,unresolved:false,latestStatus:null}];
+ p.rounds.forEach(r=>r.sceneId='x');p.captures.forEach(c=>c.sceneId='x');return p;
+}
+it('creates named scenarios before importing and persists explicit scene identity on selection',async()=>{
+ const p=sceneProject();mock(p);render(<ProjectWorkflow/>);
+ fireEvent.click(await screen.findByText('新建场景'));
+ fireEvent.change(screen.getByLabelText('场景名称'),{target:{value:'Boss 战'}});
+ fireEvent.change(screen.getByLabelText('复现说明'),{target:{value:'进入第二阶段'}});
+ fireEvent.click(screen.getByText('保存场景'));
+ await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workflow_command',{sceneId:'x',action:{op:'sceneCreate',name:'Boss 战',description:'进入第二阶段'}}));
+ fireEvent.click(screen.getByRole('button',{name:/百人战斗/}));
+ await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workflow_command',{sceneId:'y',action:{op:'sceneSelect'}}));
+});
+it('shows only selected scene rounds and requires explicit current-code confirmation for import',async()=>{
+ const p=sceneProject();p.activeSceneId='y';mock(p);vi.mocked(open).mockResolvedValue('Y.json');render(<ProjectWorkflow/>);
+ expect(await screen.findByText('第一步：导入优化前的录制')).toBeInTheDocument();
+ expect(screen.queryByLabelText('本轮 A 录制')).not.toBeInTheDocument();
+ fireEvent.click(screen.getByText('导入录制 A'));
+ expect(await screen.findByText('请先确认录制来自当前工程代码')).toBeInTheDocument();expect(open).not.toHaveBeenCalled();
+ fireEvent.click(screen.getByLabelText(/我确认即将导入/));fireEvent.click(screen.getByText('导入录制 A'));
+ await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workflow_command',{sceneId:'y',action:{op:'bind',path:'Y.json',role:'a',operationId:expect.any(String),currentCodeConfirmed:true}}));
+});
+it('blocks stale analysis but allows replacing A and preserves the historical report view',async()=>{
+ const p=sceneProject();p.scenes![0].needsRecording=true;mock(p);render(<ProjectWorkflow/>);
+ expect(await screen.findByText(/工程代码已由其他场景修改/)).toBeInTheDocument();
+ expect(screen.getByText('一键诊断并定位')).toBeDisabled();expect(screen.getByText('重新导入 A')).not.toBeDisabled();
+ fireEvent.click(screen.getByText('历史轮次'));
+ expect(await screen.findByText('主城跑图 历史轮次')).toBeInTheDocument();
+});
+it('completed and blocked scenarios remain browseable and offer reopening or return to unresolved scene',async()=>{
+ const p=sceneProject();p.scenes![0].completed=true;mock(p);const view=render(<ProjectWorkflow/>);
+ expect(await screen.findByText('重新开启场景')).toBeInTheDocument();expect(screen.getByText('一键诊断并定位')).toBeDisabled();
+ expect(screen.getByText('返回项目首页')).not.toBeDisabled();
+ fireEvent.click(screen.getByText('重新开启场景'));await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workflow_command',{sceneId:'x',action:{op:'sceneComplete',completed:false}}));
+ view.unmount();p.scenes![0].completed=false;p.scenes![0].blockedBy='y';p.scenes![1].unresolved=true;mock(p);render(<ProjectWorkflow/>);
+ fireEvent.click(await screen.findByText('返回待处理场景'));
+ await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workflow_command',{sceneId:'y',action:{op:'sceneSelect'}}));
+ expect(screen.getByText('重新导入 A')).toBeDisabled();expect(screen.getByText('编辑场景')).not.toBeDisabled();
+});
+
+it('ignores progress from another scenario even when the new scene has no round yet',async()=>{
+ const p=sceneProject();p.activeSceneId='y';mock(p);render(<ProjectWorkflow/>);
+ await screen.findByText('第一步：导入优化前的录制');
+ const callback=vi.mocked(listen).mock.calls.find(c=>c[0]==='workflow-progress')![1];
+ act(()=>callback({event:'workflow-progress',id:1,payload:{projectId:'p',sceneId:'x',roundId:'',operationId:'old',stage:'parse',status:'running',done:25,total:100}}));
+ expect(screen.queryByLabelText('录制解析进度')).not.toBeInTheDocument();
+ act(()=>callback({event:'workflow-progress',id:2,payload:{projectId:'p',sceneId:'y',roundId:'',operationId:'new',stage:'parse',status:'running',done:25,total:100}}));
+ expect(screen.getByLabelText('录制解析进度')).toBeInTheDocument();
 });

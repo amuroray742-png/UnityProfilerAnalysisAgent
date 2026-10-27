@@ -135,9 +135,9 @@ fn run_view(s: &Run) -> Value {
 }
 pub(super) fn view(w: &Workspace) -> Value {
     let d = w.data.lock().unwrap();
-    json!({"parseProgress":w.observation.lock().unwrap().progress.clone(),"saveError":*w.save_error.lock().unwrap(),"version":d.version,"rootAvailable":super::workflow::project_available(&d.root).is_ok(),"id":d.id,"name":d.name,"root":d.root,"directory":w.directory,"budgets":d.budgets,"busy":w.busy.load(Ordering::SeqCst),
-    "captures":d.captures.iter().map(|c|json!({"id":c.id,"path":c.path,"hash":c.hash,"conditions":c.conditions,"snapshot":c.snapshot.meta})).collect::<Vec<_>>(),
-    "rounds":d.rounds.iter().map(|r|json!({"workflow":r.workflow,"performanceStatus":r.performance_status(),"id":r.id,"baseline":r.baseline,"candidate":r.candidate,"tasks":r.tasks,"taskVersion":r.task_version,"taskVerifications":r.task_verifications,"tests":r.tests,"comparison":compact_comparison(&r.comparison),"correctness":r.correctness,"decision":r.decision,
+    json!({"parseProgress":w.observation.lock().unwrap().progress.clone(),"saveError":*w.save_error.lock().unwrap(),"version":d.version,"rootAvailable":super::workflow::project_available(&d.root).is_ok(),"id":d.id,"name":d.name,"root":d.root,"directory":w.directory,"activeSceneId":d.active_scene_id,"codeRevision":d.code_revision,"scenes":d.scenes.iter().map(|s| { let r=scenes::current(&d,&s.id); json!({"id":s.id,"name":s.name,"description":s.description,"completed":s.completed,"budgets":s.budgets,"roundCount":d.rounds.iter().filter(|r|r.scene_id==s.id).count(),"needsRecording":r.and_then(|r|d.captures.iter().find(|c|c.id==r.baseline)).is_some_and(|c|scenes::stale(&d,c)),"blockedBy":scenes::blocker(&d,&s.id),"unresolved":d.rounds.iter().any(|r|r.scene_id==s.id&&scenes::unresolved(r)),"latestStatus":r.map(|r|r.decision.as_str())}) }).collect::<Vec<_>>(),"budgets":d.scenes.iter().find(|s|s.id==d.active_scene_id).map(|s|&s.budgets).unwrap_or(&d.budgets),"busy":w.busy.load(Ordering::SeqCst),
+    "captures":d.captures.iter().map(|c|json!({"id":c.id,"sceneId":c.scene_id,"codeRevision":c.code_revision,"path":c.path,"hash":c.hash,"conditions":c.conditions,"snapshot":c.snapshot.meta})).collect::<Vec<_>>(),
+    "rounds":d.rounds.iter().map(|r|json!({"sceneId":r.scene_id,"workflow":r.workflow,"performanceStatus":r.performance_status(),"id":r.id,"baseline":r.baseline,"candidate":r.candidate,"tasks":r.tasks,"taskVersion":r.task_version,"taskVerifications":r.task_verifications,"tests":r.tests,"comparison":compact_comparison(&r.comparison),"correctness":r.correctness,"decision":r.decision,
         "reports":r.reports.iter().enumerate().map(|(i,p)|json!({"attempt":r.reports[..=i].iter().filter(|q|q.stage==p.stage).count(),"reportId":p.report_id,"sessionId":p.session_id,"stage":p.stage,"agentId":p.agent_id,"status":p.status,"createdAt":p.created_at,"parentReportId":p.parent_report_id,"reason":p.incomplete_reason})).collect::<Vec<_>>(),
         "runs":r.runs.iter().map(run_view).collect::<Vec<_>>() })).collect::<Vec<_>>()})
 }
@@ -185,6 +185,8 @@ pub(super) async fn capture_observed(
         return Err("解析期间录制文件变化".into());
     }
     Ok(Capture {
+        scene_id: String::new(),
+        code_revision: Some(0),
         id: id(),
         path,
         hash: before,
@@ -196,6 +198,8 @@ pub(super) async fn capture_observed(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn optimization_command(
     mut action: Action,
+    scene_id: Option<String>,
+    current_code_confirmed: Option<bool>,
     app: tauri::AppHandle,
     state: tauri::State<'_, OptimizationState>,
     app_state: tauri::State<'_, crate::state::AppState>,
@@ -205,6 +209,13 @@ pub async fn optimization_command(
     } else {
         Some(state.operation.lock().await)
     };
+    if matches!(
+        action,
+        Action::PrepareAutomatic { .. } | Action::Adopt { .. } | Action::Import { .. }
+    ) && current_code_confirmed != Some(true)
+    {
+        return Err("请确认录制来自当前工程代码".into());
+    }
     if let Action::PrepareAutomatic { file_id } = &action {
         let file_id = file_id.clone();
         let (root, report_id) = {
@@ -270,14 +281,12 @@ pub async fn optimization_command(
             *current = Some(Arc::new(w));
         }
         let w = current.as_ref().unwrap();
-        if w.data
-            .lock()
-            .unwrap()
-            .rounds
-            .last()
-            .is_some_and(|r| r.reports.iter().any(|p| p.report_id == report_id))
         {
-            return Ok(view(w));
+            let d = w.data.lock().unwrap();
+            if scenes::current(&d, &d.active_scene_id).is_some_and(|r| r.reports.iter().any(|p| p.report_id == report_id)) {
+                drop(d);
+                return Ok(view(w));
+            }
         }
         drop(current);
         action = Action::Adopt { file_id };
@@ -327,9 +336,11 @@ pub async fn optimization_command(
     if matches!(action, Action::Cancel) {
         // Serialize cancellation with the final capture commit. Once committed,
         // cancellation applies to subsequent work rather than undoing that import.
-        {let _commit=w.data.lock().unwrap();
-        w.cancel_epoch.fetch_add(1, Ordering::SeqCst);
-        w.cancelled.store(true, Ordering::SeqCst);}
+        {
+            let _commit = w.data.lock().unwrap();
+            w.cancel_epoch.fetch_add(1, Ordering::SeqCst);
+            w.cancelled.store(true, Ordering::SeqCst);
+        }
 
         if let Some(h) = state.active.lock().await.clone() {
             h.cancel().await;
@@ -341,6 +352,39 @@ pub async fn optimization_command(
     }
     if w.busy.load(Ordering::SeqCst) {
         return Err("修改中只能查看或取消".into());
+    }
+    {
+        let d = w.data.lock().unwrap();
+        let rid = match &action {
+            Action::Update { round_id, .. }
+            | Action::Start { round_id, .. }
+            | Action::StartAutomatic { round_id, .. }
+            | Action::Check { round_id }
+            | Action::Rollback { round_id }
+            | Action::Compare { round_id, .. }
+            | Action::Decide { round_id, .. }
+            | Action::VerifyTask { round_id, .. } => Some(round_id),
+            _ => None,
+        };
+        if let Some(rid) = rid {
+            let r = d.rounds.iter().find(|r| &r.id == rid).ok_or("轮次不存在")?;
+            if scene_id.as_ref() != Some(&r.scene_id) {
+                return Err("轮次不属于此场景".into());
+            }
+            scenes::round_access(&d, rid, !matches!(action, Action::Rollback { .. }))?;
+        }
+        if matches!(action, Action::Adopt { .. })
+            && !d.scenes.is_empty()
+            && scene_id.as_ref() != Some(&d.active_scene_id)
+        {
+            return Err("请在当前场景内接管录制".into());
+        }
+        if matches!(action, Action::Import { .. } | Action::Next { .. }) {
+            if scene_id.as_ref() != Some(&d.active_scene_id) {
+                return Err("场景已切换，请重新操作".into());
+            }
+            scenes::access(&d, &d.active_scene_id)?;
+        }
     }
     match action {
         Action::Close => {
@@ -391,12 +435,24 @@ pub async fn optimization_command(
             }
             let tasks: Vec<Task> =
                 serde_json::from_value(context["taskDrafts"].clone()).unwrap_or_default();
-            let c = capture(path, Conditions::default()).await?;
+            let mut c = capture(path, Conditions::default()).await?;
             if c.hash != capture_hash {
                 return Err("录制已变化，拒绝将旧报告绑定新数据".into());
             }
             let mut d = w.data.lock().unwrap();
+            if d.scenes.is_empty() {
+                scenes::create(&mut d, "默认场景".into(), String::new())?;
+            }
+            scenes::access(&d, &d.active_scene_id)?;
+            if scenes::current(&d, &d.active_scene_id)
+                .is_some_and(|r| !r.runs.is_empty() || !r.reports.is_empty())
+            {
+                return Err("请在场景主流程继续当前轮次".into());
+            }
+            c.scene_id = d.active_scene_id.clone();
+            c.code_revision = Some(d.code_revision);
             let round = Round {
+                scene_id: d.active_scene_id.clone(),
                 workflow: Default::default(),
                 task_version: 1,
                 task_verifications: BTreeMap::new(),
@@ -411,25 +467,25 @@ pub async fn optimization_command(
                 correctness: "pending".into(),
                 decision: "pending".into(),
             };
-            let pending = d
-                .rounds
-                .last()
-                .filter(|r| r.reports.is_empty() && r.runs.is_empty())
-                .and_then(|r| d.captures.iter().find(|a| a.id == r.baseline))
-                .is_some_and(|a| a.hash == c.hash);
-            if pending {
-                let last = d.rounds.last_mut().unwrap();
+            if let Some(rid) = scenes::current(&d, &d.active_scene_id).map(|r| r.id.clone()) {
+                let last = d.rounds.iter_mut().find(|r| r.id == rid).unwrap();
+                last.baseline = c.id.clone();
                 last.reports = round.reports;
                 last.tasks = round.tasks;
+                last.candidate = None;
+                last.comparison = None;
+                last.task_verifications.clear();
             } else {
-                d.captures.push(c);
                 d.rounds.push(round);
             }
+            d.captures.push(c);
             w.save(&d)?;
         }
         Action::Import { path, conditions } => {
-            let c = capture(path, conditions).await?;
+            let mut c = capture(path, conditions).await?;
             let mut d = w.data.lock().unwrap();
+            c.scene_id = d.active_scene_id.clone();
+            c.code_revision = Some(d.code_revision);
             d.captures.push(c);
             w.save(&d)?;
         }
@@ -450,6 +506,19 @@ pub async fn optimization_command(
                 return Err("任务/测试/预算无效".into());
             }
             let mut d = w.data.lock().unwrap();
+            let sid = d
+                .rounds
+                .iter()
+                .find(|r| r.id == round_id)
+                .ok_or("轮次不存在")?
+                .scene_id
+                .clone();
+            if conditions
+                .keys()
+                .any(|id| !d.captures.iter().any(|c| &c.id == id && c.scene_id == sid))
+            {
+                return Err("录制不属于此场景".into());
+            }
             let r = d
                 .rounds
                 .iter_mut()
@@ -491,7 +560,9 @@ pub async fn optimization_command(
                     .find(|v| v.id == *id)
                     .is_some_and(|v| v.conditions != *c)
             });
-            if condition_changes || d.budgets != budgets {
+            if condition_changes
+                || d.scenes.iter().find(|s| s.id == sid).unwrap().budgets != budgets
+            {
                 // Older rounds keep their frozen comparison conditions and budgets.
                 d.rounds
                     .iter_mut()
@@ -499,7 +570,7 @@ pub async fn optimization_command(
                     .unwrap()
                     .comparison = None;
             }
-            d.budgets = budgets;
+            d.scenes.iter_mut().find(|s| s.id == sid).unwrap().budgets = budgets;
             for (id, condition) in conditions {
                 d.captures
                     .iter_mut()
@@ -548,10 +619,7 @@ pub async fn optimization_command(
                     .iter()
                     .find(|r| r.id == round_id)
                     .ok_or("轮次不存在")?;
-                if d.rounds.last().is_none_or(|last| last.id != round_id) || r.decision != "pending"
-                {
-                    return Err("只能优化当前未结束轮次；请先开始下一轮".into());
-                }
+                scenes::round_access(&d, &round_id, true)?;
                 let c = d
                     .captures
                     .iter()
@@ -815,10 +883,23 @@ pub async fn optimization_command(
                     .iter()
                     .find(|c| c.id == candidate_id)
                     .ok_or("B 不存在")?;
+                if a.scene_id != r.scene_id || b.scene_id != r.scene_id || scenes::stale(&d, b) {
+                    return Err("录制不属于此场景或需要重录".into());
+                }
                 if a.id == b.id {
                     return Err("请选择另一份录制".into());
                 }
-                (a.clone(), b.clone(), d.budgets.clone(), r.tasks.clone())
+                (
+                    a.clone(),
+                    b.clone(),
+                    d.scenes
+                        .iter()
+                        .find(|s| s.id == r.scene_id)
+                        .ok_or("场景不存在")?
+                        .budgets
+                        .clone(),
+                    r.tasks.clone(),
+                )
             };
             let mut result = comparison::compare(&a, &b, range_a, range_b, confirmed, &budgets)?;
             let a_paths = comparison::paths(&a, range_a).await;
@@ -826,7 +907,9 @@ pub async fn optimization_command(
             result["sampling"] = super::sampling::observe(&tasks, &b_paths);
             result["hotspots"] = match (a_paths, b_paths) {
                 (Ok(a), Ok(b)) => comparison::associate(a, b),
-                (a, b) => json!({"status":"unavailable","reason":format!("{:?}; {:?}",a.err(),b.err())}),
+                (a, b) => {
+                    json!({"status":"unavailable","reason":format!("{:?}; {:?}",a.err(),b.err())})
+                }
             };
             let mut d = w.data.lock().unwrap();
             let r = d.rounds.iter_mut().find(|r| r.id == round_id).unwrap();
@@ -869,31 +952,36 @@ pub async fn optimization_command(
             {
                 return Err("请先完成修改并导入 B 对比；已回退不能接受".into());
             }
-            r.decision = decision;
+            if decision == "accepted"
+                && r.runs
+                    .iter()
+                    .flat_map(|r| &r.changes)
+                    .any(|c| matches!(c.state.as_str(), "conflict" | "prepared"))
+            {
+                return Err("存在未解决修改，不能接受".into());
+            }
+            r.decision = if decision == "continue" {
+                "pending".into()
+            } else {
+                decision
+            };
             r.correctness = correctness;
             w.save(&d)?;
         }
         Action::Next { baseline_id } => {
-            let mut d = w.data.lock().unwrap();
-            if !d.captures.iter().any(|c| c.id == baseline_id) {
-                return Err("基线不存在".into());
+            {
+                let d = w.data.lock().unwrap();
+                let r = scenes::current(&d, &d.active_scene_id).ok_or("尚无轮次")?;
+                let expected = if r.decision == "accepted" {
+                    r.candidate.as_ref()
+                } else {
+                    Some(&r.baseline)
+                };
+                if expected != Some(&baseline_id) {
+                    return Err("只能沿用本场景上一轮基线；请进入下一轮后重新导入 A".into());
+                }
             }
-            d.rounds.push(Round {
-                workflow: Default::default(),
-                task_version: 1,
-                task_verifications: BTreeMap::new(),
-                id: id(),
-                baseline: baseline_id,
-                candidate: None,
-                reports: vec![],
-                tasks: vec![],
-                runs: vec![],
-                tests: vec![],
-                comparison: None,
-                correctness: "pending".into(),
-                decision: "pending".into(),
-            });
-            w.save(&d)?;
+            workflow::next_round(&w)?;
         }
         Action::VerifyTask {
             round_id,
@@ -982,7 +1070,9 @@ pub async fn optimization_command(
             }
             for r in &d.rounds {
                 text += &format!(
-                    "## 轮次 {}\n\n正确性：{}；用户决策：{}\n\n",
+                    "## {} · 第 {} 轮（{}）\n\n正确性：{}；用户决策：{}\n\n",
+                    d.scenes.iter().find(|s|s.id==r.scene_id).map(|s|s.name.as_str()).unwrap_or("默认场景"),
+                    d.rounds.iter().filter(|q|q.scene_id==r.scene_id).position(|q|q.id==r.id).unwrap_or(0)+1,
                     r.id, r.correctness, r.decision
                 );
                 text += &format!("性能状态：{}\n\n", r.performance_status());
@@ -1064,17 +1154,41 @@ pub async fn optimization_command(
 
 #[cfg(test)]
 mod import_tests {
- use super::*;
- #[tokio::test]
- async fn cancelled_observed_capture_does_not_replace_workspace_and_can_retry(){
-  let base=std::env::temp_dir().join(format!("upaa-observed-{}",id()));let root=base.join("project");let dir=base.join("records");
-  for part in ["Assets","Packages","ProjectSettings"]{std::fs::create_dir_all(root.join(part)).unwrap();}std::fs::create_dir_all(&dir).unwrap();
-  let w=Arc::new(Workspace::create(dir,root,"test".into()).unwrap());let before=serde_json::to_value(&*w.data.lock().unwrap()).unwrap();
-  let path=base.join("capture.json");std::fs::write(&path,r#"{"frames":[{"cpuMs":1,"gcAllocBytes":136}]}"#).unwrap();
-  let progress=observation::ParseProgress::new(w.clone(),"".into(),id());w.cancelled.store(true,Ordering::SeqCst);
-  let result=capture_observed(path.clone(),Conditions::default(),Some(progress.clone())).await;assert!(result.is_err());progress.fail("cancelled");assert_eq!(w.observation.lock().unwrap().progress.as_ref().unwrap()["status"],"cancelled");assert_eq!(serde_json::to_value(&*w.data.lock().unwrap()).unwrap(),before);
-  w.cancelled.store(false,Ordering::SeqCst);let capture=capture_observed(path,Conditions::default(),Some(progress)).await.unwrap();assert_eq!(capture.frames[0].gc_alloc_bytes,136);drop(w);
-  // Test-created absolute directory only.
-  std::fs::remove_dir_all(base).unwrap();
- }
+    use super::*;
+    #[tokio::test]
+    async fn cancelled_observed_capture_does_not_replace_workspace_and_can_retry() {
+        let base = std::env::temp_dir().join(format!("upaa-observed-{}", id()));
+        let root = base.join("project");
+        let dir = base.join("records");
+        for part in ["Assets", "Packages", "ProjectSettings"] {
+            std::fs::create_dir_all(root.join(part)).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        let w = Arc::new(Workspace::create(dir, root, "test".into()).unwrap());
+        let before = serde_json::to_value(&*w.data.lock().unwrap()).unwrap();
+        let path = base.join("capture.json");
+        std::fs::write(&path, r#"{"frames":[{"cpuMs":1,"gcAllocBytes":136}]}"#).unwrap();
+        let progress = observation::ParseProgress::new(w.clone(), "".into(), id());
+        w.cancelled.store(true, Ordering::SeqCst);
+        let result =
+            capture_observed(path.clone(), Conditions::default(), Some(progress.clone())).await;
+        assert!(result.is_err());
+        progress.fail("cancelled");
+        assert_eq!(
+            w.observation.lock().unwrap().progress.as_ref().unwrap()["status"],
+            "cancelled"
+        );
+        assert_eq!(
+            serde_json::to_value(&*w.data.lock().unwrap()).unwrap(),
+            before
+        );
+        w.cancelled.store(false, Ordering::SeqCst);
+        let capture = capture_observed(path, Conditions::default(), Some(progress))
+            .await
+            .unwrap();
+        assert_eq!(capture.frames[0].gc_alloc_bytes, 136);
+        drop(w);
+        // Test-created absolute directory only.
+        std::fs::remove_dir_all(base).unwrap();
+    }
 }

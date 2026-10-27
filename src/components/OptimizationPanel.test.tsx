@@ -33,7 +33,7 @@ it('rechecks cancelled edits without starting an Agent or reusing a session',asy
  expect(vi.mocked(invoke).mock.calls.some(c=>JSON.stringify(c).includes('"op":"start"'))).toBe(false);
 });
 
-it('starts from a completed report without tasks, path dialogs, or a file confirmation',async()=>{
+it('starts from a completed report after confirming recording freshness without task or path authorization',async()=>{
  const report={reportId:'report',fileId:'capture',stage:'project',status:'completed',agentId:'codex'};
  const input={...state,upload:{fileId:'capture'},reports:[report]} as DiagnoseState;
  const p=project();p.rounds[0].tasks=[];
@@ -42,9 +42,10 @@ it('starts from a completed report without tasks, path dialogs, or a file confir
  const button=await screen.findByText('开始优化');await waitFor(()=>expect(button).not.toBeDisabled());
  expect(screen.queryByText('本轮任务与授权范围')).not.toBeInTheDocument();
  expect(screen.queryByRole('checkbox',{name:/选择/})).not.toBeInTheDocument();
+ fireEvent.click(screen.getByLabelText('确认本次录制来自当前工程代码'));
  fireEvent.change(screen.getByLabelText('补充要求（选填）'),{target:{value:'保持玩法'}});fireEvent.click(button);
  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('optimization_command',{action:{op:'startAutomatic',roundId:'r',agentId:'codex',requirements:'保持玩法'}}));
- expect(invoke).toHaveBeenCalledWith('optimization_command',{action:{op:'prepareAutomatic',fileId:'capture'}});
+ expect(invoke).toHaveBeenCalledWith('optimization_command',{currentCodeConfirmed:true,action:{op:'prepareAutomatic',fileId:'capture'}});
 });
 
 it('honors an explicitly selected saved round instead of replacing it with the current recording',async()=>{
