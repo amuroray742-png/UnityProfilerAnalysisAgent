@@ -110,8 +110,10 @@ pub struct DetailSample {
     pub raw_duration_ns: Option<f32>,
     pub children_count: usize,
     pub metadata_count: usize,
-    /// None for non-allocation samples or invalid/missing GC metadata.
+    /// None for non-allocation samples, validated continuations, or invalid metadata.
     pub gc_alloc_bytes: Option<u64>,
+    #[serde(default)]
+    pub gc_continuation: bool,
     #[serde(default)]
     pub self_ms: Option<f64>,
     #[serde(default)]
@@ -185,6 +187,7 @@ impl DetailFrame {
                         children_count: s.children as usize,
                         metadata_count: s.metadata_count as usize,
                         gc_alloc_bytes: s.gc_bytes,
+                        gc_continuation: s.gc_continuation,
                         self_ms: None,
                         self_reason: None,
                         is_counter: s.is_counter,

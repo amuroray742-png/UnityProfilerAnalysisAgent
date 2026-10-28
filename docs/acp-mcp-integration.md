@@ -39,7 +39,7 @@ session/update 中的 agent_message_chunk 才作为回答正文；其他会话�
 
 取消先发 session/cancel，等待最多 2 秒取得 prompt 的取消响应，再清理进程、MCP 服务和临时目录。初始化/新会话阶段尚无远端 sessionId 时直接结束进程。Windows 使用 Job Object 管理适配器后代，关闭 Job 时一并终止；不配合取消的 fixture 也通过子进程退出断言。创建进程后立即加入 Job，极早启动阶段及其他平台的完整进程树行为尚需更广验收。
 
-初始化超时 30 秒，新会话 60 秒，普通诊断与 C# 兼容定位的 prompt 总期限 300 秒，工程定位及修改为 900 秒，单条 ACP 消息上限 1 MiB。客户端不声明文件或终端能力；仅对当前会话名称精确匹配且处于阶段白名单内的 MCP 工具授予 allow_once；只读阶段不授权修改工具，修改阶段另行校验运行身份、代码范围和指纹。其他权限请求回复 cancelled 并记录日志。这不是对任意 Agent 内建能力的操作系统沙箱。
+初始化超时 30 秒，新会话 60 秒，所有 prompt 连续 300 秒未收到当前会话活动则超时；普通诊断与 C# 兼容定位的总时限为 1800 秒，工程定位及修改为 3600 秒。当前会话的完整 session/update（含正文、思考及工具通知）或 session/request_permission 刷新活动期限，其他会话、无关响应及未收齐的消息不刷新；活动不能延长总时限，取消仍最多等待 2 秒。活动超时和总时限超时分别显示原因，保留已有正文，但只有 end_turn 才判定完成，单条 ACP 消息上限 1 MiB。客户端不声明文件或终端能力；仅对当前会话名称精确匹配且处于阶段白名单内的 MCP 工具授予 allow_once；只读阶段不授权修改工具，修改阶段另行校验运行身份、代码范围和指纹。其他权限请求回复 cancelled 并记录日志。这不是对任意 Agent 内建能力的操作系统沙箱。
 
 ## MCP 数据通道
 
@@ -123,6 +123,14 @@ codex-acp --version
 源码定位使用独立 ACP 会话，后端携带完整首轮报告和当前录制的性能查询上下文；只有该会话注册并授权 `source_files` / `source_search` / `source_read`。Agent 工作目录仍是临时目录，不新增终端、写入或网络工具。后端保存有上限、带终态的报告，导出不依赖 UI 流缓冲。命令、限制、复现和证据边界见[报告与源码指南](reports-and-source.md)。
 
 
-工程定位另用 `project` 报告阶段和独立 ACP 会话，注册 `project_summary`、`project_files`、`project_search`、`project_read`、`project_asset`、`project_references`；旧 `source_*` 仍仅限 C#。普通诊断不能访问工程工具，工程会话不能访问终端或 Unity eval。Editor 查询由 Rust 白名单桥接，固定协议与路径校验，取消仅针对对应 requestId。整体工程诊断 900 秒上限，单次 Editor 查询另有短超时；详情见[工程定位指南](project-diagnosis.md)。
+工程定位另用 `project` 报告阶段和独立 ACP 会话，注册 `project_summary`、`project_files`、`project_search`、`project_read`、`project_asset`、`project_references`；旧 `source_*` 仍仅限 C#。普通诊断不能访问工程工具，工程会话不能访问终端或 Unity eval。Editor 查询由 Rust 白名单桥接，固定协议与路径校验，取消仅针对对应 requestId。整体工程诊断 3600 秒上限，另有 300 秒活动超时，单次 Editor 查询另有短超时；详情见[工程定位指南](project-diagnosis.md)。
 
 2026-09-29 增量：新增两个性能证据工具，该次增量时性能工具总数为 9（历史计数，后续 Flow 等工具见对应专题）；Self 通过原始完整树区间校验后提供，不通过全局热点相减推断。详见 [data 证据查询](data-evidence.md)。前述“未提供 Self”为历史状态。
+
+## Profiler 查询分页参数（2026-10-28）
+
+各工具 limit 不能混用：performance_frame 为 1..128（默认128，线程）；performance_cpu_hierarchy 为 1..500（默认200，样本），max_depth 为 1..64（默认3）；performance_frames 为 1..500（默认200，时间线）；hotspots、compare_frames、flow_events、frame_evidence、frame_sections、memory 为 1..50（默认10）。省略 limit 使用默认值，更多数据沿 nextStart 续页；performance_frames 也返回 total/nextStart，原有 start/limit/returned/frames 保留。Flow 结束帧包含在窗口内，frame_index <= end_frame_index <= frame_index+7；省略表示单帧。
+
+2026-10-28 诊断记录中的14次越界为 frame(limit=200) 3次、hierarchy(limit=1000) 2次、compare_frames(limit=100) 8次、flow_events(limit=100) 1次。原 schema maximum 与后端上限一致，实际 MCP tools/list 也保留约束；但工具正文与诊断提示未明确区分上限，Agent 生成了不合法参数。现从发布的 schema 为工具/limit 生成自然语言范围与分页说明，诊断提示明确各工具上限及错误后的修正方式。MCP 入口复用该 schema 校验 limit/max_depth，Flow 单独校验跨字段窗口；错误包括工具、字段、实际值、范围、默认值及重试建议。仍拒绝越界，不静默夹取，底层校验保留。
+
+MCP wire 回归覆盖四类原始失败、最大值/最大值+1/零/负数/小数/字符串/null、默认值与省略等价、合法边界、拒绝后成功重试、深度与Flow窗口、以及帧时间线续页。模型行为并非确定性；实录验证应同时检查 end_turn 和工具审计中的参数错误数。

@@ -122,6 +122,7 @@ export interface DetailSample {
   name: string; categoryIndex: number | null; totalMs: number; startMs: number;
   rawStartNs: string | null; rawDurationNs: number | null;
   childrenCount: number; metadataCount: number; gcAllocBytes: number | null;
+  gcContinuation?: boolean;
   selfMs?: number | null; selfReason?: string | null; isCounter?: boolean;
 }
 export interface FramePage {

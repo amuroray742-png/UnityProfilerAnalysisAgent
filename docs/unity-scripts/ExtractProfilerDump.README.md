@@ -2,6 +2,8 @@
 
 本目录有两个用途不同的脚本。ExtractProfilerDump.cs 已在 Unity 6000.3.23f1 中编译并实际重新导出；ProfilerJsonExporter.cs 仍是未验收示例。当前进度见[验证台账](../project-status.md)。
 
+**GC 帧边界限制（2026-10-28）**：ExtractProfilerDump 的 GC 总量是 raw sample metadata 求和；新实录已证明延续样本可能重复 Size metadata，因此不能用该总量验证此类录制的实际分配。请使用 [export-gc-boundary-reference.cs](../../tools/export-gc-boundary-reference.cs) 的独立 Hierarchy GC 列参考，方法与限定证据见[当前解析契约](../data-parser-current.md#gc-帧边界延续)。历史 dump 对照结论仍仅适用于原先注明的录制范围。
+
 ## 两种 JSON 使用独立解析分支
 
 | 脚本 | 用途 | 输出 / 限制 |

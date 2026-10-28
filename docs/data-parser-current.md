@@ -1,6 +1,6 @@
 # 当前 .data 解析契约
 
-更新：2026-09-30。本页描述当前代码；历史布局、性能和安装验收不自动适用于本轮产物。
+更新：2026-10-28。本页描述当前代码；历史布局、性能和安装验收不自动适用于本轮产物。生产解析器位于 `crates/upaa-core/src/parser/data/`，桌面端复用同一实现。
 
 ## 版本和可信度
 
@@ -14,7 +14,36 @@
 
 文件与 bytes 入口使用同一个有界顺序读取循环。统一拒绝空文件、缺结束标记、结束标记之后的额外字节、捕获内版本变化和越界结构。单帧二进制上限仍为 128 MiB；样本结构、名称复制、metadata 与 Flow 使用每帧 256 MiB 的保守分配预算，不等于进程总内存上限。
 
-全部线程参与 GC，字节以 u64 累加，不经 float KiB。GC 索引、marker 与 typed metadata 必须一致；匹配失败报错，零记录与真实 0 B 保留。损坏树、未知 marker、NaN/负样本耗时不返回部分成功。主线程缺失、重复或根不唯一时 CPU 不可用，不妨碍独立有效的 GC。
+全部线程参与 GC，字节以 u64 累加，不经 float KiB。真实分配的 GC 索引、marker 与 typed metadata 必须一致；匹配失败报错，零记录与真实 0 B 保留。Unity 6000.3 的一种帧边界延续例外见下节。损坏树、未知 marker、NaN/负样本耗时不返回部分成功。主线程缺失、重复或根不唯一时 CPU 不可用，不妨碍独立有效的 GC。
+
+### GC 帧边界延续
+
+Unity 6000.3.23f1 实录中存在这样的样本：上一帧末尾的 GC.Alloc 已有索引及 Size metadata；下一帧在帧起点保留一个零耗时 GC.Alloc，重复 Size metadata，但没有新的 GC 索引。Editor Hierarchy 的该样本 GC Alloc 列为 0。直接累加 raw metadata 会重复计算。
+
+当前仅接受已核对的窄条件：原始帧 ID 连续；同一原始线程 ID、组名和线程名；上一帧最后一个样本是有索引、metadata 一致、正耗时的叶子 GC.Alloc，结束时间精确等于当前帧起点；当前样本为哨兵根下的 sample[1]、零耗时叶子、开始于帧起点、相同 marker ID、无 GC 索引，且单字段 UInt32 Size metadata 与上一帧已计入字节数一致。不使用时间容差、不依赖 AndroidLogcat 名称或固定 marker ID。
+
+该样本保留在树和原始证据中，标记 `gcContinuation=true`、`gcAllocBytes=null`；metadata 保留原值，不产生新的 GC 字节或分配次数，UI 显示“延续（不重复计入）”。每帧解码 checkpoint 保留前帧证据，任意顺序查询同样校验。不满足条件（包括缺前帧、帧 ID 跳跃、metadata 缺失/不符）仍失败；普通有索引的零耗时 GC.Alloc 正常计入。2022.3 未启用此例外；这也不是对所有跨帧样本形态的通用支持。
+
+2026-10-28，在隔离 Unity 6000.3.23f1 Editor 中加载维护者提供的录制，以 RawFrameDataView 获取样本，以 HierarchyFrameDataView 的 `columnGcMemory` 独立获取 GC 统计。文件 SHA-256：`caed7b36a41e720c85ab8ae01560304655c567aee69a50d6dfe4fbd05b55c7da`。生产完整导入及逐帧、逐线程对照覆盖 2,000 帧、406,000 个线程实例；全部一致。全线程 GC 为 **736,039,400 B**，raw metadata 累加为 **736,039,784 B**，四个延续样本的 **384 B** 未重复计入。四帧及前帧的边界样本亦已导出，并通过倒序按需查询验证。
+
+| 原始块索引（0 起） | 原始帧 ID | 线程索引 | 重复 metadata | Editor 本帧 GC（全线程） |
+|---:|---:|---:|---:|---:|
+| 267 | 2122 | 103 | 104 B | 3,625,093 B |
+| 1593 | 3448 | 90 | 48 B | 1,968,087 B |
+| 1596 | 3451 | 101 | 104 B | 4,083,450 B |
+| 1770 | 3625 | 96 | 128 B | 4,375,701 B |
+
+完整 Editor 参考 JSON 的 SHA-256：`824695db27bd1402cdfd900959138ed6ea05503cf446bafa59744f27386284d2`。
+
+复现：在同版本隔离 Editor 已加载录制后，用 Unity CLI `eval_file` 执行 [export-gc-boundary-reference.cs](../tools/export-gc-boundary-reference.cs)，保留其返回的 JSON 路径。该脚本读取全帧全线程的 Hierarchy GC、raw metadata 总量，另保存上述四组边界样本及各自的 Hierarchy GC 列；不修改游戏工程。然后执行：
+
+```powershell
+$env:UNITY_GC_DATA_PATH = '<录制绝对路径>'
+$env:UNITY_GC_REFERENCE_PATH = '<Editor 返回的 JSON 路径>'
+cargo test --manifest-path crates/upaa-core/Cargo.toml --locked --offline --release --test gc_boundary editor_reference_full_capture_and_lazy_queries -- --ignored --nocapture
+```
+
+缺少输入、没有延续样本、统计差异或查询失败均使测试失败。公开合成回归在同一 `gc_boundary` 测试文件中，默认执行；私有录制和完整参考不提交。这一对照只新增本录制的 GC 证据，不扩大 GPU、内存或其他版本的验证结论。
 
 帧时间来自相邻原始帧 ID 连续且时间未倒退的起始时间差，沿用 Editor float32 换算；相同起始时间允许真实零间隔。末帧、ID 跳跃或缺帧使对应区间不可用。2022.3 的零 CPU、零 gatheredData、仅头部的空块保留为 skipped 占位；其余不完整帧报错。meta.parsing 保留 rawBlocks、decodedFrames、skippedFrames；成功导入的 failedFrames 为 0，因为结构失败会中止整个导入。跳过帧仍参与覆盖率分母。
 
@@ -42,6 +71,7 @@ FrameStore 返回 Arc 共享不可变结果，完整树 Self 在物化时计算�
 
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --locked --offline
+cargo test --manifest-path crates/upaa-core/Cargo.toml --locked --offline
 npm test
 npm run build
 python -B -m unittest discover -s tools -p 'test_*.py'

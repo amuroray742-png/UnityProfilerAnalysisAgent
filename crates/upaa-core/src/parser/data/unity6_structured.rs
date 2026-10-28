@@ -21,6 +21,19 @@ pub struct Decoder {
     markers: Arc<HashMap<u32, MarkerInfo>>,
     counter_markers: Arc<HashSet<u32>>,
     metadata_definitions: Arc<HashMap<u32, Vec<MetadataDefinition>>>,
+    previous_frame_id: Option<i32>,
+    gc_boundaries: Arc<HashMap<u64, GcBoundary>>,
+}
+
+/// Only the terminal, indexed allocation in each thread can establish the
+/// narrowly verified zero-duration continuation at the next frame's start.
+#[derive(Debug, Clone)]
+struct GcBoundary {
+    group: String,
+    thread_name: String,
+    marker_id: u32,
+    end_ns: u64,
+    bytes: u64,
 }
 
 pub const RENDER_COUNTER_NAMES: [&str; 5] = [
@@ -303,6 +316,8 @@ pub struct Sample {
     pub parent: Option<usize>,
     pub metadata_count: u32,
     pub gc_bytes: Option<u64>,
+    /// Repeated boundary metadata, already allocated in the preceding frame.
+    pub gc_continuation: bool,
     pub counter_value: Option<u64>,
     pub is_counter: bool,
     pub metadata: Vec<MetadataValue>,
@@ -585,6 +600,8 @@ impl Decoder {
         }
         super::cancelled(&self.cancel)?;
         if self.legacy && header.gathered_data == 0 && header.cpu_us == 0 && body.len() == 32 {
+            self.previous_frame_id = None;
+            self.gc_boundaries = Arc::default();
             return Ok(DecodedFrame {
                 header,
                 threads: vec![],
@@ -655,6 +672,7 @@ impl Decoder {
                     index,
                     &mut sections,
                     &mut allocation_budget,
+                    &header,
                 )
                 .map_err(|e| ParseError::Other(format!("thread[{index}]: {e}")))?;
             if !ids.insert(thread.id) {
@@ -668,6 +686,37 @@ impl Decoder {
             r.skip(n);
             sections.push(section(&r, trailer_offset, "frame trailer", None, None));
         }
+        let mut boundaries = HashMap::new();
+        if !self.legacy {
+            for thread in &threads {
+                if let Some(sample) = thread.samples.last() {
+                    if let Some(bytes) = sample.gc_bytes {
+                        // No rounding tolerance: an unproven boundary must fail,
+                        // not turn an ordinary missing allocation into success.
+                        let duration = sample.duration_ns as u64;
+                        if sample.duration_ns > 0.0
+                            && sample.duration_ns as f64 == duration as f64
+                            && sample.children == 0
+                        {
+                            if let Some(end_ns) = sample.start_ns.checked_add(duration) {
+                                boundaries.insert(
+                                    thread.id,
+                                    GcBoundary {
+                                        group: thread.group.clone(),
+                                        thread_name: thread.name.clone(),
+                                        marker_id: sample.marker_id,
+                                        end_ns,
+                                        bytes,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.previous_frame_id = Some(header.frame_id);
+        self.gc_boundaries = Arc::new(boundaries);
         Ok(DecodedFrame {
             legacy: self.legacy,
             verified: self.verified(),
@@ -687,6 +736,7 @@ impl Decoder {
         thread_index: usize,
         sections: &mut Vec<OpaqueSection>,
         allocation_budget: &mut usize,
+        header: &FrameHeader,
     ) -> Result<Thread, ParseError> {
         let id = r.u64();
         let group = r.str();
@@ -742,6 +792,7 @@ impl Decoder {
                 parent,
                 metadata_count: 0,
                 gc_bytes: None,
+                gc_continuation: false,
                 counter_value: None,
                 is_counter: self.counter_markers.contains(&marker_id),
                 metadata: Vec::new(),
@@ -804,11 +855,31 @@ impl Decoder {
                 return Err(error(r, "GC record marker mismatch or duplicate"));
             }
         }
-        if samples
-            .iter()
-            .any(|s| s.name == "GC.Alloc" && s.gc_bytes.is_none())
-        {
-            return Err(error(r, "GC record missing"));
+        let previous = self.gc_boundaries.get(&id).filter(|previous| {
+            !self.legacy
+                && self.previous_frame_id.and_then(|f| f.checked_add(1)) == Some(header.frame_id)
+                && previous.group == group
+                && previous.thread_name == name
+                && previous.end_ns == header.start_ns
+        });
+        let sentinel_root = samples.first().is_some_and(|s| {
+            s.marker_id == u32::MAX && s.parent.is_none() && s.start_ns == header.start_ns
+        });
+        for (index, sample) in samples.iter_mut().enumerate() {
+            if sample.name == "GC.Alloc" && sample.gc_bytes.is_none() {
+                if index == 1
+                    && sentinel_root
+                    && sample.parent == Some(0)
+                    && sample.duration_ns == 0.0
+                    && sample.children == 0
+                    && sample.start_ns == header.start_ns
+                    && previous.is_some_and(|p| p.marker_id == sample.marker_id)
+                {
+                    sample.gc_continuation = true;
+                } else {
+                    return Err(error(r, &format!("sample[{index}] GC record missing (no verified frame-boundary continuation)")));
+                }
+            }
         }
         let section_start = r.pos() as usize;
         let post_gc_count = count(r, 4, n, "post-GC sample indices")?;
@@ -852,7 +923,12 @@ impl Decoder {
                 let tag = r.u32();
                 let size = count(r, 1, r.remaining(), "metadata payload")?;
                 let payload_start = r.pos();
-                if let Some(gc_bytes) = sample.gc_bytes {
+                // Validate repeated metadata even when the frame-wide metadata
+                // display budget has been exhausted. Never count it as new GC.
+                let expected_gc = sample
+                    .gc_bytes
+                    .or_else(|| sample.gc_continuation.then(|| previous.unwrap().bytes));
+                if let Some(gc_bytes) = expected_gc {
                     if fields != 1 || tag != 3 || size != 4 {
                         return Err(error(r, "unsupported GC metadata payload"));
                     }
@@ -901,7 +977,7 @@ impl Decoder {
         }
         if samples
             .iter()
-            .any(|s| s.gc_bytes.is_some() && s.metadata_count != 1)
+            .any(|s| (s.gc_bytes.is_some() || s.gc_continuation) && s.metadata_count != 1)
         {
             return Err(error(r, "GC general metadata missing"));
         }

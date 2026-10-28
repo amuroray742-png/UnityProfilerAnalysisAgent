@@ -18,6 +18,14 @@ beforeEach(() => {
   vi.mocked(getFrameDetails).mockImplementation(async (_id, index) => ({ info: page(index).info, threads: [page(index).thread], threadCount: 1, nextStart: null }));
 });
 afterEach(cleanup);
+it('labels GC continuations without displaying repeated metadata as new allocations', async () => {
+  const continuation = page(10);
+  continuation.samples[0] = { ...continuation.samples[0], name: 'GC.Alloc', gcAllocBytes: null, gcContinuation: true };
+  vi.mocked(getCpuHierarchy).mockResolvedValue(continuation);
+  render(<FrameExplorer fileId="a" frames={frames} quality={quality} />);
+  await screen.findByText('延续（不重复计入）');
+  expect(screen.getByText('GC.Alloc')).toBeInTheDocument();
+});
 it('lists Worker only in frame 10 and queries its thread index', async () => {
   vi.mocked(getFrameDetails).mockImplementation(async (_id, index) => ({
     info: page(index).info,

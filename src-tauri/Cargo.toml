@@ -81,3 +81,6 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }

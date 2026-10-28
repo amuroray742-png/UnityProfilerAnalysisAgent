@@ -120,11 +120,55 @@ fn default_focus() -> String {
 fn args<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, McpToolError> {
     serde_json::from_value(value).map_err(|e| McpToolError::BadArg(e.to_string()))
 }
+
+// Read the published bounds rather than maintaining a separate MCP limit table.
+// Keep core validation as defense in depth for non-MCP callers.
+fn validate_query_bounds(name: &str, arguments: &Value) -> Result<(), McpToolError> {
+    static SCHEMAS: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    let schemas = SCHEMAS.get_or_init(super::list_tool_schemas);
+    let Some(tool) = schemas["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == name)
+    else {
+        return Ok(());
+    };
+    for field in ["limit", "max_depth"] {
+        let rule = &tool["inputSchema"]["properties"][field];
+        if let (Some(max), Some(value)) = (rule["maximum"].as_u64(), arguments.get(field)) {
+            let min = rule["minimum"].as_u64().unwrap_or(0);
+            if !value.as_u64().is_some_and(|n| n >= min && n <= max) {
+                let hint = if field == "limit" {
+                    "省略 limit 使用默认值，或改为范围内的值；保持本次 start，后续使用返回的 nextStart 分页。不会自动截断或扩大上限。"
+                } else {
+                    "改为范围内的深度；depthTruncated=true 时在上限内增加 max_depth 并从 start=0 重查。"
+                };
+                return Err(McpToolError::BadArg(format!(
+                    "{name}.{field}={value} 无效：必须为 {min}..={max} 的整数，默认 {}。{hint}",
+                    rule["default"]
+                )));
+            }
+        }
+    }
+    if name == "performance_flow_events" {
+        if let (Some(start), Some(end)) = (
+            arguments["frame_index"].as_u64(),
+            arguments["end_frame_index"].as_u64(),
+        ) {
+            if !end.checked_sub(start).is_some_and(|span| span < 8) {
+                return Err(McpToolError::BadArg(format!("{name}.end_frame_index={end} 无效：必须 >= frame_index={start} 且差值 <= 7（含首尾最多 8 帧）；省略 end_frame_index 查询单帧，更大范围分窗口查询。")));
+            }
+        }
+    }
+    Ok(())
+}
 pub async fn dispatch(
     store: &MetricsStore,
     name: &str,
     arguments: Value,
 ) -> Result<Value, McpToolError> {
+    validate_query_bounds(name, &arguments)?;
     if name == "performance_memory" {
         let a: Memory = args(arguments)?;
         return store.memory_page(&a.name, a.start, a.limit).await;

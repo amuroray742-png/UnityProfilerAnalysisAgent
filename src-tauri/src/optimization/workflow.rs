@@ -334,6 +334,12 @@ pub enum Action {
     },
 }
 fn recent_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    // Desktop acceptance must not register disposable archives in the user's history.
+    if let Some(path) = std::env::var_os("UPAA_RECENT_PROJECTS_PATH") {
+        let path = PathBuf::from(path);
+        if !path.is_absolute() { return Err("最近项目记录路径必须为绝对路径".into()); }
+        return Ok(path);
+    }
     Ok(app
         .path()
         .app_data_dir()
@@ -341,20 +347,46 @@ fn recent_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .join("recent-projects.json"))
 }
 fn recent(app: &tauri::AppHandle) -> Result<Vec<Value>, String> {
-    let path = recent_path(app)?;
+    read_recent(&recent_path(app)?)
+}
+fn read_recent(path: &Path) -> Result<Vec<Value>, String> {
     if !path.exists() {
         return Ok(vec![]);
     }
-    serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+    let rows: Vec<Value> = serde_json::from_slice(&fs::read(&path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let normalized = normalize_recents(rows.iter().filter(|r| {
+        r["directory"].as_str().is_some_and(|directory| {
+            // The Unity root may be offline while saved reports remain usable.
+            // Remove only archives confirmed missing, not permission/I/O failures.
+            !confirmed_missing(fs::metadata(Path::new(directory).join("optimization.json")))
+        })
+    }).cloned().collect());
+    if normalized != rows { storage::atomic(&path, &serde_json::to_vec(&normalized).unwrap())?; }
+    Ok(normalized)
+}
+fn confirmed_missing<T>(result: std::io::Result<T>) -> bool {
+    matches!(result, Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+}
+fn recent_directory_key(directory: &str) -> String {
+    let path = Path::new(directory).canonicalize().unwrap_or_else(|_| PathBuf::from(directory));
+    let key = path.to_string_lossy().into_owned();
+    #[cfg(windows)]
+    let key = key.replace('/', "\\").trim_start_matches(r"\\?\").trim_end_matches('\\').to_lowercase();
+    key
+}
+fn normalize_recents(rows: Vec<Value>) -> Vec<Value> {
+    let mut seen = std::collections::HashSet::new();
+    rows.into_iter().filter(|r| r["directory"].as_str().is_some_and(|p|
+        !p.is_empty() && seen.insert(recent_directory_key(p))
+    )).take(30).collect()
 }
 fn remember(app: &tauri::AppHandle, w: &Workspace) -> Result<(), String> {
-    fs::create_dir_all(app.path().app_data_dir().map_err(|e| e.to_string())?)
+    fs::create_dir_all(recent_path(app)?.parent().ok_or("最近项目记录目录无效")?)
         .map_err(|e| e.to_string())?;
     let mut rows = recent(app)?;
     let d = w.data.lock().unwrap();
-    rows.retain(|r| r["directory"] != json!(w.directory));
     rows.insert(0,json!({"id":d.id,"name":d.name,"root":d.root,"directory":w.directory,"updatedAt":chrono::Utc::now().to_rfc3339()}));
-    rows.truncate(30);
+    let rows = normalize_recents(rows);
     storage::atomic(&recent_path(app)?, &serde_json::to_vec(&rows).unwrap())
 }
 #[tauri::command(rename_all = "camelCase")]
@@ -1154,4 +1186,57 @@ pub fn export_round(w: &Workspace, rid: &str) -> Result<String, String> {
     }
     text+=&format!("\n## A/B 复验\n\n```json\n{}\n```\n\n编译通过不等于性能改善；游戏操作、Profiler 重录与玩法确认由用户完成。未附带完整源码和原始录制。\n",serde_json::to_string_pretty(&r.comparison).unwrap());
     Ok(text)
+}
+
+
+#[cfg(test)]
+mod recent_tests {
+    use super::*;
+    #[test]
+    fn recent_missing_archive_is_removed_and_cleanup_is_persisted() {
+        let root = std::env::temp_dir().join(format!("upaa-recent-{}", id()));
+        fs::create_dir_all(root.join("kept")).unwrap();
+        fs::create_dir_all(root.join("deleted")).unwrap();
+        fs::write(root.join("kept/optimization.json"), b"invalid but existing archive").unwrap();
+        fs::write(root.join("deleted/optimization.json"), b"{}").unwrap();
+        let kept = json!({"id":"kept","directory":root.join("kept"),"root":root.join("missing-unity-root")});
+        let deleted = json!({"id":"deleted","directory":root.join("deleted")});
+        let list = root.join("recent.json");
+        fs::write(&list, serde_json::to_vec(&vec![deleted,kept.clone()]).unwrap()).unwrap();
+        fs::remove_file(root.join("deleted/optimization.json")).unwrap();
+        assert_eq!(read_recent(&list).unwrap(), vec![kept.clone()]);
+        assert_eq!(serde_json::from_slice::<Vec<Value>>(&fs::read(&list).unwrap()).unwrap(),vec![kept]);
+        fs::remove_file(root.join("kept/optimization.json")).unwrap();
+        fs::remove_dir(root.join("kept")).unwrap();
+        assert!(read_recent(&list).unwrap().is_empty());
+        fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn recent_io_errors_are_not_treated_as_deleted() {
+        use std::io::{Error,ErrorKind};
+        assert!(confirmed_missing::<()>(Err(Error::from(ErrorKind::NotFound))));
+        for kind in [ErrorKind::PermissionDenied,ErrorKind::TimedOut,ErrorKind::Other] {
+            assert!(!confirmed_missing::<()>(Err(Error::from(kind))));
+        }
+        assert!(!confirmed_missing(Ok(())));
+    }
+    #[test]
+    fn recent_archives_dedupe_paths_not_copied_ids() {
+        let a = json!({"id":"copied", "directory":"/records/a", "name":"new"});
+        let b = json!({"id":"copied", "directory":"/records/b", "name":"copy"});
+        let old = json!({"id":"old", "directory":"/records/a", "name":"old"});
+        assert_eq!(normalize_recents(vec![a.clone(), b.clone(), old]), vec![a,b]);
+    }
+    #[test]
+    fn recent_limit_applies_after_deduplication() {
+        let mut rows = vec![json!({"directory":"/same"}); 40];
+        rows.push(json!({"directory":"/other"}));
+        assert_eq!(normalize_recents(rows).len(),2);
+    }
+    #[test]
+    #[cfg(windows)]
+    fn recent_windows_path_aliases_match_even_when_missing() {
+        assert_eq!(recent_directory_key(r"C:/missing-upaa-records/"),
+                   recent_directory_key(r"\\?\C:\MISSING-UPAA-RECORDS"));
+    }
 }

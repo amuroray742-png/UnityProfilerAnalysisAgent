@@ -82,14 +82,15 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Peer<R, W> {
             acp_session_id: session.clone(),
         });
         let result = self
-            .request(
+            .request_with_limits(
                 "session/prompt",
                 json!({"sessionId":session,"prompt":[{"type":"text","text":prompt}]}),
                 Duration::from_secs(if self.allow_project || self.allow_modification {
-                    900
+                    3600
                 } else {
-                    300
+                    1800
                 }),
+                Some(Duration::from_secs(300)),
             )
             .await?;
         let reason = result["stopReason"]
@@ -110,6 +111,16 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Peer<R, W> {
         params: Value,
         timeout: Duration,
     ) -> Result<Value, AcpError> {
+        self.request_with_limits(method, params, timeout, None)
+            .await
+    }
+    async fn request_with_limits(
+        &mut self,
+        method: &str,
+        params: Value,
+        total: Duration,
+        idle: Option<Duration>,
+    ) -> Result<Value, AcpError> {
         if *self.cancel.borrow() {
             return Err(AcpError::Cancelled);
         }
@@ -117,26 +128,44 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Peer<R, W> {
         let id = self.next_id;
         self.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))
             .await?;
-        let mut deadline = Instant::now() + timeout;
+        let started = Instant::now();
+        let total_deadline = started + total;
+        let mut idle_deadline = started + idle.unwrap_or(total);
+        let mut cancel_deadline = None;
         // Buffer remains outside select: cancellation cannot discard a partial line.
         let mut bytes = Vec::new();
         loop {
+            let deadline = cancel_deadline.unwrap_or(total_deadline.min(idle_deadline));
             tokio::select! {
                 biased;
                 _=self.cancel.changed(), if !self.cancelled => {
                     self.cancelled=true;
                     if let Some(session)=&self.session {
                         self.send(json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":session}})).await?;
-                        deadline=Instant::now()+Duration::from_secs(2);
+                        cancel_deadline=Some(Instant::now()+Duration::from_secs(2));
                     } else {return Err(AcpError::Cancelled)}
                 },
                 _=tokio::time::sleep_until(deadline)=>{
-                    return if self.cancelled {Err(AcpError::Cancelled)} else {Err(AcpError::Protocol(format!("{method} 超时")))};
+                    return if self.cancelled {Err(AcpError::Cancelled)} else if idle.is_some() {
+                        let reason = if total_deadline <= idle_deadline {
+                            format!("总时限超时（{} 秒）", total.as_secs())
+                        } else {
+                            format!("活动超时（连续 {} 秒未收到当前会话活动）", idle.unwrap().as_secs())
+                        };
+                        Err(AcpError::Protocol(format!("{method} {reason}；报告不完整，已保留收到的正文")))
+                    } else {Err(AcpError::Protocol(format!("{method} 超时")))};
                 },
                 read=read_message(&mut self.reader,&mut bytes)=>{
                     let message=match read {Ok(message)=>message,Err(_) if self.cancelled=>return Err(AcpError::Cancelled),Err(error)=>return Err(error)};
                     bytes.clear();
                     if message["jsonrpc"]!="2.0" {return Err(AcpError::Protocol("stdout 不是 JSON-RPC 2.0".into()))}
+                    // Only complete messages for this session count as activity. Partial
+                    // bytes, unrelated responses and other sessions cannot keep it alive.
+                    if !self.cancelled && idle.is_some()
+                        && self.session.as_deref().is_some_and(|s| message["params"]["sessionId"].as_str()==Some(s))
+                        && matches!(message["method"].as_str(), Some("session/update" | "session/request_permission")) {
+                        idle_deadline=Instant::now()+idle.unwrap();
+                    }
                     if let Some(method)=message["method"].as_str() {
                         self.inbound(method,&message).await?;
                     } else if message["id"]==id {
@@ -289,5 +318,153 @@ async fn read_message<R: AsyncRead + Unpin>(
         if end.is_some() {
             return serde_json::from_slice(bytes).map_err(AcpError::from);
         }
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+    use tokio::io::{duplex, split};
+
+    fn update(session: &str, kind: &str) -> Value {
+        json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":session,"update":{"sessionUpdate":kind,"content":{"type":"text","text":"progress"}}}})
+    }
+
+    // Virtual time exercises the production request loop without waiting minutes.
+    async fn scenario(
+        messages: Vec<(u64, Value)>,
+        total: u64,
+        idle: u64,
+        cancel_at: Option<u64>,
+    ) -> (Result<Value, AcpError>, Vec<DiagnoseEvent>, u64) {
+        let (client, server) = duplex(16384);
+        let (read, write) = split(client);
+        let (server_read, mut server_write) = split(server);
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let (events, mut rx) = mpsc::unbounded_channel();
+        let mut peer = Peer::new(read, write, cancel_rx, events);
+        peer.session = Some("current".into());
+        let start = Instant::now();
+        let server = tokio::spawn(async move {
+            let mut reader = BufReader::new(server_read);
+            read_message(&mut reader, &mut Vec::new()).await.unwrap();
+            for (at, message) in messages {
+                tokio::time::sleep_until(start + Duration::from_secs(at)).await;
+                if server_write
+                    .write_all(format!("{message}\n").as_bytes())
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+            // Keep stdout open: silence must time out, not turn into EOF.
+            std::future::pending::<()>().await;
+        });
+        let cancel = tokio::spawn(async move {
+            if let Some(at) = cancel_at {
+                tokio::time::sleep_until(start + Duration::from_secs(at)).await;
+                cancel_tx.send(true).unwrap();
+            }
+            std::future::pending::<()>().await;
+        });
+        let result = peer
+            .request_with_limits(
+                "session/prompt",
+                json!({}),
+                Duration::from_secs(total),
+                Some(Duration::from_secs(idle)),
+            )
+            .await;
+        let elapsed = start.elapsed().as_secs();
+        let mut collected = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            collected.push(event);
+        }
+        server.abort();
+        cancel.abort();
+        (result, collected, elapsed)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn active_prompt_completes_beyond_old_five_minute_limit() {
+        let (result, events, elapsed) = scenario(
+            vec![
+                (240, update("current", "agent_message_chunk")),
+                (480, update("current", "agent_thought_chunk")),
+                (720, update("current", "tool_call_update")),
+                (
+                    960,
+                    json!({"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}),
+                ),
+            ],
+            1800,
+            300,
+            None,
+        )
+        .await;
+        assert_eq!(result.unwrap()["stopReason"], "end_turn");
+        assert_eq!(elapsed, 960);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, DiagnoseEvent::Chunk { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn silence_after_output_times_out_and_preserves_text() {
+        let (result, events, elapsed) = scenario(
+            vec![(200, update("current", "agent_message_chunk"))],
+            1800,
+            300,
+            None,
+        )
+        .await;
+        assert!(result.unwrap_err().to_string().contains("活动超时"));
+        assert_eq!(elapsed, 500);
+        assert!(matches!(&events[0], DiagnoseEvent::Chunk { text } if text=="progress"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unrelated_messages_do_not_extend_idle_timeout() {
+        let (result, _, elapsed) = scenario(
+            vec![
+                (200, update("other", "agent_message_chunk")),
+                (250, json!({"jsonrpc":"2.0","id":99,"result":{}})),
+            ],
+            1800,
+            300,
+            None,
+        )
+        .await;
+        assert!(result.unwrap_err().to_string().contains("活动超时"));
+        assert_eq!(elapsed, 300);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn continuing_activity_cannot_extend_total_deadline() {
+        let messages = (1..=10)
+            .map(|n| (n * 200, update("current", "tool_call_update")))
+            .collect();
+        let (result, _, elapsed) = scenario(messages, 1800, 300, None).await;
+        assert!(result.unwrap_err().to_string().contains("总时限超时"));
+        assert_eq!(elapsed, 1800);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancellation_is_not_extended_by_activity() {
+        let (result, events, elapsed) = scenario(
+            vec![(101, update("current", "agent_message_chunk"))],
+            1800,
+            300,
+            Some(100),
+        )
+        .await;
+        assert!(matches!(result, Err(AcpError::Cancelled)));
+        assert_eq!(elapsed, 102);
+        assert!(events.is_empty());
     }
 }

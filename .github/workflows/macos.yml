@@ -37,6 +37,8 @@ jobs:
           npm run build
       - name: Rust and public protocol regression
         run: cargo +stable test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Shared core and GC boundary regression
+        run: cargo +stable test --manifest-path crates/upaa-core/Cargo.toml --locked
       - name: Research decoder regression
         run: python3 -m unittest discover -s tools -p 'test_*.py'
       - name: macOS application and disk image
