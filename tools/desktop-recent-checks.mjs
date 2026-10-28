@@ -74,11 +74,23 @@ try{
  assert.equal((await desktop.ipc('workflow_command',{op:'recent'})).length,1);unchanged();
  report.checks.push('Isolated list persists across application restart');
  await desktop.close();desktop=await launch(false);
+ // The user may have deleted a real archive since the previous verification.
+ // Isolation must preserve formal bytes until this normal production read; that
+ // read may legitimately prune confirmed missing archives.
+ const original=before?JSON.parse(before):[];
+ const expected=original.filter(r=>{
+  try{fs.statSync(path.join(r.directory,'optimization.json'));return true;}
+  catch(e){if(e.code==='ENOENT')return false;throw e;}
+ });
+ unchanged();
  const production=await desktop.ipc('workflow_command',{op:'recent'});
- assert.deepEqual(production,before?JSON.parse(before):[]);unchanged();
+ assert.deepEqual(production,expected);
+ if(expected.length===original.length)unchanged();
+ else assert.deepEqual(JSON.parse(fs.readFileSync(formal)),expected);
  report.productionCount=production.length;
  report.productionNames=production.map(r=>r.name);
- report.checks.push('Without override, packaged EXE reads the unchanged formal list; no test archives leaked');
+ report.productionRemovedMissing=original.filter(r=>!expected.includes(r)).map(r=>({name:r.name,directory:r.directory}));
+ report.checks.push('Test runs leave formal bytes unchanged; normal production read only removes confirmed missing archives, with no test entries leaked');
  report.passed=true;
 }catch(e){report.passed=false;report.error=String(e);process.exitCode=1;}
 finally{if(desktop)await desktop.close();fs.writeFileSync(path.join(out,'verification.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));}

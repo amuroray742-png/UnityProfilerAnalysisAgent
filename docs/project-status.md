@@ -2,7 +2,7 @@
 
 ## 最近项目已删除存档自动清理（2026-10-28）
 
-加载最近列表时检查存档的 optimization.json，仅 NotFound 时移除并持久化；权限不足、I/O 错误、内容损坏仍保留，以便恢复。Unity 工程根目录不可用但存档仍在时保留历史报告入口。首页显示后用户才删除存档的情况，在点击打开失败后重新读取列表，移除失效项并清除该项的打开错误；其他打开错误仍显示。后端 recent_tests 5 项、ProjectWorkflow 40 项通过。桌面验收脚本新增删除测试存档后的清理及重启断言，尚未在新打包 EXE 上执行。
+加载最近列表时检查存档的 optimization.json，仅 NotFound 时移除并持久化；权限不足、I/O 错误、内容损坏仍保留，以便恢复。Unity 工程根目录不可用但存档仍在时保留历史报告入口。首页显示后用户才删除存档的情况，在点击打开失败后重新读取列表，移除失效项并清除该项的打开错误；其他打开错误仍显示。后端 recent_tests 5 项、ProjectWorkflow 40 项通过。重新打包 Windows EXE / NSIS 后，实际桌面验收通过删除存档清理及落盘、重启保持、6 次重复打开去重和隔离记录检查。隔离测试期间正式列表字节不变；正常启动新版本时，正式列表中已不存在的 C:/work/JinnOptimize 自动移除，仍存在的 ProjectVanguard 保留，未混入测试条目。验收证据：.cache/recent-projects-desktop/b8e29f36-f2b0-4f87-b4c1-8a8afa11caa9/verification.json。EXE SHA-256：`6793aa9b7dcb0f8471f06a86dca254d0712ffcd2a738e0f783ea333145d12603`；NSIS SHA-256：`ffb60f1f581dc9b98ce8ccd32eea7555e2062d4675823c130d0bede6b48da572`。
 
 ## 最近项目列表修复（2026-10-28）
 
