@@ -220,3 +220,24 @@ it('distinguishes copied archives with the same project id and opens the chosen 
   expect(errors.mock.calls.some(c=>c.some(v=>String(v).includes('same key')))).toBe(false);
  }finally{errors.mockRestore();}
 });
+
+it.each([true,false])('refreshes stale recent entries after open failure; deleted=%s',async(deleted)=>{
+ const row={id:'gone',name:'Gone archive',root:'C:/Game',directory:'C:/Gone',updatedAt:''};let failed=false;
+ vi.mocked(invoke).mockImplementation(async(name,args)=>{
+  if(name==='list_agents')return agents;
+  const a=(args as {action?:{op:string}})?.action;
+  if(a?.op==='recent')return failed&&deleted?[]:[row];
+  if(a?.op==='open'){failed=true;throw 'archive unavailable';}
+  return null;
+ });
+ render(<ProjectWorkflow/>);
+ fireEvent.click(await screen.findByText('Gone archive'));
+ await waitFor(()=>expect(vi.mocked(invoke).mock.calls.filter(c=>(c[1] as {action?:{op:string}})?.action?.op==='recent').length).toBe(2));
+ if(deleted){
+  await waitFor(()=>expect(screen.queryByText('Gone archive')).not.toBeInTheDocument());
+  expect(screen.queryByText('archive unavailable')).not.toBeInTheDocument();
+ }else{
+  expect(screen.getByText('Gone archive')).toBeVisible();
+  expect(await screen.findByText('archive unavailable')).toBeVisible();
+ }
+});

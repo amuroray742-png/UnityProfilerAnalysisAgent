@@ -347,14 +347,25 @@ fn recent_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .join("recent-projects.json"))
 }
 fn recent(app: &tauri::AppHandle) -> Result<Vec<Value>, String> {
-    let path = recent_path(app)?;
+    read_recent(&recent_path(app)?)
+}
+fn read_recent(path: &Path) -> Result<Vec<Value>, String> {
     if !path.exists() {
         return Ok(vec![]);
     }
     let rows: Vec<Value> = serde_json::from_slice(&fs::read(&path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    let normalized = normalize_recents(rows.clone());
+    let normalized = normalize_recents(rows.iter().filter(|r| {
+        r["directory"].as_str().is_some_and(|directory| {
+            // The Unity root may be offline while saved reports remain usable.
+            // Remove only archives confirmed missing, not permission/I/O failures.
+            !confirmed_missing(fs::metadata(Path::new(directory).join("optimization.json")))
+        })
+    }).cloned().collect());
     if normalized != rows { storage::atomic(&path, &serde_json::to_vec(&normalized).unwrap())?; }
     Ok(normalized)
+}
+fn confirmed_missing<T>(result: std::io::Result<T>) -> bool {
+    matches!(result, Err(e) if e.kind() == std::io::ErrorKind::NotFound)
 }
 fn recent_directory_key(directory: &str) -> String {
     let path = Path::new(directory).canonicalize().unwrap_or_else(|_| PathBuf::from(directory));
@@ -1181,6 +1192,34 @@ pub fn export_round(w: &Workspace, rid: &str) -> Result<String, String> {
 #[cfg(test)]
 mod recent_tests {
     use super::*;
+    #[test]
+    fn recent_missing_archive_is_removed_and_cleanup_is_persisted() {
+        let root = std::env::temp_dir().join(format!("upaa-recent-{}", id()));
+        fs::create_dir_all(root.join("kept")).unwrap();
+        fs::create_dir_all(root.join("deleted")).unwrap();
+        fs::write(root.join("kept/optimization.json"), b"invalid but existing archive").unwrap();
+        fs::write(root.join("deleted/optimization.json"), b"{}").unwrap();
+        let kept = json!({"id":"kept","directory":root.join("kept"),"root":root.join("missing-unity-root")});
+        let deleted = json!({"id":"deleted","directory":root.join("deleted")});
+        let list = root.join("recent.json");
+        fs::write(&list, serde_json::to_vec(&vec![deleted,kept.clone()]).unwrap()).unwrap();
+        fs::remove_file(root.join("deleted/optimization.json")).unwrap();
+        assert_eq!(read_recent(&list).unwrap(), vec![kept.clone()]);
+        assert_eq!(serde_json::from_slice::<Vec<Value>>(&fs::read(&list).unwrap()).unwrap(),vec![kept]);
+        fs::remove_file(root.join("kept/optimization.json")).unwrap();
+        fs::remove_dir(root.join("kept")).unwrap();
+        assert!(read_recent(&list).unwrap().is_empty());
+        fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn recent_io_errors_are_not_treated_as_deleted() {
+        use std::io::{Error,ErrorKind};
+        assert!(confirmed_missing::<()>(Err(Error::from(ErrorKind::NotFound))));
+        for kind in [ErrorKind::PermissionDenied,ErrorKind::TimedOut,ErrorKind::Other] {
+            assert!(!confirmed_missing::<()>(Err(Error::from(kind))));
+        }
+        assert!(!confirmed_missing(Ok(())));
+    }
     #[test]
     fn recent_archives_dedupe_paths_not_copied_ids() {
         let a = json!({"id":"copied", "directory":"/records/a", "name":"new"});

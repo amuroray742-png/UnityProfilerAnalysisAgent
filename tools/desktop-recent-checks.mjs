@@ -66,8 +66,12 @@ try{
  await wait(async()=>{const p=await desktop.ipc('optimization_command',{op:'get'});return p&&p.directory===project.directory;});
  await close();unchanged();
  report.checks.push('Copied IDs have distinct archive labels and open the selected archive; legacy duplicates repaired');
+ fs.unlinkSync(path.join(copy,'optimization.json'));
+ assert.equal((await recent()).length,1);
+ assert.equal(JSON.parse(fs.readFileSync(isolated)).length,1);unchanged();
+ report.checks.push('Deleted archive is removed from recent history and cleanup is persisted');
  await desktop.close();desktop=await launch(true);
- assert.equal((await desktop.ipc('workflow_command',{op:'recent'})).length,2);unchanged();
+ assert.equal((await desktop.ipc('workflow_command',{op:'recent'})).length,1);unchanged();
  report.checks.push('Isolated list persists across application restart');
  await desktop.close();desktop=await launch(false);
  const production=await desktop.ipc('workflow_command',{op:'recent'});
