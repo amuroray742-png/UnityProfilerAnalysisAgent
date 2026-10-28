@@ -76,7 +76,7 @@ pub fn list_tool_schemas() -> serde_json::Value {
                     "properties": {
                         "frame_index": { "type": "integer", "minimum": 0 },
                         "start": { "type": "integer", "minimum": 0, "default": 0 },
-                        "limit": { "type": "integer", "minimum": 1, "maximum": 128, "default": 128 }
+                        "limit": { "type": "integer", "minimum": 1, "maximum": crate::parser::detail::MAX_THREADS, "default": 128 }
                     },
                     "required": ["frame_index"]
                 }
@@ -90,8 +90,8 @@ pub fn list_tool_schemas() -> serde_json::Value {
                         "frame_index": { "type": "integer", "minimum": 0 },
                         "thread_index": { "type": "integer", "minimum": 0, "description": "原始线程索引；省略时必须存在唯一 Main Thread" },
                         "start": { "type": "integer", "minimum": 0, "default": 0, "description": "原始样本索引；续页使用 nextStart" },
-                        "limit": { "type": "integer", "minimum": 1, "maximum": 500, "default": 200 },
-                        "max_depth": { "type": "integer", "minimum": 1, "maximum": 64, "default": 3, "description": "只返回 depth < max_depth 的样本；depthTruncated=true 时增大深度并从 start=0 重查。默认深度可能隐藏嵌套分配。" }
+                        "limit": { "type": "integer", "minimum": 1, "maximum": crate::parser::detail::MAX_NODES, "default": 200 },
+                        "max_depth": { "type": "integer", "minimum": 1, "maximum": crate::parser::detail::MAX_DEPTH, "default": 3, "description": "只返回 depth < max_depth 的样本；depthTruncated=true 时增大深度并从 start=0 重查。默认深度可能隐藏嵌套分配。" }
                     },
                     "required": ["frame_index"]
                 }
@@ -122,6 +122,18 @@ pub fn list_tool_schemas() -> serde_json::Value {
     ]);
     for tool in schemas["tools"].as_array_mut().unwrap() {
         tool["inputSchema"]["additionalProperties"] = json!(false);
+        // Put bounds in natural language too: adapters/models may not surface
+        // numeric JSON Schema constraints as clearly as descriptions.
+        let limit = tool["inputSchema"]["properties"]["limit"].clone();
+        if let Some(max) = limit["maximum"].as_u64() {
+            let default = limit["default"].as_u64().unwrap();
+            let guidance = format!("分页 limit 必须为 1..={max} 的整数，省略时默认 {default}；不确定时省略 limit。需要更多结果时使用返回的 nextStart 作为 start 续页，不得增大 limit 超过 {max}，不要把各工具的上限混用。nextStart=null 表示没有续页。");
+            tool["inputSchema"]["properties"]["limit"]["description"] = json!(guidance);
+            tool["description"] = json!(format!("{} {guidance}", tool["description"].as_str().unwrap()));
+        }
+        if tool["name"] == "performance_flow_events" {
+            tool["inputSchema"]["properties"]["end_frame_index"]["description"] = json!("可省略（仅查询 frame_index）；包含结束帧，必须满足 frame_index <= end_frame_index <= frame_index+7，即最多 8 帧。更大范围分窗口查询。");
+        }
     }
     schemas
 }

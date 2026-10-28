@@ -160,6 +160,8 @@ pub async fn run_frames(
         "start": start,
         "limit": limit,
         "returned": slice.len(),
+        "total": timeline.len(),
+        "nextStart": (end < timeline.len()).then_some(end),
         "frames": slice,
     }))
 }

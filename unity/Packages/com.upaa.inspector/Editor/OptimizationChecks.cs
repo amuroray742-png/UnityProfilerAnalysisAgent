@@ -56,6 +56,7 @@ namespace UPAA.Inspector {
    if(job==null||(string)job["phase"]=="finished")return;
    if(DateTime.UtcNow.Ticks-(long)(job["startedTicks"]??0)>TimeSpan.FromMinutes(5).Ticks){CancelTests?.Invoke();End("unavailable","检查超时");return;}
    if(EditorApplication.isCompiling||EditorApplication.isUpdating)return;
+   if((string)job["phase"]=="queued"){BeginCompilation();return;}
    if((string)job["phase"]!="afterCompilation")return;
    if(((JArray)job["errors"]).Count>0){End("failed","C# 或 Shader 检查失败");return;}
    if((bool?)job["shaderCoverageIncomplete"]==true){End("unavailable","已导入相关代码，但 HLSL/CGINC/Compute 的依赖 Shader 或所有变体错误覆盖不完整；需在目标平台核对");return;}
@@ -64,6 +65,25 @@ namespace UPAA.Inspector {
    if(RunTests==null){End("unavailable","当前工程未提供 EditMode 测试适配器");return;}
    job["phase"]="testing";Persist();
    try{RunTests(tests,result=>{if(job==null||(string)job["phase"]!="testing")return;job["testsResult"]=result;End((string)result["status"]);});}catch(Exception e){End("unavailable",e.Message);}
+  }
+  // delayCall depends on Inspector updates and may never run in a background Editor.
+  // Persist the queue and drive it from update, so a domain reload cannot lose the work.
+  static void BeginCompilation(){
+   try{
+    AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+    foreach(var path in ((JArray)job["paths"]).Values<string>()){
+     AssetDatabase.ImportAsset(path,ImportAssetOptions.ForceUpdate);
+     if(path.EndsWith(".shader",StringComparison.Ordinal)){
+      var shader=AssetDatabase.LoadAssetAtPath<Shader>(path);
+      if(shader)foreach(var e in ShaderUtil.GetShaderMessages(shader)){
+       if(e.severity.ToString()=="Error")((JArray)job["errors"]).Add(new JObject{["file"]=path,["line"]=e.line,["message"]=e.message});
+      }
+     }
+    }
+    job["phase"]="compiling";job["compileRequested"]=true;Persist();
+    if(journalDirty){End("unavailable","编译前检查记录无法保存");return;}
+    CompilationPipeline.RequestScriptCompilation();
+   }catch(Exception e){End("unavailable",e.Message);}
   }
   [CliCommand("upaa_check_start","Compile current code and check selected shaders/tests; no scene save or build",MainThreadRequired=true)]
   public static JObject Start([CliArg("request","Fixed check request JSON")]string request="{}") {
@@ -80,16 +100,7 @@ namespace UPAA.Inspector {
     for(var p=absolute;p!=Root&&!string.IsNullOrEmpty(p);p=Path.GetDirectoryName(p))if((File.GetAttributes(p)&FileAttributes.ReparsePoint)!=0)throw new ArgumentException("Links not allowed");
    }
    var tests=r["tests"] as JArray??new JArray();if(tests.Count>100||tests.Values<string>().Any(t=>string.IsNullOrWhiteSpace(t)||t.Length>300))throw new ArgumentException("Invalid tests");
-   job=new JObject{["id"]=id,["phase"]="compiling",["checkStatus"]="running",["startedAt"]=DateTime.UtcNow.ToString("O"),["startedTicks"]=DateTime.UtcNow.Ticks,["errors"]=new JArray(),["tests"]=tests.DeepClone(),["paths"]=new JArray(paths),["shaderCoverageIncomplete"]=paths.Any(p=>new[]{".hlsl",".cginc",".compute"}.Contains(Path.GetExtension(p))),["shaderScope"]="仅查询已导入 Shader 当前可取得的错误，不证明所有平台及变体通过"};Persist();if(journalDirty){End("unavailable","无法保存检查记录："+journalError);output["check"]=job.DeepClone();output["journalDurable"]=!journalDirty;return output;}
-   // Defer imports/compile so the response reaches the caller before a domain reload.
-   EditorApplication.delayCall+=()=>{
-    if(job==null||(string)job["id"]!=id||(string)job["phase"]!="compiling")return;
-    try{
-     AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport); // Discover new code and remove rolled-back code from the compiler input.
-     foreach(var path in paths){AssetDatabase.ImportAsset(path,ImportAssetOptions.ForceUpdate);if(path.EndsWith(".shader",StringComparison.Ordinal)){var shader=AssetDatabase.LoadAssetAtPath<Shader>(path);if(shader)foreach(var e in ShaderUtil.GetShaderMessages(shader)){if(e.severity.ToString()=="Error")((JArray)job["errors"]).Add(new JObject{["file"]=path,["line"]=e.line,["message"]=e.message});}}}
-     job["compileRequested"]=true;Persist();if(journalDirty){End("unavailable","编译前检查记录无法保存");return;}CompilationPipeline.RequestScriptCompilation();
-    }catch(Exception e){End("unavailable",e.Message);}
-   };
+   job=new JObject{["id"]=id,["phase"]="queued",["checkStatus"]="running",["startedAt"]=DateTime.UtcNow.ToString("O"),["startedTicks"]=DateTime.UtcNow.Ticks,["errors"]=new JArray(),["tests"]=tests.DeepClone(),["paths"]=new JArray(paths),["shaderCoverageIncomplete"]=paths.Any(p=>new[]{".hlsl",".cginc",".compute"}.Contains(Path.GetExtension(p))),["shaderScope"]="仅查询已导入 Shader 当前可取得的错误，不证明所有平台及变体通过"};Persist();if(journalDirty){End("unavailable","无法保存检查记录："+journalError);output["check"]=job.DeepClone();output["journalDurable"]=!journalDirty;return output;}
    output["check"]=job.DeepClone();output["journalDurable"]=!journalDirty;output["journalError"]=journalError;return output;
   }
   [CliCommand("upaa_check_status","Read persisted compilation/test result",MainThreadRequired=true)]

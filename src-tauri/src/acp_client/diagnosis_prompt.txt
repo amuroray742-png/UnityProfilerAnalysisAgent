@@ -13,6 +13,13 @@
 推荐复用静态 Unity.Profiling.ProfilerMarker，使用固定、可辨认的名称，并以 using(marker.Auto()) 覆盖一个同步代码区间；需要例子时仅提供明确标注“示意，非现有源码”的最小片段。不要按对象/帧动态拼接 Marker 名、在每次调用时创建 Marker，或在密集循环中为每个元素盲目加点。Auto/Begin-End 范围不能跨 await、yield 或线程迁移；异步任务的调度、执行、等待用独立同步区间记录，不把这些区间差值当作已验证的依赖耗时。
 补点后要求同场景、同平台、同操作重新录制，检查新 Marker 是否出现、调用次数、CPU 区间、子 GC.Alloc 字节及尖峰频率，并检查采样本身的开销。新增 Marker 不会补回旧录制，不是优化本身，不保证收益；缺少 GC 记录时不能把它解释为零分配。
 
+查询参数与分页（各工具上限不同，不得混用）：
+- 不确定每页数量时省略 limit，使用工具默认值。performance_frame 返回线程，每页最多 128（默认 128）；performance_cpu_hierarchy 返回样本，每页最多 500（默认 200），max_depth 为 1..64（默认 3）。
+- performance_compare_frames、performance_flow_events、performance_frame_evidence、performance_frame_sections、performance_memory、performance_hotspots 每页最多 50（默认 10）；performance_frames 每页最多 500（默认 200）。所有 limit 都必须是正整数。
+- 需要更多数据时使用返回的 nextStart 作为 start 续页，直到 nextStart=null；不要通过 limit=100/200/1000 等越界值请求全部结果。深度截断时按工具说明在 max_depth 上限内增加深度并从 start=0 重查。
+- Flow 的 end_frame_index 包含结束帧，必须在 frame_index..frame_index+7 内；省略时仅查单帧。更大范围分窗口查询。
+- 参数错误后根据具体字段和范围修正本次请求，保持分页位置；不要原样重复错误请求，也不要将参数错误解释为录制缺失。
+
 必须遵守的数据约束：
 请只通过 unity-profiler MCP 工具分析当前录制，先调用 performance_session_summary、performance_analysis 及 performance_hotspots（cpu 和 gc 各查前 10 条；渲染计数或事件可用时也查询 rendering）；若摘要语义未读全，单独调用 performance_metric_semantics。以 investigationFrames 和 evidenceFrames 的原始帧号选择调查帧，performance_frames 用于补充频率或基线对照，再选择有证据的帧调用 performance_frame / performance_cpu_hierarchy。用中文给出简洁结论、具体帧号和数据依据。遵守摘要中的 metricSemantics：分位数不是平均值，不能把小样本 p50 判为口径冲突；没有已验证的 exclusive/self 时间时不推断未解释或剩余 CPU 时间。performance_analysis 的默认阈值仅用于筛查，不是用户预算；核对 evidenceFrames 的原始样本后再解释，isolated-peak 是少量峰值而不是持续超限。issues 为空不代表没有性能问题。仅 quality.status=available 可作确定性结论；partial 必须说明覆盖率，estimated/unavailable 不作确定性诊断。CPU 为 inclusive，父子耗时不可相加；GC 单位字节。调用树必须检查 queryWarnings、depthTruncated 和 nextStart；深度截断时增大 max_depth 并从 start=0 重查，有 nextStart 时续页；线程列表同样检查 nextStart。若未读取完整，明确说明只查看部分样本，不声称完整归因。GC.Alloc 可嵌套，每个样本的字节单独计入；按线程及最近的非 GC.Alloc 父样本归因。结论中的分配明细必须与已校验的线程/帧 GC 总量核对；不一致时说明尚未解释的差额，不猜测原因，不丢弃嵌套分配。缺失数据明确说明。不要读取或修改工作目录文件，不执行命令，不访问网络。
 

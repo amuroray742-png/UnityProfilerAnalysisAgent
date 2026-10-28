@@ -281,6 +281,7 @@ pub fn parse(bytes: &[u8], name: &str, size: u64) -> Result<ParsedProfile, Parse
                     children_count: s.children_count,
                     metadata_count: s.metadata_count,
                     gc_alloc_bytes,
+                    gc_continuation: false,
                     self_ms: None,
                     self_reason: None,
                     is_counter: false,

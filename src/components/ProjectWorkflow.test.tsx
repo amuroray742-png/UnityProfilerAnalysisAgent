@@ -202,3 +202,21 @@ it('ignores progress from another scenario even when the new scene has no round 
  act(()=>callback({event:'workflow-progress',id:2,payload:{projectId:'p',sceneId:'y',roundId:'',operationId:'new',stage:'parse',status:'running',done:25,total:100}}));
  expect(screen.getByLabelText('录制解析进度')).toBeInTheDocument();
 });
+
+it('distinguishes copied archives with the same project id and opens the chosen directory',async()=>{
+ const recents=[{id:'same',name:'ProjectJinn',root:'C:/Game',directory:'C:/Records/original',updatedAt:''},{id:'same',name:'ProjectJinn',root:'C:/Game',directory:'C:/Records/copy',updatedAt:''}];
+ vi.mocked(invoke).mockImplementation(async(name,args)=>{
+  if(name==='list_agents')return agents;
+  const a=(args as {action?:{op:string}})?.action;
+  if(a?.op==='recent')return recents;
+  return null;
+ });
+ const errors=vi.spyOn(console,'error').mockImplementation(()=>{});
+ try {
+  render(<ProjectWorkflow/>);
+  expect(await screen.findByText('存档：C:/Records/original')).toBeVisible();
+  fireEvent.click(screen.getByText('存档：C:/Records/copy'));
+  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workflow_command',{action:{op:'open',directory:'C:/Records/copy'}}));
+  expect(errors.mock.calls.some(c=>c.some(v=>String(v).includes('same key')))).toBe(false);
+ }finally{errors.mockRestore();}
+});

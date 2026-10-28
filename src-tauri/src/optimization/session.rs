@@ -171,7 +171,7 @@ impl EditScope {
             }
         }
         value["fileWatchScope"] = json!(
-            "Assets、ProjectSettings、内嵌 Packages；代码指纹及其他资源的大小/修改时间，不遍历链接"
+            "Assets、ProjectSettings、内嵌 Packages；2 MiB 内代码及 ProjectSettings 内容指纹，其他资源大小/修改时间，不遍历链接"
         );
         if let Err(e) = normalized {
             value["status"] = json!("unavailable");
@@ -356,8 +356,14 @@ pub fn inventory(
             if result.len() >= 200000 {
                 return Err("检查文件记录超过200000，检查未完成".into());
             }
-            let fingerprint = if editing::allowed(&relative) && meta.len() <= 2 * 1024 * 1024 {
-                storage::hash(&editing::read(root, &relative)?)
+            let fingerprint = if (editing::allowed(&relative)
+                || relative.starts_with("ProjectSettings/"))
+                && meta.len() <= 2 * 1024 * 1024
+            {
+                // Editor plugins can rewrite identical settings on every domain reload.
+                // Compare bounded content, retaining real changes even at the same mtime.
+                let mut file = crate::project::files::open(root, &relative)?;
+                crate::project::files::hash(&mut file, 2 * 1024 * 1024, cancel)?
             } else {
                 format!(
                     "{}:{:?}",

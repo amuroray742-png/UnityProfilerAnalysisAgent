@@ -371,3 +371,146 @@ async fn oversized_request_is_disconnected_without_retaining_the_session() {
         .unwrap()
         .unwrap();
 }
+
+#[tokio::test]
+async fn published_paging_bounds_match_wire_rejection_and_recovery() {
+    let server = server(10).await;
+    let mut client = Client::connect(&server, server.token()).await;
+    client.initialize().await;
+    let list = client.request("tools/list", json!({})).await;
+    let first = client
+        .call("performance_frames", json!({"start":0,"limit":1}))
+        .await;
+    let page = &first["result"]["structuredContent"];
+    assert_eq!(page["total"], 2);
+    assert_eq!(page["nextStart"], 1);
+    let next = client
+        .call(
+            "performance_frames",
+            json!({"start":page["nextStart"],"limit":1}),
+        )
+        .await;
+    assert_eq!(
+        next["result"]["structuredContent"]["frames"][0]["frameIndex"],
+        12
+    );
+    assert!(next["result"]["structuredContent"]["nextStart"].is_null());
+    let cases = [
+        (
+            "performance_frame",
+            128,
+            128,
+            200,
+            json!({"frame_index":10}),
+        ),
+        (
+            "performance_cpu_hierarchy",
+            500,
+            200,
+            1000,
+            json!({"frame_index":10}),
+        ),
+        (
+            "performance_compare_frames",
+            50,
+            10,
+            100,
+            json!({"frame_index":10,"baseline_frame_index":12}),
+        ),
+        (
+            "performance_flow_events",
+            50,
+            10,
+            100,
+            json!({"frame_index":10}),
+        ),
+    ];
+    for (name, max, default, rejected, arguments) in cases {
+        let tool = list["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap();
+        let rule = &tool["inputSchema"]["properties"]["limit"];
+        assert_eq!(rule["maximum"], max);
+        assert_eq!(rule["default"], default);
+        for text in [
+            tool["description"].as_str().unwrap(),
+            rule["description"].as_str().unwrap(),
+        ] {
+            assert!(text.contains(&format!("1..={max}")), "{text}");
+            assert!(text.contains("nextStart"));
+        }
+        // All four failure classes observed in the private run, plus boundary
+        // and type errors; no silent coercion or clipping to a smaller page.
+        for invalid in [
+            json!(rejected),
+            json!(max + 1),
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!("10"),
+            Value::Null,
+        ] {
+            let mut args = arguments.clone();
+            args["limit"] = invalid;
+            let result = client.call(name, args).await;
+            assert_eq!(result["error"]["code"], -32602, "{result}");
+            let message = result["error"]["message"].as_str().unwrap();
+            assert!(message.contains(&format!("{name}.limit=")), "{message}");
+            assert!(message.contains(&format!("1..={max}")) && message.contains("nextStart"));
+        }
+        // Omitted values use the documented defaults. Both legal endpoints
+        // remain usable after a rejected request on the same MCP session.
+        let omitted = client.call(name, arguments.clone()).await;
+        let mut explicit = arguments.clone();
+        explicit["limit"] = json!(default);
+        assert_eq!(
+            omitted["result"]["structuredContent"],
+            client.call(name, explicit).await["result"]["structuredContent"]
+        );
+        for limit in [1, max] {
+            let mut args = arguments.clone();
+            args["limit"] = json!(limit);
+            let result = client.call(name, args).await;
+            assert!(result["error"].is_null(), "{result}");
+            assert_ne!(result["result"]["isError"], true, "{result}");
+            assert!(
+                result["result"]["structuredContent"].is_object(),
+                "{result}"
+            );
+        }
+    }
+    let depth = client
+        .call(
+            "performance_cpu_hierarchy",
+            json!({"frame_index":10,"max_depth":65}),
+        )
+        .await;
+    assert!(depth["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("max_depth=65"));
+    assert!(depth["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("1..=64"));
+    for end in [9, 18, u64::MAX] {
+        let result = client
+            .call(
+                "performance_flow_events",
+                json!({"frame_index":10,"end_frame_index":end}),
+            )
+            .await;
+        assert!(
+            result["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("end_frame_index="),
+            "{result}"
+        );
+    }
+    client.child.kill().await.unwrap();
+    server.shutdown().await;
+}

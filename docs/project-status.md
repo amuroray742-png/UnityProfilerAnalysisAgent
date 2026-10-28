@@ -1,5 +1,64 @@
 # 项目状态、验证证据与路线图
 
+## 最近项目列表修复（2026-10-28）
+
+实际最近列表 25 条中，23 条来自本机桌面验收的隔离存档或公开测试工程。此前验收只隔离 WebView profile，却仍写入正式 recent-projects.json；ProjectJinn 的复制存档保留同一个项目 ID，前端以 ID 作 key 进一步造成重复键。已备份列表并仅移除确认的验收记录，保留 C:/work/JinnOptimize、C:/work/PVOptimize；不删除任何存档。
+
+后端读写均按规范化存档目录去重，保留最新项；不同目录的副本不按 ID 或 Unity 工程根目录合并，以免隐藏不同历史。前端改用存档目录作 key 并展示目录。桌面测试通过绝对路径环境变量 UPAA_RECENT_PROJECTS_PATH 隔离最近记录，默认正式目录不变。3 项 Rust 回归及 ProjectWorkflow 38 项前端测试通过。随后正常关闭旧窗口并重新打包 Windows x64 EXE 与 NSIS。新增可重跑的 tools/desktop-recent-checks.mjs，使用实际打包程序的 WebView2/CDP 和正式 IPC，连续 6 次打开同一公开存档（含大小写、分隔符、尾部分隔符和点路径）始终只有一条；旧重复记录读时修复落盘；同 ID 副本按目录区分且实际打开所选存档；重启后隔离列表保持。无隔离环境变量的新进程读取正式列表，仍只有 ProjectJinn、ProjectVanguard，正式记录前后逐字节一致。未运行 Agent、未打开用户存档、未测试安装向导。验收 passed，证据在 .cache/recent-projects-desktop/verification.json。EXE SHA-256：`c67f9a1c9dbfa32ab67c4a5f212188f2caa0e0974994142ce10952e1cd0001bd`；NSIS SHA-256：`cf13fec62377e9783854e15b8c7f4932803b00d87ec0b9f2865ab2d4dddb017b`。
+
+## ProjectJinn 修改与编译流程修复（2026-10-28）
+
+继续使用同一录制和定位报告生成的 `ui-optional-query-ab` 任务，在真实 Windows EXE 的隔离存档中只选择该任务，使用实际 Codex ACP、源码编辑账本和 Unity 6000.3.23f1。ProjectJinn 安装工程内嵌检查插件；插件安装独立于业务源码回退，未修改用户原优化存档。
+
+发现并修复两处流程问题：
+
+- 后台 Editor 的 `delayCall` 未执行，导致检查等待五分钟而没有发出编译请求。检查改为持久化 `queued`，由 `EditorApplication.update` 调度，保留域重载恢复与排队取消。
+- Google 插件在重载后重写设置文件，原有大小/修改时间比对将相同内容重写误报为业务文件变化。2 MiB 以内 ProjectSettings 改为受路径校验、限长和取消约束的内容哈希，实际内容变化仍中断；较大文件和其他资源保持大小/修改时间监测。
+
+回归：`cargo test --manifest-path src-tauri/Cargo.toml --test optimization` 49 项通过，4 项显式环境测试默认忽略。新增测试覆盖相同设置重写、同长度且相同时间戳的真实改动、删除、超限文件、资源时间监测与取消。公开工程 `tools/unity-optimization-checks.py` 的无测试项编译、连续两次编译及测试、故意失败测试、排队取消共 5 个场景均符合预期。
+
+最终桌面实录验证通过：168.209 秒完成真实修改会话，25 次工具调用、0 错误，状态 `modified`；WepieImage.cs 与 WepieText.cs 四处可选组件查询改为 TryGetComponent，祖先遍历与选择逻辑保持。修改前及修改后编译均 passed、C# 错误为空；配置内容前后哈希一致，无 unexpectedFiles。应用真实 rollback 返回 rolled_back，三份授权文件与原始备份逐字节一致，随后固定 Unity 检查再次编译 passed。验证后游戏源码已恢复；没有重录 B、人工 UI 行为验收或性能收益结论。
+
+新版 Windows EXE SHA-256：`750c6fafb89e88d79393a15f7b28422bb15f5816245a58b7c771da97d222f1a2`，NSIS SHA-256：`60c567131e6079d1117ed7629231c6c8667d5d4e39946add716e0fa8bcec3f64`。真实桌面后端由 WebView2 CDP 驱动，不把这次验收描述成原生鼠标或安装向导验收。证据保存在忽略目录 `.cache/ui-edit-desktop/`：`verification.json`、完整 `result.json`、`ui-query-optimization.diff`、`agent-report.txt`、修改前后源码和 `records-final` 存档；两次问题复现及回退记录另存 first-attempt/second-attempt.json。
+
+## ProjectJinn 代码定位阶段实录验证（2026-10-28）
+
+使用最新 Windows x64 EXE，将用户 ProjectJinn 优化存档复制到忽略目录 .cache/project-localization-desktop/records 后，通过真实 workflow_command analyze（带明确 sceneId，restart=false）复用已完成性能报告056a78db-ba83-4239-951e-c788d74b6278。录制仍为 If Jinn__2026-10-28_11-45-46.data，工程为 C:/work/unity_projects/ProjectJinn；只重跑定位，未重跑性能阶段、未改动原优化存档和游戏代码。
+
+定位690.158秒完成，362次工具调用全部成功，13个源码/资源文件实际读取；唯一 Finished/end_turn，项目阶段ready/completed。已保存4项selected=false候选（1项optimize、2项marker、1项investigate），5个候选引用文件均有project_read记录，实际SHA-256与任务保存值一致，修改运行数为0。关键行号已独立核对：ViewManager.cs121固定Marker和125调用SendPosInfo，LocalGameUserView.cs104-132及111-114 IK循环；WepieImage.cs92/101和WepieText.cs98/107可失败组件查询；AlphaTimeEngine.cs25/26普通更新与定时器更新。报告继续追查GameUserView、LocalGameCharacterView、GameLogicConnection、TimeMachine与Core的实际实现，区分关联候选与根因。
+
+Editor未运行，明确降级离线定位；索引60665文件，录制/工程均6000.3.23f1，但不能确认源码提交相同或当帧实例，资源引用只作静态线索。未发现可复现的定位流程缺陷，本轮未修改产品逻辑；project_scope 5项、reports_source 10项现有回归通过，3项外部fixture测试未启用。验证过程中第一次测试调用漏传sceneId，被现有身份校验正确拒绝，修正测试驱动后运行成功，不作为产品缺陷。完整report.md/report.json、verification.json及存档含审计/终态，位于上述忽略目录。
+
+## 查询参数说明、约束与实录复验（2026-10-28）
+
+前次诊断14次越界是 Agent 请求超过工具不同的分页上限：frame 200>128 共3次，hierarchy 1000>500 共2次，compare_frames 100>50 共8次，flow_events 100>50 共1次。JSON schema 的 maximum 与后端一致，MCP wire 未丢失这些约束；问题在于 Agent 未遵守数值范围，而工具正文和诊断提示没有明确区别各上限。
+
+现从发布 schema 生成 limit 的自然语言范围、默认值、nextStart 分页指导；首轮提示列出各工具上限并要求修正错误请求。MCP 入口复用 schema 提前校验 limit/max_depth，错误标明工具、字段、实参、范围、默认值及重试方式；Flow 校验含首尾最多8帧，底层校验保留，不静默夹取。performance_frames 补充 total/nextStart，保留既有字段。MCP wire 回归覆盖四类失败、无效类型、范围边界、默认值、省略等价、修正重试、Flow窗口和时间线续页；相关测试12项通过，4项既有外部测试未启用。
+
+Windows Release EXE 和 NSIS 在 target/x86_64-pc-windows-msvc/release/ 构建，避免覆盖当时仍在运行的旧程序。用新版实际桌面 upload/analyze/diagnose IPC 重新读取同一私有录制，2000帧、GC 736039400 B；真实 Codex 会话于431.139秒完成，2909次 MCP 查询全部成功，参数超限0次、工具错误0次、唯一 Finished/end_turn、completed，报告6094字符。原尝试被用户误关程序而中断，最终为重新开始的独立会话。不改动 Unity 工程或已有优化项目，不宣称本次验证覆盖安装向导、原生点击或模型建议准确性。
+
+本机证据位于忽略目录 .cache/tool-parameter-desktop/：verification.json、report.md、report.json、events.json、artifacts.json；interrupted-run/ 保留中断记录。EXE SHA-256：34017f38c41682e5368459cedbd1d1fe25713c0dbbd56a272068a3633bd1746d；安装包 SHA-256：3cb437f94c0e92a8252d7eca04b7c2ec29abe311ae943190b9a669f9c5eff61f。单次零错误不是模型未来永不生成非法参数的保证；服务端仍严格拒绝非法请求。
+
+## 诊断活动超时与完整完成验证（2026-10-28）
+
+普通性能诊断与 C# 兼容定位改为 300 秒活动超时、1800 秒总时限；工程定位及修改为 300 秒活动超时、3600 秒总时限。只有当前会话的完整更新或权限请求刷新活动期限，总时限不延长；取消保持独立 2 秒等待。分别显示活动/总时限超时原因，保留正文，仍以 ACP end_turn 判定成功。初始化/建会话期限不变。
+
+新增 6 项回归测试：持续活动超过旧 5 分钟、静默且保留正文、无关会话不续期、活动不能突破总时限、取消不被活动延长，以及走正式 Peer::run 握手入口的 16 分钟虚拟时钟完成测试。Rust 单元 27 项、ACP stdio 集成 5 项、正式入口 1 项通过；既有 3 项外部 Agent fixture 测试未启用。生产前端构建、Windows x64 Release 和 NSIS 打包成功。
+
+新打包 EXE 通过 WebView IPC 重新解析私有录制 If Jinn__2026-10-28_11-45-46.data：2000 帧、0 失败/跳过，GC 总量 736039400 B；使用真实 Codex ACP/MCP 性能诊断，330.63 秒完成（超过旧 300 秒上限），1988 次 MCP 查询中 14 次因 Agent 请求的 limit 超出接口上限被拒绝，其余 1974 次成功；这些参数错误未导致会话终止，3112 个正文分片，6480 字符报告，唯一 Finished/end_turn，状态 completed。验证使用独立测试存档及实际桌面后端，未替换 Agent 或录制数据；本次未测试原生鼠标点击、安装向导或后续工程定位/代码修改。
+
+本机完整报告、事件及校验记录：忽略目录 .cache/diagnosis-timeout-desktop/ 的 report.md、report.json、events.json、verification.json。EXE SHA-256：40825f4de460a2e25fd295f1b254a4d1c01928c3191737a1a5f8d314847643bc；NSIS 安装包 SHA-256：09d93ffd8fd9ec01128093c24b8ced00ba8b482b0507899549765fbd4f15180e。此验证确认诊断协议完整完成，不代表模型建议均已人工核实或游戏已有性能收益。
+
+## GC 帧边界延续样本（2026-10-28）
+
+修复共享 core 将已在上一帧计入的零耗时 GC.Alloc 延续样本误判为缺失分配记录的问题。保留原始 metadata，并以 `gcContinuation` 标记，不重复增加字节或分配次数；普通缺失仍拒绝，2022.3 未放宽。跨帧证据进入按需解码 checkpoint，UI 显示延续标记。
+
+同版本隔离 Unity 6000.3.23f1 Editor 的 Hierarchy GC 列与生产解析完整对照：2,000 帧、406,000 个线程实例一致，总 GC 736,039,400 B，四个延续样本合计 384 B 不重复计入。公开合成回归覆盖边界约束、真零耗时分配、线程换序及查询；另有显式启用的全录制 Editor 对照测试。前端 98 项、既有解析相关 Rust 28 项及 core 默认测试通过，前端生产构建通过。Windows/macOS CI 增加 core 测试入口；未执行远端 CI。输入指纹、对照数据与复现方式见[当前解析契约](data-parser-current.md#gc-帧边界延续)。
+
+同日重新执行 `npm run tauri:build -- --bundles nsis`，Windows x64 Release EXE 与 NSIS EXE 安装包生成成功。新程序通过真实桌面后端导入上述录制（约 26.6 秒），界面显示导入完成并保存、2,000 帧解码、0 失败/跳过；GC 总量 736,039,400 B。四个边界帧的桌面 IPC 查询与 Editor 一致，帧 267 / 线程 103 的界面文本包含“延续（不重复计入）”；新进程重开存档亦通过。验证使用 WebView2 CDP 操作渲染控件，文件选择仅替代返回路径，未调用 Agent、未验证原生选择框或运行安装向导。本机证据位于忽略目录 `.cache/gc-boundary-desktop/`（`verification.json`、`imported-gc.png`、验证存档）；未修改游戏工程。
+
+本轮程序 SHA-256：`ada036451505ea02c1a259d06a43bd894001078e0836bba136d8a9f6e329cc44`；NSIS 安装包 SHA-256：`7dbc611bf7183d0ade061d2f06381dc73716f74c17a8927ecc7b4a51f5c650a1`。构建输入指纹核对未变化，程序中包含新边界校验与 `gcContinuation` 字段，NSIS 构建脚本打入的主程序路径与本轮验证路径一致。
+
 ## 项目、场景与轮次分层（2026-10-27）
 
 新增用户命名的性能测试场景，项目下按场景保存轮次、预算与历史；支持创建、改名、复现说明、选择恢复、完成和重新开启。新场景独立从首轮导入 A，同场景接受沿用 B、回退沿用 A。完成标记不代表性能达标。旧 v1/v2/v3 存档先备份，再迁移到 v4 的默认场景，不拆分历史。

@@ -1851,3 +1851,42 @@ async fn selecting_another_scene_during_import_does_not_redirect_capture_or_prog
     assert_eq!(d.captures.iter().find(|c|c.id==r.baseline).unwrap().scene_id, "test-scene");
     assert_eq!(w.observation.lock().unwrap().progress.as_ref().unwrap()["sceneId"], "test-scene");
 }
+
+
+#[test]
+fn check_inventory_ignores_identical_settings_rewrite_but_detects_content_changes() {
+    let (_temp, w, _) = setup(b"class Work {}");
+    let root = w.data.lock().unwrap().root.clone();
+    let key = "ProjectSettings/PluginSettings.xml";
+    let path = root.join(key);
+    std::fs::write(&path, b"<enabled>true </enabled>").unwrap();
+    let before = session::inventory(&root, &w.cancelled).unwrap();
+    let changed_time = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+    std::fs::write(&path, b"<enabled>true </enabled>").unwrap();
+    std::fs::File::options().write(true).open(&path).unwrap()
+        .set_modified(changed_time).unwrap();
+    assert_eq!(before, session::inventory(&root, &w.cancelled).unwrap());
+    // Same byte count and timestamp still must not hide a real settings mutation.
+    std::fs::write(&path, b"<enabled>false</enabled>").unwrap();
+    std::fs::File::options().write(true).open(&path).unwrap()
+        .set_modified(changed_time).unwrap();
+    assert_ne!(before[key], session::inventory(&root, &w.cancelled).unwrap()[key]);
+    std::fs::remove_file(path).unwrap();
+    assert!(!session::inventory(&root, &w.cancelled).unwrap().contains_key(key));
+}
+
+#[test]
+fn check_inventory_bounds_settings_reads_and_keeps_resource_time_checks() {
+    let (_temp, w, _) = setup(b"class Work {}");
+    let root = w.data.lock().unwrap().root.clone();
+    for key in ["ProjectSettings/Large.bin", "Assets/Texture.bin"] {
+        let path = root.join(key);
+        std::fs::write(&path, vec![0; 2 * 1024 * 1024 + 1]).unwrap();
+        let before = session::inventory(&root, &w.cancelled).unwrap();
+        std::fs::File::options().write(true).open(&path).unwrap()
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60)).unwrap();
+        assert_ne!(before[key], session::inventory(&root, &w.cancelled).unwrap()[key]);
+    }
+    w.cancelled.store(true, Ordering::SeqCst);
+    assert!(session::inventory(&root, &w.cancelled).is_err());
+}

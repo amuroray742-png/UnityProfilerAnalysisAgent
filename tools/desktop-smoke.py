@@ -114,6 +114,7 @@ def main():
             raise RuntimeError(value)
         return value
     env = dict(os.environ)
+    env['UPAA_RECENT_PROJECTS_PATH'] = str((output / 'recent-projects.json').resolve())
     env['WEBVIEW2_USER_DATA_FOLDER'] = str(output / 'webview-profile')
     session = None
     report = {'dateUtc': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'applicationSha256': hashlib.sha256(args.application.read_bytes()).hexdigest(), 'scope': 'Release WebView startup and direct real IPC; excludes native picker, rendered analysis workflow, Agent and MSI', 'checks': []}

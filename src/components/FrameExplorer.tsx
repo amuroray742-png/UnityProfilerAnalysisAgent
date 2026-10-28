@@ -77,7 +77,7 @@ export function FrameExplorer({ fileId, frames, quality, initialFrame, mode = 'c
         <tbody>{page.samples.map(s => <tr key={s.sampleIndex}>
           <td>{s.sampleIndex} / {s.parentIndex ?? '—'}</td>
           <td style={{ paddingLeft: Math.min(s.depth, 16) * 12 }}>{s.name} <small>#{s.markerId} · 深度 {s.depth}</small></td>
-          <td>{s.totalMs.toFixed(4)}</td><td title={s.selfReason ?? undefined}>{s.selfMs == null ? '—' : s.selfMs.toFixed(4)}</td><td>{s.gcAllocBytes === null ? '—' : `${s.gcAllocBytes} B`}</td>
+          <td>{s.totalMs.toFixed(4)}</td><td title={s.selfReason ?? undefined}>{s.selfMs == null ? '—' : s.selfMs.toFixed(4)}</td><td>{s.gcContinuation ? '延续（不重复计入）' : s.gcAllocBytes === null ? '—' : `${s.gcAllocBytes} B`}</td>
         </tr>)}</tbody></table></div>
       <button disabled={offsets.length === 1} onClick={() => setOffsets(a => a.slice(0, -1))}>上一页样本</button>{' '}
       <button disabled={page.nextStart === null} onClick={() => setOffsets(a => [...a, page.nextStart!])}>下一页样本</button>
