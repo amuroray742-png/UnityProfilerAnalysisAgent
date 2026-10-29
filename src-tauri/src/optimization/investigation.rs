@@ -369,3 +369,26 @@ impl Workspace {
         Ok(json!({"recorded":true,"scope":"保存调查结论，不代表自动证明性能改善"}))
     }
 }
+
+impl Workspace {
+    /// Closing a read-only investigation preserves its findings without inventing a performance result.
+    pub fn finish_investigation(&self, rid: &str) -> Result<(), String> {
+        if self.busy.load(std::sync::atomic::Ordering::SeqCst) { return Err("请先结束当前运行".into()); }
+        let mut saved = self.data.lock().unwrap();
+        let mut data = saved.clone();
+        scenes::round_access(&data, rid, false)?;
+        let round = data.rounds.iter().find(|r| r.id == rid).ok_or("轮次不存在")?;
+        if !round.investigation_only() {
+            return Err("只有已完成且保存调查结论、所有运行均无修改的轮次可结束调查；失败、取消或存在修改不能使用此入口".into());
+        }
+        // Archiving zero changes does not authorize writes. Incomplete or legacy reviews
+        // remain visible evidence; the write preflight must not block this exit.
+        let round = data.rounds.iter_mut().find(|r| r.id == rid).unwrap();
+        round.decision = "deferred".into();
+        round.candidate = None;
+        round.comparison = None;
+        self.save(&data)?;
+        *saved = data;
+        Ok(())
+    }
+}

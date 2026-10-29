@@ -242,14 +242,40 @@ it.each([true,false])('refreshes stale recent entries after open failure; delete
  }
 });
 
-it('marker-only changes can skip comparison without importing B',async()=>{
- const p=base();const r=round();r.markerOnly=true;r.runs=[{id:'run',agentId:'codex',sessionId:'new',status:'modified',reason:null,createdAt:'',checks:[],changes:[{path:'Assets/Work.cs',state:'applied',beforeHash:'a',afterHash:'b'}]}];p.rounds=[r];mock(p);render(<ProjectWorkflow/>);
+it('marker-only changes can skip comparison after importing B',async()=>{
+ const p=base();const r=round();r.markerOnly=true;r.candidate='b';r.runs=[{id:'run',agentId:'codex',sessionId:'new',status:'modified',reason:null,createdAt:'',checks:[],changes:[{path:'Assets/Work.cs',state:'applied',beforeHash:'a',afterHash:'b'}]}];p.rounds=[r];mock(p);render(<ProjectWorkflow/>);
  fireEvent.click(await screen.findByText('保留补点，跳过性能对比'));
  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('optimization_command',{action:{op:'skipComparison',roundId:'r'}}));
  expect(open).not.toHaveBeenCalled();
 });
-it('accepted sampling explains new recording rather than B reuse',async()=>{
- const p=base();const r=round();r.samplingAccepted=true;r.decision='accepted';p.rounds=[r];mock(p);render(<ProjectWorkflow/>);
- expect(await screen.findByText('已保留补点并跳过性能对比。下一轮必须重新录制并导入 A。')).toBeInTheDocument();
+it('accepted sampling reuses the imported B as next baseline',async()=>{
+ const p=base();const r=round();r.samplingAccepted=true;r.candidate='b';r.decision='accepted';p.rounds=[r];mock(p);render(<ProjectWorkflow/>);
+ expect(await screen.findByText('已导入 B 并保留补点，跳过性能对比。下一轮沿用 B 作为 A 继续取证。')).toBeInTheDocument();
  expect(screen.getByText('开始下一轮')).toBeInTheDocument();
+});
+
+it('zero-change investigation can close without B or rollback and still offers further investigation',async()=>{
+ const p=base();const r=round();r.reports=[{reportId:'p',stage:'project',status:'completed',agentId:'codex'}];
+ r.runs=[{id:'run',agentId:'codex',sessionId:'new',status:'investigated',reason:null,createdAt:'',checks:[],changes:[]}];
+ r.canFinishInvestigation=true;r.investigationOutcome={reason:'未复现原异常',coverageComplete:false,resumeCondition:'从面板创建前录制'};p.rounds=[r];mock(p);render(<ProjectWorkflow/>);
+ expect(await screen.findByText('未复现原异常')).toBeInTheDocument();
+ expect(screen.getByText('继续调查当前录制')).toBeInTheDocument();
+ fireEvent.click(screen.getByText('结束本轮调查，等待新录制'));
+ await waitFor(()=>expect(invoke).toHaveBeenCalledWith('optimization_command',{action:{op:'finishInvestigation',roundId:'r'}}));
+ expect(open).not.toHaveBeenCalled();
+});
+it('closed investigation opens next-round path without pretending an optimization was accepted',async()=>{
+ const p=base();const r=round();r.decision='deferred';p.rounds=[r];mock(p);render(<ProjectWorkflow/>);
+ expect(stepOf(r)).toBe(4);
+ expect(await screen.findByText('本轮未修改代码，调查结果与未解决目标已保留。下一轮请导入新 A 继续取证。')).toBeInTheDocument();
+ fireEvent.click(screen.getByText('开始下一轮'));
+ await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workflow_command',{action:{op:'next'}}));
+ expect(screen.queryByText('接受本轮修改')).not.toBeInTheDocument();
+});
+
+it('marker-only cannot skip B import',async()=>{
+ const p=base();const r=round();r.markerOnly=true;r.runs=[{id:'run',agentId:'codex',sessionId:'new',status:'modified',reason:null,createdAt:'',checks:[],changes:[{path:'Assets/Work.cs',state:'applied',beforeHash:'a',afterHash:'b'}]}];p.rounds=[r];mock(p);render(<ProjectWorkflow/>);
+ const skip=await screen.findByText('保留补点，跳过性能对比');expect(skip).toBeDisabled();fireEvent.click(skip);
+ expect(vi.mocked(invoke).mock.calls.some(c=>JSON.stringify(c).includes('"op":"skipComparison"'))).toBe(false);
+ expect(screen.getByText('导入复测录制 B')).toBeEnabled();
 });

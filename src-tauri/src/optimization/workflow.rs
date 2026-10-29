@@ -92,11 +92,15 @@ pub fn next_round(w: &Workspace) -> Result<(), String> {
         return Err("请先解决本轮修改冲突".into());
     }
     let sampling = r.sampling_accepted();
+    let deferred = r.decision == "deferred";
+    // Legacy accepted marker-only rounds may predate mandatory B import.
+    let legacy_sampling = sampling && r.candidate.is_none();
+    if deferred && !r.investigation_only() { return Err("无修改调查状态与修改记录不一致，不能进入下一轮".into()); }
     let mut baseline = match r.decision.as_str() {
-        "accepted" if sampling => r.baseline.clone(),
+        "accepted" if legacy_sampling => r.baseline.clone(),
         "accepted" => r.candidate.clone().ok_or("接受前需要导入 B 并完成对比")?,
-        "rolled_back" => r.baseline.clone(),
-        _ => return Err("请先接受或成功回退当前轮次".into()),
+        "rolled_back" | "deferred" => r.baseline.clone(),
+        _ => return Err("请先接受、成功回退或结束无修改调查".into()),
     };
     if !d
         .captures
@@ -106,7 +110,7 @@ pub fn next_round(w: &Workspace) -> Result<(), String> {
         return Err("基线录制索引不存在，不能开始下一轮".into());
     }
     let rolled = r.decision == "rolled_back";
-    if sampling {
+    if legacy_sampling || deferred {
         // Keep the historical capture immutable. The placeholder cannot authorize diagnosis.
         let mut placeholder = d.captures.iter().find(|c|c.id==baseline).unwrap().clone();
         placeholder.id = id(); placeholder.code_revision = None;
@@ -114,7 +118,8 @@ pub fn next_round(w: &Workspace) -> Result<(), String> {
     }
     let mut next = new_round(baseline);
     next.scene_id = d.active_scene_id.clone();
-    if sampling { next.workflow.reason = Some("纯补点轮次已跳过性能对比；请按取证方案重录并导入新的 A，旧录制不能验收新采样".into()); }
+    if sampling { next.workflow.reason = Some(if legacy_sampling {"旧版纯补点轮次没有 B，请重录并导入新的 A"} else {"上一轮已导入补点后的 B，作为本轮 A 继续取证；跳过对比不代表性能改善"}.into()); }
+    if deferred { next.workflow.reason = Some("上一轮未修改代码，调查结论与未解决目标已保留；请按恢复条件重录并导入新的 A".into()); }
     if rolled {
         next.workflow.reason = Some("已沿用原 A；若当前工程与原录制不同，请导入新的 A".into());
     }

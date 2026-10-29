@@ -2109,16 +2109,28 @@ fn first_marker_requires_preflight_even_without_history() {
     assert!(investigation::guard(&c,None,"marker",&["New".into()],"t").is_err());
     assert!(investigation::guard(&c,None,"optimize",&[],"t").is_ok());
 }
-#[test]
-fn marker_only_skip_preserves_changes_and_requires_new_baseline() {
+#[tokio::test]
+async fn marker_only_skip_requires_b_and_reuses_it_as_next_baseline() {
     let (_t,w,r,run)=automatic_setup();task(&w,&run,"marker");create(&w,&run,"Assets/Helper.cs").unwrap();finish(&w,&run);
     assert!(w.data.lock().unwrap().rounds[0].marker_only());
+    assert!(w.accept_sampling(&r).unwrap_err().contains("导入重录 B"));
+    assert_eq!(w.data.lock().unwrap().rounds[0].decision,"pending");
+    workflow::bind_capture(w.clone(),public_capture("editor-dump.json"),"b".into(),None).await.unwrap();
+    let bid=w.data.lock().unwrap().rounds[0].candidate.clone().unwrap();
+    let revision=w.data.lock().unwrap().code_revision;
+    {let mut d=w.data.lock().unwrap();d.captures.iter_mut().find(|c|c.id==bid).unwrap().code_revision=None;}
+    assert!(w.accept_sampling(&r).is_err());
+    {let mut d=w.data.lock().unwrap();let c=d.captures.iter_mut().find(|c|c.id==bid).unwrap();c.code_revision=Some(revision);c.scene_id="other-scene".into();}
+    assert!(w.accept_sampling(&r).is_err());
+    {let mut d=w.data.lock().unwrap();let sid=d.active_scene_id.clone();d.captures.iter_mut().find(|c|c.id==bid).unwrap().scene_id=sid;}
     w.accept_sampling(&r).unwrap();
     { let d=w.data.lock().unwrap();assert!(d.rounds[0].sampling_accepted());assert!(!scenes::unresolved(&d.rounds[0]));assert!(d.rounds[0].comparison.is_none()); }
     workflow::next_round(&w).unwrap();
     let d=w.data.lock().unwrap();let next=d.rounds.last().unwrap();
     assert_ne!(next.baseline,d.rounds[0].baseline);
-    assert!(scenes::round_access(&d,&next.id,true).is_err());
+    assert_eq!(next.baseline,bid);
+    assert_eq!(d.rounds[0].candidate.as_ref(),Some(&bid));
+    scenes::round_access(&d,&next.id,true).unwrap();
     assert!(d.captures.iter().find(|c|c.id==d.rounds[0].baseline).unwrap().code_revision.is_some());
     assert!(d.root.join("Assets/Helper.cs").exists());
     drop(d);
@@ -2154,4 +2166,95 @@ fn applied_optimization_cannot_be_relabelled_to_skip_comparison() {
     let (_t,w,_r,run)=automatic_setup();create(&w,&run,"Assets/Helper.cs").unwrap();first_marker_review(&w,&run);
     let err=w.edit_query(&run,"optimization_task",json!({"id":"t","kind":"marker","title":"重分类","evidence":"public","instructions":"test","acceptance":"test"})).unwrap_err();
     assert!(err.contains("类型"));assert!(!w.data.lock().unwrap().rounds[0].marker_only());
+}
+
+fn waiting_investigation(w: &Workspace, run: &str) {
+    let mut review=history_review("investigate");
+    review["coverage"]["complete"]=json!(false);
+    review["coverage"]["reproduction"]=json!("not_reproduced");
+    review["focus"]["disposition"]=json!("awaiting_reproduction");
+    review["evidencePlan"]=json!(null);
+    w.edit_query(run,"optimization_review",review).unwrap();
+    finish(w,run);
+}
+#[tokio::test]
+async fn no_change_investigation_can_close_and_continue_with_new_recording() {
+    let (_t,w,r,run)=automatic_setup();add_marker_history(&w);
+    let root=w.data.lock().unwrap().root.clone();let before=std::fs::read(root.join("Assets/Work.cs")).unwrap();
+    waiting_investigation(&w,&run);
+    assert!(w.data.lock().unwrap().rounds.last().unwrap().investigation_only());
+    w.finish_investigation(&r).unwrap();
+    assert_eq!(w.data.lock().unwrap().rounds.last().unwrap().decision,"deferred");
+    assert!(w.finish_investigation(&r).is_err());
+    let loaded=archive::load(&w.directory,&std::fs::read(w.directory.join("optimization.json")).unwrap()).unwrap();
+    assert_eq!(loaded.rounds.last().unwrap().decision,"deferred");
+    workflow::next_round(&w).unwrap();
+    let d=w.data.lock().unwrap();let next=d.rounds.last().unwrap();
+    assert_ne!(next.baseline,d.rounds[d.rounds.len()-2].baseline);
+    assert!(scenes::round_access(&d,&next.id,true).is_err());
+    let context=investigation::context(&d,&next.id);
+    assert_eq!(context["focus"]["taskId"],"t");
+    assert_eq!(context["focus"]["latestReview"]["focus"]["disposition"],"awaiting_reproduction");
+    assert_eq!(context["focus"]["latestReview"]["coverage"]["complete"],false);
+    assert_eq!(std::fs::read(root.join("Assets/Work.cs")).unwrap(),before);
+    assert!(d.rounds[d.rounds.len()-2].comparison.is_none());
+    let next_id=next.id.clone();drop(d);
+    workflow::bind_capture(w.clone(),public_capture("editor-dump.json"),"a".into(),None).await.unwrap();
+    let d=w.data.lock().unwrap();
+    scenes::round_access(&d,&next_id,true).unwrap();
+    assert_eq!(d.rounds[d.rounds.len()-2].decision,"deferred");
+    assert_eq!(investigation::context(&d,&next_id)["focus"]["latestReview"]["focus"]["disposition"],"awaiting_reproduction");
+}
+#[test]
+fn no_change_completion_rejects_running_failed_unreviewed_and_changed_rounds() {
+    let (_t,w,r,run)=automatic_setup();add_marker_history(&w);
+    assert!(w.finish_investigation(&r).is_err());
+    finish(&w,&run);assert!(w.finish_investigation(&r).is_err());
+    {let mut d=w.data.lock().unwrap();d.rounds.last_mut().unwrap().runs[0].status="running".into();}
+    waiting_investigation(&w,&run);
+    for state in ["running","failed","interrupted","partial"] {
+        w.data.lock().unwrap().rounds.last_mut().unwrap().runs[0].status=state.into();
+        assert!(w.finish_investigation(&r).is_err(),"{state}");
+    }
+    {let mut d=w.data.lock().unwrap();d.rounds.last_mut().unwrap().runs[0].status="investigated".into();let change=d.rounds[0].runs[0].changes[0].clone();d.rounds.last_mut().unwrap().runs[0].changes.push(change);}
+    assert!(w.finish_investigation(&r).is_err());
+    w.data.lock().unwrap().rounds.last_mut().unwrap().decision="deferred".into();
+    assert!(workflow::next_round(&w).is_err());
+}
+#[tokio::test]
+#[ignore="Explicit read-only latest ProjectJinn investigation verification"]
+async fn real_no_change_investigation_read_only() {
+    let path=PathBuf::from(std::env::var("UPAA_INVESTIGATION_ARCHIVE").unwrap());
+    let manifest=std::fs::read(path.join("optimization.json")).unwrap();
+    let data=archive::load(&path,&manifest).unwrap();let r=data.rounds.last().unwrap();
+    assert_eq!(r.id,"4291ed41-e909-4540-a2af-121a17296171");
+    assert!(r.investigation_only());assert_eq!(r.decision,"pending");
+    assert!(r.runs.len()>=2);assert!(r.runs.iter().all(|s|s.changes.is_empty() && s.status=="investigated"));
+    let c=investigation::context(&data,&r.id);let review=r.runs.last().unwrap().investigation_review.as_ref().unwrap();
+    investigation::validate(&c,review).unwrap();
+    assert!(!review.coverage.as_ref().unwrap().complete);
+    assert_eq!(review.focus.as_ref().unwrap().disposition,"awaiting_reproduction");
+    assert_eq!(std::fs::read(path.join("optimization.json")).unwrap(),manifest);
+    eprintln!("ProjectJinn: repeated zero-change investigations; saved review valid; can finish investigation; archive unchanged");
+}
+
+#[test]
+fn legacy_zero_change_report_can_close_without_new_write_preflight() {
+    let (_t,w,r,run)=automatic_setup();
+    w.event(&run,&DiagnoseEvent::Chunk{text:"已调查，当前证据不足；未修改代码，等待新的复现录制".into()}).unwrap();
+    finish(&w,&run);
+    assert!(w.data.lock().unwrap().rounds[0].runs[0].investigation_review.is_none());
+    w.finish_investigation(&r).unwrap();
+    workflow::next_round(&w).unwrap();
+    assert_eq!(w.data.lock().unwrap().rounds[0].decision,"deferred");
+}
+
+#[test]
+fn legacy_marker_only_acceptance_without_b_still_requires_fresh_recording() {
+    let (_t,w,_r,run)=automatic_setup();task(&w,&run,"marker");create(&w,&run,"Assets/Helper.cs").unwrap();finish(&w,&run);
+    w.data.lock().unwrap().rounds[0].decision="accepted".into();
+    workflow::next_round(&w).unwrap();
+    let d=w.data.lock().unwrap();let next=d.rounds.last().unwrap();
+    assert!(scenes::round_access(&d,&next.id,true).is_err());
+    assert!(next.workflow.reason.as_ref().unwrap().contains("旧版"));
 }
