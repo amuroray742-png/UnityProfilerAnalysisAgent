@@ -73,7 +73,7 @@ impl ServerHandler for ProfilerServer {
             tools.extend(extra);
         }
         for tool in &mut tools {
-            tool.annotations = Some(serde_json::from_value(json!({"readOnlyHint":!matches!(tool.name.as_ref(),"optimization_replace"|"optimization_check"|"optimization_create"|"optimization_task"),"destructiveHint":matches!(tool.name.as_ref(),"optimization_replace"|"optimization_create"),"idempotentHint":!matches!(tool.name.as_ref(),"optimization_replace"|"optimization_check"|"optimization_create"|"optimization_task"),"openWorldHint":false})).unwrap());
+            tool.annotations = Some(serde_json::from_value(json!({"readOnlyHint":!matches!(tool.name.as_ref(),"optimization_replace"|"optimization_check"|"optimization_create"|"optimization_task"|"optimization_review"),"destructiveHint":matches!(tool.name.as_ref(),"optimization_replace"|"optimization_create"),"idempotentHint":!matches!(tool.name.as_ref(),"optimization_replace"|"optimization_check"|"optimization_create"|"optimization_task"|"optimization_review"),"openWorldHint":false})).unwrap());
         }
         Ok(ListToolsResult {
             tools,

@@ -256,6 +256,7 @@ async fn session(real: Option<&str>) {
     });
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let request = acp_client::DiagnoseRequest {
+        investigation_context: None,
         project: None,
         source: None,
         parent_report: None,
@@ -1263,6 +1264,7 @@ async fn automatic_real_agent(agent: &str) {
         .unwrap();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let req = acp_client::DiagnoseRequest {
+        investigation_context: None,
         project: Some(project),
         source: None,
         parent_report: None,
@@ -1889,4 +1891,103 @@ fn check_inventory_bounds_settings_reads_and_keeps_resource_time_checks() {
     }
     w.cancelled.store(true, Ordering::SeqCst);
     assert!(session::inventory(&root, &w.cancelled).is_err());
+}
+
+// History regressions use disposable archives; no user code is modified.
+fn add_marker_history(w: &Workspace) {
+    let mut d = w.data.lock().unwrap();
+    let mut old = d.rounds[0].clone();
+    old.id = "previous".into();
+    old.decision = "accepted".into();
+    old.candidate = Some("a".into());
+    old.reports[0].report_id = "previous-report".into();
+    let run = &mut old.runs[0];
+    run.id = "previous-run".into();
+    run.status = "modified".into();
+    run.tasks[0].kind = "marker".into();
+    run.tasks[0].marker_names = vec!["Public.Existing".into()];
+    run.changes.push(Change { task_id:Some("t".into()),kind:"modify".into(),path:"Assets/Work.cs".into(),before_hash:"old".into(),after_hash:"new".into(),before:vec![],after:vec![],state:"applied".into() });
+    old.tasks = run.tasks.clone();
+    old.comparison = Some(json!({"sampling":{"rows":[{"name":"Public.Existing","status":"observed"}]}}));
+    d.rounds.insert(0,old);
+}
+fn history_review(action: &str) -> serde_json::Value {
+    json!({"markers":[{"roundId":"previous","taskId":"t","status":"unresolved","evidence":"当前 A 主线程 Public.Existing 每帧 1 次，12 次 GC.Alloc，出现不等于原因已定位","nextStep":"读取分配路径的 getter"}],"nextAction":action,"reason":"旧采样已定位到 getter，但尚需区分两个实现分支","newEvidence":"已读 getter 两个同步分支，旧采样没有区分","newMarkerQuestion":"分支 A 有分配则追踪集合创建，分支 B 有分配则追踪格式化"})
+}
+#[test]
+fn investigation_handoff_scopes_history_and_preserves_observation_provenance() {
+    let (_t,w,r,run)=automatic_setup(); add_marker_history(&w);
+    {
+        let mut d=w.data.lock().unwrap();
+        let mut other=d.rounds[0].clone();other.id="other".into();other.scene_id="other-scene".into();d.rounds.insert(0,other);
+        let mut future=d.rounds.last().unwrap().clone();future.id="future".into();d.rounds.push(future);
+        let c=investigation::context(&d,&r);
+        assert_eq!(c["rounds"].as_array().unwrap().len(),1);
+        assert_eq!(c["consecutiveMarkerOnlyRounds"],1);
+        assert_eq!(c["rounds"][0]["candidateIsCurrentBaseline"],true);
+        d.rounds[1].candidate=Some("different-capture".into());
+        assert_eq!(investigation::context(&d,&r)["rounds"][0]["candidateIsCurrentBaseline"],false);
+        d.rounds[1].runs[0].changes[0].state="rolled_back".into();
+        assert!(investigation::context(&d,&r)["requiredMarkerReviews"].as_array().unwrap().is_empty());
+    }
+    let report=w.edit_query(&run,"optimization_context",json!({"report_id":"previous-report"})).unwrap();
+    assert!(report["text"].as_str().unwrap().contains("Public evidence"));
+    assert!(w.edit_query(&run,"optimization_context",json!({"report_id":"not-in-history"})).is_err());
+}
+#[test]
+fn investigation_requires_review_before_existing_and_new_file_writes() {
+    let (_t,w,r,run)=automatic_setup(); add_marker_history(&w);
+    assert!(replace(&w,&run,"number = 1","number = 2").unwrap_err().contains("optimization_review"));
+    assert!(create(&w,&run,"Assets/Helper.cs").unwrap_err().contains("optimization_review"));
+    let mut missing=history_review("optimize");missing["markers"]=json!([]);
+    assert!(w.edit_query(&run,"optimization_review",missing).is_err());
+    let mut duplicate=history_review("optimize");let entry=duplicate["markers"][0].clone();duplicate["markers"].as_array_mut().unwrap().push(entry);
+    assert!(w.edit_query(&run,"optimization_review",duplicate).is_err());
+    w.edit_query(&run,"optimization_review",history_review("investigate")).unwrap();
+    assert!(replace(&w,&run,"number = 1","number = 2").is_err());
+    w.edit_query(&run,"optimization_review",history_review("optimize")).unwrap();
+    replace(&w,&run,"number = 1","number = 2").unwrap();
+    let data=archive::load(&w.directory,&std::fs::read(w.directory.join("optimization.json")).unwrap()).unwrap();
+    assert_eq!(data.rounds.iter().find(|x|x.id==r).unwrap().runs[0].investigation_review.as_ref().unwrap().next_action,"optimize");
+}
+#[test]
+fn investigation_rejects_repeat_markers_and_unsupported_continued_sampling() {
+    let (_t,w,_r,run)=automatic_setup(); add_marker_history(&w);
+    let mut unsupported=history_review("marker");unsupported["newEvidence"]=json!("");
+    assert!(w.edit_query(&run,"optimization_review",unsupported).is_err());
+    w.edit_query(&run,"optimization_review",history_review("marker")).unwrap();
+    let mut task=json!({"id":"sample","kind":"marker","title":"采样","evidence":"已读取两个分支","instructions":"同步分支","acceptance":"区分两个原因","marker_names":["Public.Existing"]});
+    assert!(w.edit_query(&run,"optimization_task",task.clone()).unwrap_err().contains("重复"));
+    task["marker_names"]=json!(["Public.Getter.Branch"]);
+    w.edit_query(&run,"optimization_task",task).unwrap();
+    // Old archives without the optional review field remain readable.
+    let mut old=serde_json::to_value(&w.data.lock().unwrap().rounds[1].runs[0]).unwrap();
+    old.as_object_mut().unwrap().remove("investigationReview");
+    assert!(serde_json::from_value::<Run>(old).unwrap().investigation_review.is_none());
+}
+#[tokio::test]
+#[ignore = "Explicit read-only private archive verification via UPAA_INVESTIGATION_ARCHIVE"]
+async fn real_investigation_archive_handoff_read_only() {
+    let path=PathBuf::from(std::env::var("UPAA_INVESTIGATION_ARCHIVE").expect("explicit archive required"));
+    let manifest=std::fs::read(path.join("optimization.json")).unwrap();
+    let data=archive::load(&path,&manifest).unwrap();
+    let current=data.rounds.last().unwrap();
+    let context=investigation::context(&data,&current.id);
+    assert!(context["rounds"].as_array().unwrap().len()>=2);
+    assert!(context["requiredMarkerReviews"].as_array().unwrap().iter().any(|r|r["markerNames"].as_array().unwrap().iter().any(|s|s=="UI.Time.Petra")));
+    assert!(context["consecutiveMarkerOnlyRounds"].as_u64().unwrap()>=1);
+    assert!(investigation::guard(&context,None,"marker",&[]).is_err());
+    let capture=data.captures.iter().find(|c|c.id==current.baseline).unwrap();
+    let store=mcp::MetricsStore::new();store.set(capture.snapshot.clone()).await;
+    let gc=mcp::tools::dispatch(&store,"performance_hotspots",json!({"area":"gc","limit":50})).await.unwrap();
+    assert!(gc["rows"].as_array().unwrap().iter().all(|r|r["allocationCount"].is_number()&&r.get("callCount").is_none()));
+    let tm_gc=gc["rows"].as_array().unwrap().iter().find(|r|r["name"]=="TM.OnUpdate").unwrap();
+    let tm_cpu=capture.snapshot.cpu.top_hotspots.iter().find(|r|r.name=="TM.OnUpdate").unwrap();
+    assert_eq!(tm_cpu.call_count,2000);
+    assert_eq!(tm_gc["allocationCount"],2242506);
+    assert_ne!(tm_gc["allocationCount"].as_u64(),Some(tm_cpu.call_count));
+    assert_eq!(std::fs::read(path.join("optimization.json")).unwrap(),manifest);
+    if let Ok(output)=std::env::var("UPAA_INVESTIGATION_OUTPUT") {
+        std::fs::write(output,serde_json::to_vec_pretty(&json!({"archiveUnchanged":true,"roundCount":data.rounds.len(),"handoff":context,"gc":gc,"tmBusinessCalls":tm_cpu.call_count})).unwrap()).unwrap();
+    }
 }

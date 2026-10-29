@@ -1,5 +1,16 @@
 # 项目状态、验证证据与路线图
 
+## 跨轮调查与 Marker 验收（2026-10-29）
+
+诊断/定位接入同场景先前轮次的任务、已应用改动、Marker 观察、验收记录和报告索引；修改上下文提供完整分页历史及历史报告读取。其他场景、未来轮次不混入；回退不作为有效补点，旧 B 与当前 A 不同时标明需重新查询。修改前新增持久化 `optimization_review` 验收门槛，缺失/遗漏验收禁止替换和创建；继续补点需新增证据与可区分原因的问题，重复历史固定名被拒绝，证据不足可停止调查。此约束不自动证明模型给出的证据充分，也不保证每轮产生实质优化。
+
+GC MCP 热点改为 `allocationCount`，明确分配样本与方法调用数不同；旧存档内部字段兼容，界面显示“分配次数”。历史错误报告不改写。公开验证：桌面 Rust 153 项通过、24 项忽略；共享核心 61 项通过、1 项忽略；前端 103 项通过。新增历史隔离、回退、验收遗漏/重复、写入门槛、持久化兼容及 GC 表头回归。
+
+ProjectJinn 实际三轮存档只读回放通过：第三轮继承前两轮 3 项 Marker 任务，识别连续纯 Marker 轮次为 1；确认当前录制 TM.OnUpdate 的分配样本为 2,242,506、CPU 调用为 2,000，原索引字节未变化。证据 `.cache/projectjinn-investigation-verification.json`。未重新调用实际 Agent 修改游戏代码，未重录或确认性能收益。
+
+Windows EXE/NSIS 构建成功，打包 EXE 的启动及 MCP 通信测试通过（隔离最近列表与 WebView 数据）。EXE SHA-256：`796479c7a1bbff8137106ac950772389c186e7811b7b669e7324c6917c20e96f`；NSIS SHA-256：`1d1d9b4be8cc59af5605049b366a51d4f913eac4ad011d2c67ba9894c2f876c7`。
+
+
 ## 最近项目已删除存档自动清理（2026-10-28）
 
 加载最近列表时检查存档的 optimization.json，仅 NotFound 时移除并持久化；权限不足、I/O 错误、内容损坏仍保留，以便恢复。Unity 工程根目录不可用但存档仍在时保留历史报告入口。首页显示后用户才删除存档的情况，在点击打开失败后重新读取列表，移除失效项并清除该项的打开错误；其他打开错误仍显示。后端 recent_tests 5 项、ProjectWorkflow 40 项通过。重新打包 Windows EXE / NSIS 后，实际桌面验收通过删除存档清理及落盘、重启保持、6 次重复打开去重和隔离记录检查。隔离测试期间正式列表字节不变；正常启动新版本时，正式列表中已不存在的 C:/work/JinnOptimize 自动移除，仍存在的 ProjectVanguard 保留，未混入测试条目。验收证据：.cache/recent-projects-desktop/b8e29f36-f2b0-4f87-b4c1-8a8afa11caa9/verification.json。EXE SHA-256：`6793aa9b7dcb0f8471f06a86dca254d0712ffcd2a738e0f783ea333145d12603`；NSIS SHA-256：`ffb60f1f581dc9b98ce8ccd32eea7555e2062d4675823c130d0bede6b48da572`。

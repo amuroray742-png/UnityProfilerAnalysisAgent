@@ -4,6 +4,7 @@ pub mod automatic;
 pub mod commands;
 pub mod comparison;
 pub mod editing;
+pub mod investigation;
 pub mod observation;
 pub mod plugin;
 pub mod sampling;
@@ -43,6 +44,8 @@ fn modify_kind() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Run {
+    #[serde(default)]
+    pub investigation_review: Option<investigation::Review>,
     #[serde(default)]
     pub sequence: u64,
     #[serde(default)]
