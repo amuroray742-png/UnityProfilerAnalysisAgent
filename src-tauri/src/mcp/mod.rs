@@ -49,9 +49,10 @@ pub fn list_tool_schemas() -> serde_json::Value {
             },
             {
                 "name": "performance_hotspots",
-                "description": "CPU/GC/渲染 CPU 热点榜分页：累计 inclusive 毫秒或分配字节降序，CPU callCount 是方法样本调用次数；GC allocationCount 是分配样本次数，不是父方法调用数或实例数，avgBytes 是每次分配字节。含单次最大值。排名不是瓶颈结论，结合 performance_analysis 的 investigationFrames 深入原始帧树；CPU 父子不可相加",
+                "description": "CPU/GC 可用 names 精确查询原目标：扫描全部已导出汇总，不受前N排名限制；命中结果仍检查nextStart，原始树另查。CPU/GC/渲染 CPU 热点榜分页：累计 inclusive 毫秒或分配字节降序，CPU callCount 是方法样本调用次数；GC allocationCount 是分配样本次数，不是父方法调用数或实例数，avgBytes 是每次分配字节。含单次最大值。排名不是瓶颈结论，结合 performance_analysis 的 investigationFrames 深入原始帧树；CPU 父子不可相加",
                 "inputSchema": {"type":"object","properties":{
                     "area":{"type":"string","enum":["cpu","gc","rendering"]},
+                    "names":{"type":"array","minItems":1,"maxItems":20,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":200},"description":"固定完整Marker名称，仅cpu/gc。未观察到不表示未执行"},
                     "start":{"type":"integer","minimum":0,"default":0},
                     "limit":{"type":"integer","minimum":1,"maximum":50,"default":10}
                 },"required":["area"]}

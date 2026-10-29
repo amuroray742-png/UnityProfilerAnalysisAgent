@@ -241,3 +241,15 @@ it.each([true,false])('refreshes stale recent entries after open failure; delete
   expect(await screen.findByText('archive unavailable')).toBeVisible();
  }
 });
+
+it('marker-only changes can skip comparison without importing B',async()=>{
+ const p=base();const r=round();r.markerOnly=true;r.runs=[{id:'run',agentId:'codex',sessionId:'new',status:'modified',reason:null,createdAt:'',checks:[],changes:[{path:'Assets/Work.cs',state:'applied',beforeHash:'a',afterHash:'b'}]}];p.rounds=[r];mock(p);render(<ProjectWorkflow/>);
+ fireEvent.click(await screen.findByText('保留补点，跳过性能对比'));
+ await waitFor(()=>expect(invoke).toHaveBeenCalledWith('optimization_command',{action:{op:'skipComparison',roundId:'r'}}));
+ expect(open).not.toHaveBeenCalled();
+});
+it('accepted sampling explains new recording rather than B reuse',async()=>{
+ const p=base();const r=round();r.samplingAccepted=true;r.decision='accepted';p.rounds=[r];mock(p);render(<ProjectWorkflow/>);
+ expect(await screen.findByText('已保留补点并跳过性能对比。下一轮必须重新录制并导入 A。')).toBeInTheDocument();
+ expect(screen.getByText('开始下一轮')).toBeInTheDocument();
+});

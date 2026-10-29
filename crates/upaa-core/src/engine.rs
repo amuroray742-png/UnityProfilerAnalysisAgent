@@ -240,7 +240,10 @@ pub async fn query(s: &MetricsStore, tool: &str, a: Value) -> Result<Value, Stri
         "performance_session_summary" => run_session_summary(s).await,
         "performance_metric_semantics" => return Ok(metric_semantics()),
         "performance_hotspots" => {
-            run_hotspots(s, a["area"].as_str().unwrap_or("cpu"), start, limit).await
+            if let Some(names)=a.get("names") {
+                let names:Vec<String>=serde_json::from_value(names.clone()).map_err(|e|e.to_string())?;
+                run_target_hotspots(s,a["area"].as_str().unwrap_or("cpu"),&names,start,limit).await
+            } else {run_hotspots(s, a["area"].as_str().unwrap_or("cpu"), start, limit).await}
         }
         "performance_frames" => run_frames(s, start, limit).await,
         "performance_frame" => run_frame_page(s, index()?, start, limit).await,

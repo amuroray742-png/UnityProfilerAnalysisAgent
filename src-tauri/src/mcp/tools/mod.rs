@@ -44,6 +44,8 @@ struct Analysis {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Hotspots {
+    #[serde(default)]
+    names: Option<Vec<String>>,
     area: String,
     #[serde(default)]
     start: usize,
@@ -225,7 +227,7 @@ pub async fn dispatch(
         }
         "performance_hotspots" => {
             let a: Hotspots = args(arguments)?;
-            run_hotspots(store, &a.area, a.start, a.limit).await
+            if let Some(names)=a.names { run_target_hotspots(store, &a.area, &names, a.start, a.limit).await } else {run_hotspots(store, &a.area, a.start, a.limit).await}
         }
         "performance_frames" => {
             let a: Frames = args(arguments)?;

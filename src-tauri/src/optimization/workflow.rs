@@ -84,13 +84,16 @@ fn progress(
     w.save(&d)
 }
 pub fn next_round(w: &Workspace) -> Result<(), String> {
-    let mut d = w.data.lock().unwrap();
+    let mut saved = w.data.lock().unwrap();
+    let mut d = saved.clone();
     scenes::access(&d, &d.active_scene_id)?;
     let r = scenes::current(&d, &d.active_scene_id).ok_or("尚无轮次")?;
     if scenes::unresolved(r) {
         return Err("请先解决本轮修改冲突".into());
     }
-    let baseline = match r.decision.as_str() {
+    let sampling = r.sampling_accepted();
+    let mut baseline = match r.decision.as_str() {
+        "accepted" if sampling => r.baseline.clone(),
         "accepted" => r.candidate.clone().ok_or("接受前需要导入 B 并完成对比")?,
         "rolled_back" => r.baseline.clone(),
         _ => return Err("请先接受或成功回退当前轮次".into()),
@@ -103,13 +106,22 @@ pub fn next_round(w: &Workspace) -> Result<(), String> {
         return Err("基线录制索引不存在，不能开始下一轮".into());
     }
     let rolled = r.decision == "rolled_back";
+    if sampling {
+        // Keep the historical capture immutable. The placeholder cannot authorize diagnosis.
+        let mut placeholder = d.captures.iter().find(|c|c.id==baseline).unwrap().clone();
+        placeholder.id = id(); placeholder.code_revision = None;
+        baseline = placeholder.id.clone(); d.captures.push(placeholder);
+    }
     let mut next = new_round(baseline);
     next.scene_id = d.active_scene_id.clone();
+    if sampling { next.workflow.reason = Some("纯补点轮次已跳过性能对比；请按取证方案重录并导入新的 A，旧录制不能验收新采样".into()); }
     if rolled {
         next.workflow.reason = Some("已沿用原 A；若当前工程与原录制不同，请导入新的 A".into());
     }
     d.rounds.push(next);
-    w.save(&d)
+    w.save(&d)?;
+    *saved = d;
+    Ok(())
 }
 
 fn validate_capture_binding(d: &Project, scene: &str, role: &str) -> Result<(), String> {

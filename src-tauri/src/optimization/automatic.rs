@@ -170,6 +170,10 @@ impl Workspace {
             if task.kind != "investigate" {
                 super::investigation::guard(&investigation, run.investigation_review.as_ref(), &task.kind, &task.marker_names, &task.id)?;
             }
+            if run.tasks.iter().any(|old|old.id==task.id && old.kind!=task.kind)
+                && run.changes.iter().any(|c|c.task_id.as_deref()==Some(&task.id) && matches!(c.state.as_str(),"applied"|"prepared"|"conflict")) {
+                return Err("已有实际改动的任务不能更改类型；新目标请创建新任务".into());
+            }
             let next = Task {
                 id: task.id.clone(),
                 kind: task.kind.clone(),

@@ -93,7 +93,24 @@ pub struct Round {
     pub decision: String,
 }
 impl Round {
+    /// Classify applied ledger entries, not merely the current proposed tasks.
+    pub fn marker_only(&self) -> bool {
+        let mut applied = false;
+        for run in &self.runs {
+            if run.changes.iter().any(|c| matches!(c.state.as_str(), "prepared" | "conflict")) { return false; }
+            for change in run.changes.iter().filter(|c|c.state=="applied") {
+                applied = true;
+                if !run.tasks.iter().any(|t|Some(t.id.as_str())==change.task_id.as_deref() && t.kind=="marker") { return false; }
+            }
+        }
+        applied
+    }
+    pub fn sampling_accepted(&self) -> bool {
+        self.decision=="accepted" && self.comparison.is_none() && self.marker_only()
+    }
+
     pub fn performance_status(&self) -> &'static str {
+        if self.sampling_accepted() { return "已保留补点，跳过性能对比；待重录取证"; }
         if !self.runs.is_empty() && self.runs.iter().all(|r| r.status == "rolled_back") {
             return "不可判定（本轮已回退）";
         }

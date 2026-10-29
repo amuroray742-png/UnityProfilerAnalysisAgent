@@ -222,3 +222,18 @@ async fn repeated_calls_and_slower_calls_are_distinguishable() {
     assert_eq!(slower["callsDelta"],0);
     assert_eq!(slower["current"]["meanInclusiveMs"],2.0);
 }
+
+#[tokio::test]
+async fn target_lookup_finds_markers_beyond_ranked_prefix_and_keeps_pagination() {
+    let p=fixture().await;let mut snap=extractor::extract(&p);
+    let template=snap.cpu.top_hotspots[0].clone();
+    snap.cpu.top_hotspots=(0..320).map(|i|{let mut h=template.clone();h.name=format!("Target.{i}");h}).collect();
+    let store=mcp::MetricsStore::new();store.set(snap).await;
+    let page=mcp::tools::dispatch(&store,"performance_hotspots",json!({"area":"cpu","names":["Target.299","Target.300","Missing"],"limit":1})).await.unwrap();
+    assert_eq!(page["rows"][0]["name"],"Target.299");assert_eq!(page["total"],2);assert_eq!(page["nextStart"],1);
+    assert_eq!(page["targetLookup"]["scannedEntries"],320);assert_eq!(page["targetLookup"]["notObservedNames"],json!(["Missing"]));
+    let page=mcp::tools::dispatch(&store,"performance_hotspots",json!({"area":"cpu","names":["Target.299","Target.300"],"start":1,"limit":1})).await.unwrap();
+    assert_eq!(page["rows"][0]["name"],"Target.300");assert!(page["nextStart"].is_null());
+    assert_eq!(store.get().await.unwrap().cpu.top_hotspots.len(),320);
+    for args in [json!({"area":"cpu","names":[]}),json!({"area":"rendering","names":["X"]}),json!({"area":"cpu","names":vec!["X";21]})] {assert!(mcp::tools::dispatch(&store,"performance_hotspots",args).await.is_err());}
+}
