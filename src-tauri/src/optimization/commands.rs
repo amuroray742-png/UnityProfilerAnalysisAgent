@@ -717,6 +717,7 @@ pub async fn optimization_command(
                 None
             };
             let request = DiagnoseRequest {
+                investigation_context: None,
                 project,
                 source: None,
                 parent_report: None,

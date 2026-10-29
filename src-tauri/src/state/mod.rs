@@ -245,6 +245,7 @@ impl AppState {
         }
         let report_project = project.clone();
         let req = DiagnoseRequest {
+            investigation_context: None,
             project,
             source,
             parent_report: parent.as_ref().map(|r| r.markdown()),

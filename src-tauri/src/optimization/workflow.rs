@@ -1016,6 +1016,7 @@ async fn run_report(
     }
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let request = DiagnoseRequest {
+        investigation_context: Some(super::investigation::prompt(&w.data.lock().unwrap(), rid)),
         project: project.clone(),
         source: None,
         parent_report: parent.map(|p| p.markdown()),

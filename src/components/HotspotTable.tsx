@@ -14,8 +14,9 @@ export function HotspotTable(props: Props) {
   return <div className="section"><div className="section-title">{title}</div>
     <QualityNote quality={quality} />
     {props.valueColumn==='ms' && <p>Inclusive 耗时包含子样本，父子耗时不可相加。</p>}
+    {props.valueColumn==='bytes' && <p>分配次数是 GC.Alloc 样本数，不是父方法调用次数或对象实例数；平均值为每次分配字节。</p>}
     {rows.length===0 ? <p>{quality?.status==='unavailable'?'不可用':'无样本'}</p> :
-    <table className="hotspot-table"><thead><tr><th>名称</th><th>{props.valueColumn==='bytes'?'总字节':'总耗时'}</th><th>调用次数</th><th>平均</th><th>峰值</th></tr></thead>
+    <table className="hotspot-table"><thead><tr><th>名称</th><th>{props.valueColumn==='bytes'?'总字节':'总耗时'}</th><th>{props.valueColumn==='bytes'?'分配次数':'调用次数'}</th><th>平均</th><th>峰值</th></tr></thead>
     <tbody>{rows.slice(0,topN).map((r,i)=><tr key={i}><td>{r.name}</td><td>{fmt(r.total)}</td><td>{formatCount(r.calls)}</td><td>{fmt(r.avg)}</td><td>{fmt(r.max)}</td></tr>)}</tbody></table>}
   </div>;
 }

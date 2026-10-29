@@ -114,6 +114,8 @@ impl Workspace {
         self.check()?;
         let mut data = self.data.lock().unwrap();
         let root = data.root.clone();
+        let rid = data.rounds.iter().find(|r|r.runs.iter().any(|s|s.id==run_id)).ok_or("运行不存在")?.id.clone();
+        let investigation = super::investigation::context(&data, &rid);
         let run = data
             .rounds
             .iter_mut()
@@ -165,6 +167,9 @@ impl Workspace {
                 return Err("任务过大".into());
             }
             super::sampling::validate_names(&task.kind, &task.marker_names)?;
+            if task.kind != "investigate" {
+                super::investigation::guard(&investigation, run.investigation_review.as_ref(), &task.kind, &task.marker_names)?;
+            }
             let next = Task {
                 id: task.id.clone(),
                 kind: task.kind.clone(),
@@ -206,6 +211,8 @@ impl Workspace {
         {
             return Err("请先记录有依据的优化或 Marker 任务".into());
         }
+        let task = run.tasks.iter().find(|t|t.id==request.task_id).unwrap();
+        super::investigation::guard(&investigation, run.investigation_review.as_ref(), &task.kind, &task.marker_names)?;
         if !editing::allowed(&request.path)
             || request.content.is_empty()
             || request.content.len() > 2 * 1024 * 1024

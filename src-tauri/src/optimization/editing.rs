@@ -143,6 +143,7 @@ impl Workspace {
         }
         let id = id();
         let run = Run {
+            investigation_review: None,
             sequence,
             automatic: requirements.is_some(),
             requirements: requirements.unwrap_or_default(),
@@ -174,6 +175,7 @@ impl Workspace {
         Ok(id)
     }
     pub fn edit_query(&self, run_id: &str, name: &str, a: Value) -> Result<Value, String> {
+        if name == "optimization_review" { return self.review_investigation(run_id, a); }
         if matches!(name, "optimization_task" | "optimization_create") {
             return self.automatic_query(run_id, name, a);
         }
@@ -197,6 +199,9 @@ impl Workspace {
         let mut d = self.data.lock().unwrap();
         self.check()?;
         let root = d.root.clone();
+        let rid = d.rounds.iter().find(|r|r.runs.iter().any(|s|s.id==run_id)).ok_or("运行不存在")?.id.clone();
+        let investigation = super::investigation::context(&d, &rid);
+        let historical_report = a.get("report_id").and_then(|id| id.as_str()).and_then(|id| super::investigation::prior(&d, &rid).into_iter().flat_map(|r|&r.reports).find(|r|r.report_id==id).cloned());
         let round = d
             .rounds
             .iter_mut()
@@ -213,10 +218,11 @@ impl Workspace {
                     .reports
                     .iter()
                     .find(|r| r.report_id == report_id)
-                    .ok_or("报告不属于本轮")?;
+                    .or(historical_report.as_ref())
+                    .ok_or("报告不属于本轮或当前场景的先前轮次")?;
                 serde_json::to_string_pretty(report).unwrap()
             } else {
-                serde_json::to_string_pretty(&json!({"projectRoot":root,"checks":round.runs.iter().find(|r|r.id==run_id).map(|r|&r.checks),"reports":round.reports.iter().map(|r|json!({"reportId":r.report_id,"stage":r.stage,"agentId":r.agent_id,"status":r.status,"textBytes":r.text.len(),"read":"使用 report_id 按需分页读取完整报告及资源证据"})).collect::<Vec<_>>(),"selectedTests":round.tests,"baselineCheck":round.runs.iter().find(|r|r.id==run_id).map(|r|&r.baseline_check),"mode":round.runs.iter().find(|r|r.id==run_id).map(|r|if r.automatic {"automatic"}else{"restricted"}),"requirements":round.runs.iter().find(|r|r.id==run_id).map(|r|&r.requirements),"runTasks":round.runs.iter().find(|r|r.id==run_id).map(|r|&r.tasks),"existingChanges":round.runs.iter().flat_map(|r|&r.changes).map(|c|json!({"path":c.path,"beforeHash":c.before_hash,"afterHash":c.after_hash,"state":c.state})).collect::<Vec<_>>()})).unwrap()
+                serde_json::to_string_pretty(&json!({"investigation":investigation,"investigationReview":round.runs.iter().find(|r|r.id==run_id).and_then(|r|r.investigation_review.as_ref()),"projectRoot":root,"checks":round.runs.iter().find(|r|r.id==run_id).map(|r|&r.checks),"reports":round.reports.iter().map(|r|json!({"reportId":r.report_id,"stage":r.stage,"agentId":r.agent_id,"status":r.status,"textBytes":r.text.len(),"read":"使用 report_id 按需分页读取完整报告及资源证据"})).collect::<Vec<_>>(),"selectedTests":round.tests,"baselineCheck":round.runs.iter().find(|r|r.id==run_id).map(|r|&r.baseline_check),"mode":round.runs.iter().find(|r|r.id==run_id).map(|r|if r.automatic {"automatic"}else{"restricted"}),"requirements":round.runs.iter().find(|r|r.id==run_id).map(|r|&r.requirements),"runTasks":round.runs.iter().find(|r|r.id==run_id).map(|r|&r.tasks),"existingChanges":round.runs.iter().flat_map(|r|&r.changes).map(|c|json!({"path":c.path,"beforeHash":c.before_hash,"afterHash":c.after_hash,"state":c.state})).collect::<Vec<_>>()})).unwrap()
             };
             let chars: Vec<_> = text.chars().collect();
             if start > chars.len() {
@@ -298,6 +304,8 @@ impl Workspace {
         if name != "optimization_replace" {
             return Err("未知修改工具".into());
         }
+        let task = run.tasks.iter().find(|t|Some(t.id.as_str())==a["task_id"].as_str()).ok_or("任务不存在")?;
+        super::investigation::guard(&investigation, run.investigation_review.as_ref(), &task.kind, &task.marker_names)?;
         if a["expected_hash"].as_str() != Some(&hash)
             || (run.automatic && run.read_receipts.get(path) != Some(&hash))
         {

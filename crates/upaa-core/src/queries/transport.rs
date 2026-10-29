@@ -90,7 +90,7 @@ pub fn metric_semantics() -> Value {
             "coverage": "调用树无分页/深度截断仅代表已导出样本读取完整，不证明所有运行工作都被 instrumentation 覆盖"
         },
         "rendering": "Draw Call/SetPass/Batches/Triangles/Vertices 是每帧观测计数；缺失不等于零，分位数仅使用有效帧。renderCounters 按原始 marker 名列出有效值，缺失键表示不可用。渲染 CPU marker 的 inclusive 时间不等于 GPU 时间，父子/跨线程耗时不可相加；不根据 Draw Call 与 SetPass 差值推算 SRP 收益。",
-        "gc": "每个 GC.Alloc 样本的字节独立计入（含嵌套分配）；按线程和最近非 GC.Alloc 父样本归因，和已校验的帧总量核对"
+        "gc": "GC 热点 allocationCount（旧存档 callCount）是分配样本次数，不是父方法/回调调用次数或对象实例数；avgBytes 是每次分配平均字节。业务调用数须查 CPU 或完整帧路径。每个 GC.Alloc 样本的字节独立计入（含嵌套分配）；按线程和最近非 GC.Alloc 父样本归因，和已校验的帧总量核对"
     })
 }
 
@@ -124,13 +124,20 @@ pub async fn run_hotspots(
         return Err(McpToolError::BadArg("start 超出热点列表".into()));
     }
     let end = start.saturating_add(limit).min(total);
-    let rows = if area == "cpu" {
+    let mut rows = if area == "cpu" {
         json!(&snapshot.cpu.top_hotspots[start..end])
     } else if area == "gc" {
         json!(&snapshot.gc.top_alloc_sites[start..end])
     } else {
         json!(&snapshot.rendering.top_render_events[start..end])
     };
+    if area == "gc" {
+        for row in rows.as_array_mut().unwrap() {
+            let count = row.as_object_mut().unwrap().remove("callCount").unwrap_or(Value::Null);
+            row["allocationCount"] = count;
+            row["countMeaning"] = json!("GC.Alloc 分配样本次数，不是父方法调用次数或对象实例数");
+        }
+    }
     let mut result = json!({"area":area,"start":start,"total":total,"returned":end-start,
         "nextStart":if end < total {Some(end)} else {None},"quality":quality,"rows":rows,
         "scope":if area == "cpu" {"主线程 marker，按累计 inclusive 毫秒降序；调用次数和单次最大耗时；父子与递归不可相加为总 CPU，须查帧树确认具体路径"} else if area == "rendering" {"已导出线程的渲染 CPU marker（含线程标识），累计 inclusive 毫秒；包含子样本和等待，不能相加为 CPU 总量或作为 GPU 耗时"} else {"已导出线程，按累计分配字节降序；按线程和最近非 GC.Alloc 父样本归因；分配不等于 GC 回收停顿"},

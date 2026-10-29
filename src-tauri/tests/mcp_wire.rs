@@ -124,6 +124,9 @@ async fn shipped_stdio_binary_serves_real_tree_and_validates_arguments() {
         .await;
     let rows = &hotspots["result"]["structuredContent"];
     assert_eq!(rows["rows"][0]["totalBytes"], 24);
+    assert!(rows["rows"][0]["allocationCount"].is_number());
+    assert!(rows["rows"][0].get("callCount").is_none());
+    assert!(rows["rows"][0]["countMeaning"].as_str().unwrap().contains("不是父方法"));
     assert_eq!(rows["nextStart"], 1);
     let next = client
         .call("performance_hotspots", json!({"area":"gc","start":1}))

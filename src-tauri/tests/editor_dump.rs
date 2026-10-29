@@ -513,7 +513,7 @@ async fn hotspot_candidates_exist_below_threshold_and_preserve_quality() {
     assert_eq!(gc["quality"]["status"],"partial");
     assert_eq!(gc["rows"][0]["name"],"Update");
     assert_eq!(gc["rows"][0]["totalBytes"],24);
-    assert_eq!(gc["rows"][0]["callCount"],2);
+    assert_eq!(gc["rows"][0]["allocationCount"],2);
     assert_eq!(gc["rows"][1]["totalBytes"],8);
     assert!(run_hotspots(&MetricsStore::new(),"cpu",0,10).await.is_err());
 }
