@@ -91,6 +91,7 @@ pub enum Action {
         range_b: Option<[usize; 2]>,
         confirmed: bool,
     },
+    SkipComparison { round_id: String },
     Decide {
         round_id: String,
         decision: String,
@@ -137,9 +138,9 @@ pub(super) fn view(w: &Workspace) -> Value {
     let d = w.data.lock().unwrap();
     json!({"parseProgress":w.observation.lock().unwrap().progress.clone(),"saveError":*w.save_error.lock().unwrap(),"version":d.version,"rootAvailable":super::workflow::project_available(&d.root).is_ok(),"id":d.id,"name":d.name,"root":d.root,"directory":w.directory,"activeSceneId":d.active_scene_id,"codeRevision":d.code_revision,"scenes":d.scenes.iter().map(|s| { let r=scenes::current(&d,&s.id); json!({"id":s.id,"name":s.name,"description":s.description,"completed":s.completed,"budgets":s.budgets,"roundCount":d.rounds.iter().filter(|r|r.scene_id==s.id).count(),"needsRecording":r.and_then(|r|d.captures.iter().find(|c|c.id==r.baseline)).is_some_and(|c|scenes::stale(&d,c)),"blockedBy":scenes::blocker(&d,&s.id),"unresolved":d.rounds.iter().any(|r|r.scene_id==s.id&&scenes::unresolved(r)),"latestStatus":r.map(|r|r.decision.as_str())}) }).collect::<Vec<_>>(),"budgets":d.scenes.iter().find(|s|s.id==d.active_scene_id).map(|s|&s.budgets).unwrap_or(&d.budgets),"busy":w.busy.load(Ordering::SeqCst),
     "captures":d.captures.iter().map(|c|json!({"id":c.id,"sceneId":c.scene_id,"codeRevision":c.code_revision,"path":c.path,"hash":c.hash,"conditions":c.conditions,"snapshot":c.snapshot.meta})).collect::<Vec<_>>(),
-    "rounds":d.rounds.iter().map(|r|json!({"sceneId":r.scene_id,"workflow":r.workflow,"performanceStatus":r.performance_status(),"id":r.id,"baseline":r.baseline,"candidate":r.candidate,"tasks":r.tasks,"taskVersion":r.task_version,"taskVerifications":r.task_verifications,"tests":r.tests,"comparison":compact_comparison(&r.comparison),"correctness":r.correctness,"decision":r.decision,
+    "rounds":d.rounds.iter().map(|r|{let mut value=json!({"sceneId":r.scene_id,"workflow":r.workflow,"performanceStatus":r.performance_status(),"id":r.id,"baseline":r.baseline,"candidate":r.candidate,"tasks":r.tasks,"taskVersion":r.task_version,"taskVerifications":r.task_verifications,"tests":r.tests,"comparison":compact_comparison(&r.comparison),"correctness":r.correctness,"decision":r.decision,
         "reports":r.reports.iter().enumerate().map(|(i,p)|json!({"attempt":r.reports[..=i].iter().filter(|q|q.stage==p.stage).count(),"reportId":p.report_id,"sessionId":p.session_id,"stage":p.stage,"agentId":p.agent_id,"status":p.status,"createdAt":p.created_at,"parentReportId":p.parent_report_id,"reason":p.incomplete_reason})).collect::<Vec<_>>(),
-        "runs":r.runs.iter().map(run_view).collect::<Vec<_>>() })).collect::<Vec<_>>()})
+        "runs":r.runs.iter().map(run_view).collect::<Vec<_>>() });value["markerOnly"]=json!(r.marker_only());value["samplingAccepted"]=json!(r.sampling_accepted());value}).collect::<Vec<_>>()})
 }
 pub(super) async fn capture(path: PathBuf, conditions: Conditions) -> Result<Capture, String> {
     capture_observed(path, conditions, None).await
@@ -362,6 +363,7 @@ pub async fn optimization_command(
             | Action::Check { round_id }
             | Action::Rollback { round_id }
             | Action::Compare { round_id, .. }
+            | Action::SkipComparison { round_id }
             | Action::Decide { round_id, .. }
             | Action::VerifyTask { round_id, .. } => Some(round_id),
             _ => None,
@@ -929,6 +931,7 @@ pub async fn optimization_command(
             r.comparison = Some(result);
             w.save(&d)?;
         }
+        Action::SkipComparison { round_id } => { w.accept_sampling(&round_id)?; }
         Action::Decide {
             round_id,
             decision,
@@ -974,7 +977,7 @@ pub async fn optimization_command(
                 let d = w.data.lock().unwrap();
                 let r = scenes::current(&d, &d.active_scene_id).ok_or("尚无轮次")?;
                 let expected = if r.decision == "accepted" {
-                    r.candidate.as_ref()
+                    r.candidate.as_ref().or_else(||r.sampling_accepted().then_some(&r.baseline))
                 } else {
                     Some(&r.baseline)
                 };

@@ -376,6 +376,7 @@ fn marker_task_records_new_sampling_not_performance_success() {
     let (_t, w, r) = setup(b"class Work { int number = 1; }");
     w.data.lock().unwrap().rounds[0].tasks[0].kind = "marker".into();
     let run = w.begin(&r, "agent".into()).unwrap();
+    first_marker_review(&w,&run);
     replace(&w, &run, "number = 1", "number = 1; // Marker candidate").unwrap();
     finish(&w, &run);
     let d = w.data.lock().unwrap();
@@ -642,6 +643,10 @@ fn automatic_setup() -> (Temp, Arc<Workspace>, String, String) {
     (t, w, r, run)
 }
 fn task(w: &Workspace, run: &str, kind: &str) {
+    if kind=="marker" {
+        let mut review=history_review("marker");review["focus"]=json!(null);review["markers"]=json!([]);
+        w.edit_query(run,"optimization_review",review).unwrap();
+    }
     w.edit_query(run,"optimization_task",json!({"id":"t","kind":kind,"title":"公开热点","evidence":"已读公开 Work.cs；GC 分配候选","instructions":"继续调查并减少分配","acceptance":"编译和重录"})).unwrap();
 }
 fn create(w: &Workspace, run: &str, path: &str) -> Result<serde_json::Value, String> {
@@ -1469,10 +1474,11 @@ async fn marker_names_survive_storage_and_match_only_exact_leaf_paths() {
     let (_temp, w, _round, run) = automatic_setup();
     let request = json!({"id":"t", "kind":"marker", "title":"观察真实路径", "evidence":"公开录制",
         "instructions":"固定同步范围", "acceptance":"重录并核对", "marker_names":["Work", "Absent"]});
+    first_marker_review(&w,&run);
     w.edit_query(&run,"optimization_task", request.clone()).unwrap();
     let tasks = w.data.lock().unwrap().rounds[0].runs[0].tasks.clone();
     assert_eq!(tasks[0].marker_names, ["Work", "Absent"]);
-    for names in [json!(["Work","Work"]), json!([" "]), json!(["a","b","c","d"])] {
+    for names in [json!(["Work","Work"]), json!([" "]), json!((0..17).map(|i|format!("Point.{i}")).collect::<Vec<_>>())] {
         let mut bad=request.clone();bad["marker_names"]=names;
         assert!(w.edit_query(&run,"optimization_task",bad).is_err());
     }
@@ -1912,7 +1918,7 @@ fn add_marker_history(w: &Workspace) {
     d.rounds.insert(0,old);
 }
 fn history_review(action: &str) -> serde_json::Value {
-    json!({"focus":{"roundId":"previous","taskId":"t","mode":"continue","targetTaskId":"t","target":"原分配问题","disposition":"continuing","priorityReason":"继续原每帧分配问题，其他热点尚未证实收益","targetPlatform":"Android","targetEnvironment":"player","benefitScope":"player","platformEvidence":"实际调用在Runtime，无Editor条件编译；收益需Player复测","resumeCondition":"沿 getter 继续定位"},"markers":[{"roundId":"previous","taskId":"t","status":"unresolved","evidence":"当前 A 主线程 Public.Existing 每帧 1 次，12 次 GC.Alloc，出现不等于原因已定位","nextStep":"读取分配路径的 getter","unobservedNames":[]}],"nextAction":action,"reason":"旧采样已定位到 getter，但尚需区分两个实现分支","newEvidence":"已读 getter 两个同步分支，旧采样没有区分","newMarkerQuestion":"分支 A 有分配则追踪集合创建，分支 B 有分配则追踪格式化"})
+    json!({"coverage":{"names":["Public.Existing"],"complete":true,"evidence":"精确查询全量300条，nextStart=null，代表帧树无截断","reproduction":"reproduced"},"evidencePlan":{"existingSufficient":false,"sourceAudit":"Assets/Work.cs getter分支","rawInputs":"输入集合长度","filteredOutputs":"分支输出数量","cacheState":"集合容量","instanceIdentity":"稳定owner元数据","lifecycle":"创建销毁计数","decisionRules":"输入增长与缓存重建分别判定","captureSteps":"首次和重复调用同一owner","overhead":"静态marker和无GC数值元数据","remainingGaps":[]},"focus":{"roundId":"previous","taskId":"t","mode":"continue","targetTaskId":"t","target":"原分配问题","disposition":"continuing","priorityReason":"继续原每帧分配问题，其他热点尚未证实收益","targetPlatform":"Android","targetEnvironment":"player","benefitScope":"player","platformEvidence":"实际调用在Runtime，无Editor条件编译；收益需Player复测","resumeCondition":"沿 getter 继续定位"},"markers":[{"roundId":"previous","taskId":"t","status":"unresolved","evidence":"当前 A 主线程 Public.Existing 每帧 1 次，12 次 GC.Alloc，出现不等于原因已定位","nextStep":"读取分配路径的 getter","unobservedNames":[]}],"nextAction":action,"reason":"旧采样已定位到 getter，但尚需区分两个实现分支","newEvidence":"已读 getter 两个同步分支，旧采样没有区分","newMarkerQuestion":"分支 A 有分配则追踪集合创建，分支 B 有分配则追踪格式化"})
 }
 #[test]
 fn investigation_handoff_scopes_history_and_preserves_observation_provenance() {
@@ -1975,15 +1981,21 @@ async fn real_investigation_archive_handoff_read_only() {
     let context=investigation::context(&data,&current.id);
     assert!(context["rounds"].as_array().unwrap().len()>=2);
     assert!(context["requiredMarkerReviews"].as_array().unwrap().iter().any(|r|r["markerNames"].as_array().unwrap().iter().any(|s|s=="UI.Time.Petra")));
-    assert!(context["consecutiveMarkerOnlyRounds"].as_u64().unwrap()>=1);
+    assert!(current.marker_only(),"第五轮实际改动全部属于补点，可跳过性能对比");
     assert!(investigation::guard(&context,None,"marker",&[],"test").is_err());
-    assert_eq!(data.rounds.len(),4,"此验收针对ProjectJinn四轮现场");
+    assert!(data.rounds.len()>=5,"此验收针对ProjectJinn第五轮及以后现场");
     assert_eq!(context["focus"]["taskId"],"minimap-nav-churn");
     let old_review=current.runs.last().unwrap().investigation_review.as_ref().unwrap();
-    assert!(old_review.focus.is_none());
-    assert!(investigation::validate(&context,old_review).is_err(),"旧版无目标/平台决策记录必须补充后才能修改");
+    assert!(old_review.coverage.is_none());
+    assert!(investigation::validate(&context,old_review).is_err(),"旧版无完整取证记录必须补充后才能修改");
     let capture=data.captures.iter().find(|c|c.id==current.baseline).unwrap();
     let store=mcp::MetricsStore::new();store.set(capture.snapshot.clone()).await;
+    let target=mcp::tools::dispatch(&store,"performance_hotspots",json!({"area":"cpu","names":["UI.MiniMap.NavPath","UI.MiniMap.NavDisplay"],"limit":50})).await.unwrap();
+    assert_eq!(target["targetLookup"]["lookupComplete"],true);
+    assert!(target["targetLookup"]["scannedEntries"].as_u64().unwrap()>250);
+    assert_eq!(target["rows"].as_array().unwrap().len(),2);
+    assert!(target["rows"].as_array().unwrap().iter().all(|r|r["callCount"]==74));
+    eprintln!("ProjectJinn target lookup: {target}");
     let gc=mcp::tools::dispatch(&store,"performance_hotspots",json!({"area":"gc","limit":50})).await.unwrap();
     assert!(gc["rows"].as_array().unwrap().iter().all(|r|r["allocationCount"].is_number()&&r.get("callCount").is_none()));
     let tm_gc=gc["rows"].as_array().unwrap().iter().find(|r|r["name"]=="TM.OnUpdate").unwrap();
@@ -1994,7 +2006,7 @@ async fn real_investigation_archive_handoff_read_only() {
     assert_ne!(tm_gc["allocationCount"].as_u64(),Some(tm_cpu.call_count));
     assert_eq!(std::fs::read(path.join("optimization.json")).unwrap(),manifest);
     if let Ok(output)=std::env::var("UPAA_INVESTIGATION_OUTPUT") {
-        std::fs::write(output,serde_json::to_vec_pretty(&json!({"archiveUnchanged":true,"roundCount":data.rounds.len(),"handoff":context,"gc":gc,"tmBusinessCalls":tm_cpu.call_count,"oldUnscopedReviewRejected":true})).unwrap()).unwrap();
+        std::fs::write(output,serde_json::to_vec_pretty(&json!({"archiveUnchanged":true,"roundCount":data.rounds.len(),"handoff":context,"gc":gc,"tmBusinessCalls":tm_cpu.call_count,"oldUnscopedReviewRejected":true,"targetLookup":target})).unwrap()).unwrap();
     }
 }
 
@@ -2044,4 +2056,102 @@ fn investigation_necessary_marker_allowed_after_many_sampling_rounds() {
     let review:investigation::Review=serde_json::from_value(history_review("marker")).unwrap();
     investigation::guard(&c,Some(&review),"marker",&["Public.Getter.Branch".into()],"t").unwrap();
     assert!(investigation::guard(&c,Some(&review),"marker",&["Public.Existing".into()],"t").is_err());
+}
+
+#[test]
+fn marker_preflight_requires_complete_plan_and_target_coverage() {
+    let (_t,w,r,run)=automatic_setup();add_marker_history(&w);
+    let c=investigation::context(&w.data.lock().unwrap(),&r);
+    for (field,value) in [("coverage",json!(null)),("evidencePlan",json!(null))] {
+        let mut v=history_review("marker");v[field]=value;
+        assert!(w.edit_query(&run,"optimization_review",v).is_err());
+    }
+    let mut v=history_review("marker");v["coverage"]["names"]=json!([]);
+    assert!(w.edit_query(&run,"optimization_review",v).is_err());
+    let mut v=history_review("marker");v["coverage"]["complete"]=json!(false);
+    assert!(w.edit_query(&run,"optimization_review",v).is_err());
+    for field in ["rawInputs","filteredOutputs","cacheState","instanceIdentity","lifecycle","decisionRules","captureSteps","overhead","sourceAudit"] {
+        let mut v=history_review("marker");v["evidencePlan"][field]=json!("");
+        assert!(w.edit_query(&run,"optimization_review",v).is_err(),"{field}");
+    }
+    let mut v=history_review("marker");v["evidencePlan"]["remainingGaps"]=json!(["下轮再补实例身份和过滤后数量"]);
+    assert!(w.edit_query(&run,"optimization_review",v).is_err());
+    let v:investigation::Review=serde_json::from_value(history_review("marker")).unwrap();
+    investigation::guard(&c,Some(&v),"marker",&["New.Branch".into()],"t").unwrap();
+}
+#[test]
+fn complete_instrumentation_waits_for_reproduction_and_survives_handoff() {
+    let (_t,w,r,run)=automatic_setup();add_marker_history(&w);
+    let mut v=history_review("marker");v["coverage"]["reproduction"]=json!("not_reproduced");
+    assert!(w.edit_query(&run,"optimization_review",v.clone()).is_err());
+    v["focus"]["disposition"]=json!("awaiting_reproduction");v["evidencePlan"]["existingSufficient"]=json!(true);
+    assert!(w.edit_query(&run,"optimization_review",v.clone()).is_err());
+    v["nextAction"]=json!("investigate");w.edit_query(&run,"optimization_review",v.clone()).unwrap();
+    assert!(create(&w,&run,"Assets/ShouldNotExist.cs").is_err());
+    finish(&w,&run);
+    let mut d=w.data.lock().unwrap().clone();
+    let mut next=d.rounds.last().unwrap().clone();next.id="next".into();next.runs.clear();d.rounds.push(next);
+    let context=investigation::context(&d,"next");assert_eq!(context["focus"]["taskId"],"t");
+    assert_eq!(context["rounds"][1]["reviews"][0]["review"]["focus"]["disposition"],"awaiting_reproduction");
+    assert_eq!(context["rounds"][1]["reviews"][0]["review"]["evidencePlan"]["existingSufficient"],true);
+    assert_eq!(context["focus"]["latestReview"]["evidencePlan"]["existingSufficient"],true);
+    let repeated=d.rounds[0].runs[0].changes[0].clone();
+    d.rounds[0].runs[0].changes.extend(std::iter::repeat_n(repeated,1000));
+    let compact:serde_json::Value=serde_json::from_str(&investigation::prompt(&d,"next")).unwrap();
+    assert_eq!(compact["incomplete"],true);
+    assert_eq!(compact["focus"]["latestReview"]["focus"]["disposition"],"awaiting_reproduction");
+    assert_eq!(compact["focus"]["latestReview"]["evidencePlan"]["existingSufficient"],true);
+    let _=r;
+}
+#[test]
+fn first_marker_requires_preflight_even_without_history() {
+    let (_t,w,r,_run)=automatic_setup();let c=investigation::context(&w.data.lock().unwrap(),&r);
+    assert!(investigation::guard(&c,None,"marker",&["New".into()],"t").is_err());
+    assert!(investigation::guard(&c,None,"optimize",&[],"t").is_ok());
+}
+#[test]
+fn marker_only_skip_preserves_changes_and_requires_new_baseline() {
+    let (_t,w,r,run)=automatic_setup();task(&w,&run,"marker");create(&w,&run,"Assets/Helper.cs").unwrap();finish(&w,&run);
+    assert!(w.data.lock().unwrap().rounds[0].marker_only());
+    w.accept_sampling(&r).unwrap();
+    { let d=w.data.lock().unwrap();assert!(d.rounds[0].sampling_accepted());assert!(!scenes::unresolved(&d.rounds[0]));assert!(d.rounds[0].comparison.is_none()); }
+    workflow::next_round(&w).unwrap();
+    let d=w.data.lock().unwrap();let next=d.rounds.last().unwrap();
+    assert_ne!(next.baseline,d.rounds[0].baseline);
+    assert!(scenes::round_access(&d,&next.id,true).is_err());
+    assert!(d.captures.iter().find(|c|c.id==d.rounds[0].baseline).unwrap().code_revision.is_some());
+    assert!(d.root.join("Assets/Helper.cs").exists());
+    drop(d);
+    let loaded=archive::load(&w.directory,&std::fs::read(w.directory.join("optimization.json")).unwrap()).unwrap();
+    assert!(loaded.rounds[0].sampling_accepted());
+}
+#[test]
+fn skip_rejects_mixed_unattributed_conflicting_and_empty_changes() {
+    let (_t,w,r,run)=automatic_setup();assert!(w.accept_sampling(&r).is_err());
+    create(&w,&run,"Assets/Helper.cs").unwrap();finish(&w,&run);
+    assert!(w.accept_sampling(&r).is_err());
+    {let mut d=w.data.lock().unwrap();d.rounds[0].tasks[0].kind="marker".into();} // proposals cannot reclassify applied optimization
+    assert!(w.accept_sampling(&r).is_err());
+    {let mut d=w.data.lock().unwrap();d.rounds[0].runs[0].tasks[0].kind="marker".into();d.rounds[0].runs[0].changes[0].state="conflict".into();}
+    assert!(w.accept_sampling(&r).is_err());
+    {let mut d=w.data.lock().unwrap();d.rounds[0].runs[0].changes[0].state="applied".into();d.rounds[0].runs[0].changes[0].task_id=None;}
+    assert!(w.accept_sampling(&r).is_err());
+}
+
+fn first_marker_review(w:&Workspace,run:&str) {
+    let mut review=history_review("marker");review["focus"]=json!(null);review["markers"]=json!([]);
+    w.edit_query(run,"optimization_review",review).unwrap();
+}
+#[test]
+fn marker_names_allow_a_complete_bounded_evidence_plan() {
+    let names:Vec<_>=(0..16).map(|i|format!("Point.{i}")).collect();
+    sampling::validate_names("marker",&names).unwrap();
+    let mut too_many=names;too_many.push("Point.16".into());
+    assert!(sampling::validate_names("marker",&too_many).is_err());
+}
+#[test]
+fn applied_optimization_cannot_be_relabelled_to_skip_comparison() {
+    let (_t,w,_r,run)=automatic_setup();create(&w,&run,"Assets/Helper.cs").unwrap();first_marker_review(&w,&run);
+    let err=w.edit_query(&run,"optimization_task",json!({"id":"t","kind":"marker","title":"重分类","evidence":"public","instructions":"test","acceptance":"test"})).unwrap_err();
+    assert!(err.contains("类型"));assert!(!w.data.lock().unwrap().rounds[0].marker_only());
 }

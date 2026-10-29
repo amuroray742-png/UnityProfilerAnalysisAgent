@@ -311,3 +311,21 @@ fn build_analysis(snapshot: &MetricsSnapshot, focus: &str) -> Value {
     compact_descriptions(&mut result);
     result
 }
+
+/// Exact-name lookup scans the entire exported aggregate, not a ranked prefix.
+pub async fn run_target_hotspots(store: &MetricsStore, area: &str, names: &[String], start: usize, limit: usize) -> Result<Value, McpToolError> {
+    if names.is_empty() || names.len()>20 || names.iter().any(|n|n.trim().is_empty() || n.chars().count()>200) || names.iter().collect::<std::collections::HashSet<_>>().len()!=names.len() {
+        return Err(McpToolError::BadArg("names 需要 1..20 个固定完整名称，每项最多200字符且不可重复".into()));
+    }
+    let mut snapshot=store.get().await.ok_or(McpToolError::NoSnapshot)?;
+    let scanned = match area {
+        "cpu"=>{let n=snapshot.cpu.top_hotspots.len();snapshot.cpu.top_hotspots.retain(|h|names.contains(&h.name));n},
+        "gc"=>{let n=snapshot.gc.top_alloc_sites.len();snapshot.gc.top_alloc_sites.retain(|h|names.contains(&h.name));n},
+        _=>return Err(McpToolError::BadArg("names 精确查询仅支持 cpu/gc".into()))
+    };
+    let found:Vec<String>=if area=="cpu" {snapshot.cpu.top_hotspots.iter().map(|h|h.name.clone()).collect()} else {snapshot.gc.top_alloc_sites.iter().map(|h|h.name.clone()).collect()};
+    let filtered=MetricsStore::new();filtered.set(snapshot).await;
+    let mut result=run_hotspots(&filtered,area,start,limit).await?;
+    result["targetLookup"]=json!({"names":names,"scannedEntries":scanned,"lookupComplete":true,"notObservedNames":names.iter().filter(|n|!found.contains(n)).collect::<Vec<_>>(),"scope":"完整扫描已导出汇总，不受热点排名限制；仍按nextStart读完命中结果。未观察到不证明未执行。该结果不代表原始帧树已读完，具体路径/子项仍须分页核对深度截断。"});
+    Ok(result)
+}

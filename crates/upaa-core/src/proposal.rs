@@ -98,7 +98,7 @@ pub fn validate_tasks(tasks: &[Task], root: &Path) -> Result<(), String> {
 
 pub fn validate_names(kind: &str, names: &[String]) -> Result<(), String> {
     let mut seen = std::collections::HashSet::new();
-    if names.len() > 3
+    if names.len() > 16
         || (!names.is_empty() && kind != "marker")
         || names.iter().any(|name| {
             name.trim().is_empty()
@@ -108,7 +108,7 @@ pub fn validate_names(kind: &str, names: &[String]) -> Result<(), String> {
         })
     {
         return Err(
-            "仅 Marker 任务可记录最多 3 个不同的固定采样名称（每个 1..200 字节，无控制字符）"
+            "仅 Marker 任务可记录最多 16 个不同的固定采样名称（每个 1..200 字节，无控制字符）"
                 .into(),
         );
     }

@@ -92,7 +92,7 @@ pub fn context(data: &Project, rid: &str) -> Value {
                     )
                 })
         });
-    let focus = focus.and_then(|(rid,tid)| rounds.iter().find(|r|r.id==rid).and_then(|r|applied_tasks(r).into_iter().find(|t|t.id==tid).map(|t|json!({"roundId":rid,"taskId":tid,"title":t.title,"question":t.instructions,"acceptance":t.acceptance}))));
+    let focus = focus.and_then(|(rid,tid)| rounds.iter().find(|r|r.id==rid).and_then(|r|applied_tasks(r).into_iter().find(|t|t.id==tid).map(|t|json!({"roundId":rid,"taskId":tid,"title":t.title,"question":t.instructions,"acceptance":t.acceptance,"markerNames":t.marker_names,"latestReview":rounds.iter().flat_map(|r|&r.runs).filter_map(|run|run.investigation_review.as_ref()).filter(|review|review.focus.as_ref().is_some_and(|f|f.round_id==rid && f.task_id==tid)).last()}))));
     json!({"focus":focus,"currentBaseline":current.map(|r| &r.baseline),"consecutiveMarkerOnlyRounds":streak,
         "requiredMarkerReviews":required,
         "rounds":rounds.iter().map(|r| json!({"roundId":r.id,"decision":r.decision,
@@ -150,12 +150,40 @@ pub struct Focus {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Review {
     #[serde(default)]
+    pub coverage: Option<Coverage>,
+    #[serde(default)]
+    pub evidence_plan: Option<EvidencePlan>,
+    #[serde(default)]
     pub focus: Option<Focus>,
     pub markers: Vec<MarkerReview>,
     pub next_action: String,
     pub reason: String,
     pub new_evidence: String,
     pub new_marker_question: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all="camelCase", deny_unknown_fields)]
+pub struct Coverage {
+    pub names: Vec<String>,
+    pub complete: bool,
+    pub evidence: String,
+    pub reproduction: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all="camelCase", deny_unknown_fields)]
+pub struct EvidencePlan {
+    pub existing_sufficient: bool,
+    pub source_audit: String,
+    pub raw_inputs: String,
+    pub filtered_outputs: String,
+    pub cache_state: String,
+    pub instance_identity: String,
+    pub lifecycle: String,
+    pub decision_rules: String,
+    pub capture_steps: String,
+    pub overhead: String,
+    pub remaining_gaps: Vec<String>,
 }
 
 pub fn validate(context: &Value, review: &Review) -> Result<(), String> {
@@ -246,6 +274,23 @@ pub fn validate(context: &Value, review: &Review) -> Result<(), String> {
             return Err("未覆盖的 Marker 必须保留调查，不能以部分出现认定整项已回答".into());
         }
     }
+    if !context["focus"].is_null() || review.next_action=="marker" {
+        let c=review.coverage.as_ref().ok_or("先记录原目标完整数据查询 coverage；不能以热点榜前N项判断未复现")?;
+        if c.evidence.trim().is_empty() || !["reproduced","not_reproduced","unknown"].contains(&c.reproduction.as_str()) { return Err("coverage 需要查询范围、分页/截断结果、帧证据及复现状态".into()); }
+        let target=required.iter().find(|m|m["roundId"]==context["focus"]["roundId"] && m["taskId"]==context["focus"]["taskId"]);
+        if c.complete && target.is_some_and(|m|m["markerNames"].as_array().unwrap().iter().any(|n| !c.names.iter().any(|v|n==v))) { return Err("coverage 必须覆盖原目标所有固定名称".into()); }
+        if !c.complete && (review.next_action!="investigate" || review.markers.iter().any(|m|["answered","not_observed"].contains(&m.status.as_str()))) { return Err("数据覆盖不完整：继续只读调查，不得补点或下未观察到/已回答结论".into()); }
+        if let Some(f)=&review.focus {
+            let missing=review.markers.iter().any(|m|m.round_id==f.round_id && m.task_id==f.task_id && m.status=="not_observed");
+            if (c.reproduction=="not_reproduced" || missing) && f.disposition!="awaiting_reproduction" { return Err("原问题未复现必须明确 awaiting_reproduction 并保留恢复条件".into()); }
+            if c.reproduction!="reproduced" && (f.disposition=="resolved" || (f.mode=="continue" && review.next_action=="optimize")) { return Err("未复现或复现未知不能宣称解决或直接优化原问题".into()); }
+        }
+    }
+    if review.next_action=="marker" {
+        let p=review.evidence_plan.as_ref().ok_or("补点前必须提交完整 evidencePlan，不得将已知必要测量拖到下一轮")?;
+        if p.existing_sufficient { return Err("现有取证方案已完整：等待复现，禁止因未复现再次补点".into()); }
+        if !p.remaining_gaps.is_empty() || [&p.source_audit,&p.raw_inputs,&p.filtered_outputs,&p.cache_state,&p.instance_identity,&p.lifecycle,&p.decision_rules,&p.capture_steps,&p.overhead].iter().any(|s|s.trim().is_empty()) { return Err("取证方案不完整：补齐源码审查、输入/过滤输出、缓存容量、实例关联、生命周期、分支判定、复现步骤和开销；不适用须说明原因，不能遗留必要缺口".into()); }
+    }
     if review.next_action == "marker"
         && (review.new_evidence.trim().is_empty() || review.new_marker_question.trim().is_empty())
     {
@@ -262,11 +307,11 @@ pub fn guard(
     task_id: &str,
 ) -> Result<(), String> {
     let required = context["requiredMarkerReviews"].as_array().unwrap();
-    if required.is_empty() {
+    if required.is_empty() && kind!="marker" {
         return Ok(());
     }
     let review = review
-        .ok_or("先调用 optimization_review 验收历史 Marker，再实施修改；证据不足可继续只读调查")?;
+        .ok_or("先调用 optimization_review 验收历史 Marker/审查完整取证方案，再实施修改；证据不足可继续只读调查")?;
     validate(context, review)?;
     if review
         .focus

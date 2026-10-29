@@ -42,3 +42,19 @@ pub fn observe(tasks: &[Task], paths: &Result<BTreeMap<String, Value>, String>) 
     }
     json!({"rows":rows,"scope":"仅检查 B 所选范围内已导出的采样，名称相同不证明来自本轮代码。未观察到不等于未执行；出现也不证明调查问题已回答或性能改善。每个名称最多展示 5 条路径，完整证据请查看 B 调用树；GC 缺失不是零。"})
 }
+
+impl super::Workspace {
+    pub fn accept_sampling(&self, rid: &str) -> Result<(), String> {
+        if self.busy.load(std::sync::atomic::Ordering::SeqCst) { return Err("请先结束运行".into()); }
+        let mut saved=self.data.lock().unwrap();let mut d=saved.clone();
+        super::scenes::round_access(&d,rid,false)?;
+        let round=d.rounds.iter_mut().find(|r|r.id==rid).ok_or("轮次不存在")?;
+        if !round.marker_only() { return Err("只有实际改动全部属于补点任务且无冲突时，才能跳过性能对比".into()); }
+        round.decision="accepted".into();
+        round.comparison=None;
+        // A previously selected B has not been accepted as evidence by this action.
+        round.candidate=None;
+        self.save(&d)?;*saved=d;
+        Ok(())
+    }
+}
