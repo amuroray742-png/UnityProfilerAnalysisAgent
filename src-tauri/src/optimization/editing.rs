@@ -305,7 +305,7 @@ impl Workspace {
             return Err("未知修改工具".into());
         }
         let task = run.tasks.iter().find(|t|Some(t.id.as_str())==a["task_id"].as_str()).ok_or("任务不存在")?;
-        super::investigation::guard(&investigation, run.investigation_review.as_ref(), &task.kind, &task.marker_names)?;
+        super::investigation::guard(&investigation, run.investigation_review.as_ref(), &task.kind, &task.marker_names, &task.id)?;
         if a["expected_hash"].as_str() != Some(&hash)
             || (run.automatic && run.read_receipts.get(path) != Some(&hash))
         {
