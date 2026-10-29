@@ -49,7 +49,51 @@ pub fn context(data: &Project, rid: &str) -> Value {
                 .map(move |t| json!({"roundId":r.id,"taskId":t.id,"markerNames":t.marker_names}))
         })
         .collect();
-    json!({"currentBaseline":current.map(|r| &r.baseline),"consecutiveMarkerOnlyRounds":streak,
+    // A switch defers the original investigation; it does not silently replace it.
+    let mut resolved = std::collections::HashSet::new();
+    let mut focus = None;
+    for round in &rounds {
+        for run in &round.runs {
+            if let Some(f) = run
+                .investigation_review
+                .as_ref()
+                .and_then(|r| r.focus.as_ref())
+            {
+                let key = (f.round_id.clone(), f.task_id.clone());
+                if f.disposition == "resolved" {
+                    resolved.insert(key);
+                    focus = None;
+                } else {
+                    focus = Some(key);
+                }
+            }
+        }
+    }
+    let focus = focus
+        .filter(|key| {
+            required
+                .iter()
+                .any(|r| r["roundId"] == key.0 && r["taskId"] == key.1)
+        })
+        .or_else(|| {
+            required
+                .iter()
+                .rev()
+                .find(|r| {
+                    !resolved.contains(&(
+                        r["roundId"].as_str().unwrap().to_owned(),
+                        r["taskId"].as_str().unwrap().to_owned(),
+                    ))
+                })
+                .map(|r| {
+                    (
+                        r["roundId"].as_str().unwrap().to_owned(),
+                        r["taskId"].as_str().unwrap().to_owned(),
+                    )
+                })
+        });
+    let focus = focus.and_then(|(rid,tid)| rounds.iter().find(|r|r.id==rid).and_then(|r|applied_tasks(r).into_iter().find(|t|t.id==tid).map(|t|json!({"roundId":rid,"taskId":tid,"title":t.title,"question":t.instructions,"acceptance":t.acceptance}))));
+    json!({"focus":focus,"currentBaseline":current.map(|r| &r.baseline),"consecutiveMarkerOnlyRounds":streak,
         "requiredMarkerReviews":required,
         "rounds":rounds.iter().map(|r| json!({"roundId":r.id,"decision":r.decision,
             "baseline":r.baseline,"candidate":r.candidate,
@@ -70,7 +114,7 @@ pub fn prompt(data: &Project, rid: &str) -> String {
     if text.len() <= 64 * 1024 {
         return text;
     }
-    serde_json::to_string(&json!({"requiredMarkerReviews":context["requiredMarkerReviews"],
+    serde_json::to_string(&json!({"focus":context["focus"],"requiredMarkerReviews":context["requiredMarkerReviews"],
         "consecutiveMarkerOnlyRounds":context["consecutiveMarkerOnlyRounds"],
         "incomplete":true,"reason":"历史摘要超过 64 KiB；修改阶段必须分页读取 optimization_context 的 investigation，当前阶段不得声称已完整验收历史。"})).unwrap()
 }
@@ -83,10 +127,30 @@ pub struct MarkerReview {
     pub status: String,
     pub evidence: String,
     pub next_step: String,
+    #[serde(default)]
+    pub unobserved_names: Vec<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Focus {
+    pub round_id: String,
+    pub task_id: String,
+    pub mode: String,
+    pub target_task_id: String,
+    pub target: String,
+    pub disposition: String,
+    pub priority_reason: String,
+    pub target_platform: String,
+    pub target_environment: String,
+    pub benefit_scope: String,
+    pub platform_evidence: String,
+    pub resume_condition: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Review {
+    #[serde(default)]
+    pub focus: Option<Focus>,
     pub markers: Vec<MarkerReview>,
     pub next_action: String,
     pub reason: String,
@@ -122,6 +186,66 @@ pub fn validate(context: &Value, review: &Review) -> Result<(), String> {
             );
         }
     }
+    if !context["focus"].is_null() {
+        let f = review
+            .focus
+            .as_ref()
+            .ok_or("必须记录原调查目标 focus；切换目标不能撤销原调查")?;
+        if context["focus"]["roundId"] != f.round_id || context["focus"]["taskId"] != f.task_id {
+            return Err("focus 必须引用当前继承的原调查目标，不能换成容易修改的任务".into());
+        }
+        if !["continue", "switch"].contains(&f.mode.as_str())
+            || !["continuing", "awaiting_reproduction", "blocked", "resolved"]
+                .contains(&f.disposition.as_str())
+            || !["editor", "player", "unknown"].contains(&f.benefit_scope.as_str())
+            || [
+                &f.target_task_id,
+                &f.target,
+                &f.priority_reason,
+                &f.target_platform,
+                &f.platform_evidence,
+                &f.resume_condition,
+            ]
+            .iter()
+            .any(|s| s.trim().is_empty())
+        {
+            return Err("目标决策需目标任务、优先级比较、目标平台、收益适用范围/证据及原问题恢复条件；未观察到不能撤销".into());
+        }
+        if !["editor", "player", "unknown"].contains(&f.target_environment.as_str()) {
+            return Err("targetEnvironment 必须明确 editor/player/unknown".into());
+        }
+        if f.target_environment == "player" && f.benefit_scope == "editor" && f.mode != "switch" {
+            return Err("仅Editor收益不能作为Player原目标的继续解决；必须明确切换目标、比较优先级并保留原问题".into());
+        }
+        let original = review
+            .markers
+            .iter()
+            .find(|m| m.round_id == f.round_id && m.task_id == f.task_id)
+            .ok_or("缺少原目标验收")?;
+        if f.disposition == "resolved"
+            && (original.status != "answered" || !original.unobserved_names.is_empty())
+        {
+            return Err(
+                "未观察到、不可比或尚未回答的问题不能标记解决；保留待复现或继续调查".into(),
+            );
+        }
+    }
+    for m in &review.markers {
+        let names = required
+            .iter()
+            .find(|r| r["roundId"] == m.round_id && r["taskId"] == m.task_id)
+            .unwrap();
+        if m.unobserved_names.iter().any(|n| {
+            !names["markerNames"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == n)
+        }) || (!m.unobserved_names.is_empty() && m.status == "answered")
+        {
+            return Err("未覆盖的 Marker 必须保留调查，不能以部分出现认定整项已回答".into());
+        }
+    }
     if review.next_action == "marker"
         && (review.new_evidence.trim().is_empty() || review.new_marker_question.trim().is_empty())
     {
@@ -135,6 +259,7 @@ pub fn guard(
     review: Option<&Review>,
     kind: &str,
     names: &[String],
+    task_id: &str,
 ) -> Result<(), String> {
     let required = context["requiredMarkerReviews"].as_array().unwrap();
     if required.is_empty() {
@@ -143,6 +268,13 @@ pub fn guard(
     let review = review
         .ok_or("先调用 optimization_review 验收历史 Marker，再实施修改；证据不足可继续只读调查")?;
     validate(context, review)?;
+    if review
+        .focus
+        .as_ref()
+        .is_some_and(|f| f.target_task_id != task_id)
+    {
+        return Err("当前任务与已记录目标决策不一致；先更新目标及切换理由再修改".into());
+    }
     if review.next_action == "investigate" {
         return Err("验收结论为继续调查，不能写入；有新证据后更新 optimization_review".into());
     }

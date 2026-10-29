@@ -168,7 +168,7 @@ impl Workspace {
             }
             super::sampling::validate_names(&task.kind, &task.marker_names)?;
             if task.kind != "investigate" {
-                super::investigation::guard(&investigation, run.investigation_review.as_ref(), &task.kind, &task.marker_names)?;
+                super::investigation::guard(&investigation, run.investigation_review.as_ref(), &task.kind, &task.marker_names, &task.id)?;
             }
             let next = Task {
                 id: task.id.clone(),
@@ -212,7 +212,7 @@ impl Workspace {
             return Err("请先记录有依据的优化或 Marker 任务".into());
         }
         let task = run.tasks.iter().find(|t|t.id==request.task_id).unwrap();
-        super::investigation::guard(&investigation, run.investigation_review.as_ref(), &task.kind, &task.marker_names)?;
+        super::investigation::guard(&investigation, run.investigation_review.as_ref(), &task.kind, &task.marker_names, &task.id)?;
         if !editing::allowed(&request.path)
             || request.content.is_empty()
             || request.content.len() > 2 * 1024 * 1024

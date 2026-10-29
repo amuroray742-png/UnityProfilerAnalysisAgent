@@ -1912,7 +1912,7 @@ fn add_marker_history(w: &Workspace) {
     d.rounds.insert(0,old);
 }
 fn history_review(action: &str) -> serde_json::Value {
-    json!({"markers":[{"roundId":"previous","taskId":"t","status":"unresolved","evidence":"当前 A 主线程 Public.Existing 每帧 1 次，12 次 GC.Alloc，出现不等于原因已定位","nextStep":"读取分配路径的 getter"}],"nextAction":action,"reason":"旧采样已定位到 getter，但尚需区分两个实现分支","newEvidence":"已读 getter 两个同步分支，旧采样没有区分","newMarkerQuestion":"分支 A 有分配则追踪集合创建，分支 B 有分配则追踪格式化"})
+    json!({"focus":{"roundId":"previous","taskId":"t","mode":"continue","targetTaskId":"t","target":"原分配问题","disposition":"continuing","priorityReason":"继续原每帧分配问题，其他热点尚未证实收益","targetPlatform":"Android","targetEnvironment":"player","benefitScope":"player","platformEvidence":"实际调用在Runtime，无Editor条件编译；收益需Player复测","resumeCondition":"沿 getter 继续定位"},"markers":[{"roundId":"previous","taskId":"t","status":"unresolved","evidence":"当前 A 主线程 Public.Existing 每帧 1 次，12 次 GC.Alloc，出现不等于原因已定位","nextStep":"读取分配路径的 getter","unobservedNames":[]}],"nextAction":action,"reason":"旧采样已定位到 getter，但尚需区分两个实现分支","newEvidence":"已读 getter 两个同步分支，旧采样没有区分","newMarkerQuestion":"分支 A 有分配则追踪集合创建，分支 B 有分配则追踪格式化"})
 }
 #[test]
 fn investigation_handoff_scopes_history_and_preserves_observation_provenance() {
@@ -1955,7 +1955,7 @@ fn investigation_rejects_repeat_markers_and_unsupported_continued_sampling() {
     let (_t,w,_r,run)=automatic_setup(); add_marker_history(&w);
     let mut unsupported=history_review("marker");unsupported["newEvidence"]=json!("");
     assert!(w.edit_query(&run,"optimization_review",unsupported).is_err());
-    w.edit_query(&run,"optimization_review",history_review("marker")).unwrap();
+    let mut review=history_review("marker");review["focus"]["targetTaskId"]=json!("sample");w.edit_query(&run,"optimization_review",review).unwrap();
     let mut task=json!({"id":"sample","kind":"marker","title":"采样","evidence":"已读取两个分支","instructions":"同步分支","acceptance":"区分两个原因","marker_names":["Public.Existing"]});
     assert!(w.edit_query(&run,"optimization_task",task.clone()).unwrap_err().contains("重复"));
     task["marker_names"]=json!(["Public.Getter.Branch"]);
@@ -1976,18 +1976,72 @@ async fn real_investigation_archive_handoff_read_only() {
     assert!(context["rounds"].as_array().unwrap().len()>=2);
     assert!(context["requiredMarkerReviews"].as_array().unwrap().iter().any(|r|r["markerNames"].as_array().unwrap().iter().any(|s|s=="UI.Time.Petra")));
     assert!(context["consecutiveMarkerOnlyRounds"].as_u64().unwrap()>=1);
-    assert!(investigation::guard(&context,None,"marker",&[]).is_err());
+    assert!(investigation::guard(&context,None,"marker",&[],"test").is_err());
+    assert_eq!(data.rounds.len(),4,"此验收针对ProjectJinn四轮现场");
+    assert_eq!(context["focus"]["taskId"],"minimap-nav-churn");
+    let old_review=current.runs.last().unwrap().investigation_review.as_ref().unwrap();
+    assert!(old_review.focus.is_none());
+    assert!(investigation::validate(&context,old_review).is_err(),"旧版无目标/平台决策记录必须补充后才能修改");
     let capture=data.captures.iter().find(|c|c.id==current.baseline).unwrap();
     let store=mcp::MetricsStore::new();store.set(capture.snapshot.clone()).await;
     let gc=mcp::tools::dispatch(&store,"performance_hotspots",json!({"area":"gc","limit":50})).await.unwrap();
     assert!(gc["rows"].as_array().unwrap().iter().all(|r|r["allocationCount"].is_number()&&r.get("callCount").is_none()));
     let tm_gc=gc["rows"].as_array().unwrap().iter().find(|r|r["name"]=="TM.OnUpdate").unwrap();
     let tm_cpu=capture.snapshot.cpu.top_hotspots.iter().find(|r|r.name=="TM.OnUpdate").unwrap();
-    assert_eq!(tm_cpu.call_count,2000);
-    assert_eq!(tm_gc["allocationCount"],2242506);
+    assert_eq!(tm_cpu.call_count,capture.frames.len() as u64);
+    let source_gc=capture.snapshot.gc.top_alloc_sites.iter().find(|r|r.name=="TM.OnUpdate").unwrap();
+    assert_eq!(tm_gc["allocationCount"],source_gc.call_count);
     assert_ne!(tm_gc["allocationCount"].as_u64(),Some(tm_cpu.call_count));
     assert_eq!(std::fs::read(path.join("optimization.json")).unwrap(),manifest);
     if let Ok(output)=std::env::var("UPAA_INVESTIGATION_OUTPUT") {
-        std::fs::write(output,serde_json::to_vec_pretty(&json!({"archiveUnchanged":true,"roundCount":data.rounds.len(),"handoff":context,"gc":gc,"tmBusinessCalls":tm_cpu.call_count})).unwrap()).unwrap();
+        std::fs::write(output,serde_json::to_vec_pretty(&json!({"archiveUnchanged":true,"roundCount":data.rounds.len(),"handoff":context,"gc":gc,"tmBusinessCalls":tm_cpu.call_count,"oldUnscopedReviewRejected":true})).unwrap()).unwrap();
     }
+}
+
+#[test]
+fn investigation_focus_requires_switch_priority_platform_and_task_binding() {
+    let (_t,w,r,run)=automatic_setup();add_marker_history(&w);
+    let context=investigation::context(&w.data.lock().unwrap(),&r);
+    assert_eq!(context["focus"]["taskId"],"t");
+    for field in ["priorityReason","targetPlatform","benefitScope","platformEvidence","resumeCondition"] {
+        let mut review=history_review("optimize");review["focus"]["mode"]=json!("switch");review["focus"][field]=json!("");
+        assert!(w.edit_query(&run,"optimization_review",review).is_err(),"{field}");
+    }
+    let mut wrong_platform=history_review("optimize");wrong_platform["focus"]["benefitScope"]=json!("editor");
+    assert!(w.edit_query(&run,"optimization_review",wrong_platform).unwrap_err().contains("Player"));
+    let mut review=history_review("optimize");review["focus"]["mode"]=json!("switch");
+    review["focus"]["targetTaskId"]=json!("editor-only");review["focus"]["benefitScope"]=json!("editor");
+    review["focus"]["platformEvidence"]=json!("UNITY_EDITOR限定，只改善编辑器，不解决Android原目标");
+    review["focus"]["priorityReason"]=json!("原尖峰未复现，暂缓；编辑器重复订阅是低风险次要问题，不能替代主目标");
+    w.edit_query(&run,"optimization_review",review).unwrap();
+    assert!(replace(&w,&run,"number = 1","number = 2").unwrap_err().contains("目标决策"));
+}
+#[test]
+fn investigation_unobserved_cannot_resolve_or_withdraw_even_partial_task() {
+    let (_t,w,_r,run)=automatic_setup();add_marker_history(&w);
+    for status in ["not_observed","not_comparable","unresolved"] {
+        let mut review=history_review("investigate");review["markers"][0]["status"]=json!(status);review["focus"]["disposition"]=json!("resolved");
+        assert!(w.edit_query(&run,"optimization_review",review).is_err());
+    }
+    let mut partial=history_review("investigate");partial["markers"][0]["status"]=json!("answered");partial["markers"][0]["unobservedNames"]=json!(["Public.Existing"]);
+    assert!(w.edit_query(&run,"optimization_review",partial).is_err());
+    let mut waiting=history_review("investigate");waiting["markers"][0]["status"]=json!("not_observed");waiting["markers"][0]["unobservedNames"]=json!(["Public.Existing"]);waiting["focus"]["disposition"]=json!("awaiting_reproduction");
+    w.edit_query(&run,"optimization_review",waiting.clone()).unwrap();
+    waiting["focus"]["disposition"]=json!("withdrawn");assert!(w.edit_query(&run,"optimization_review",waiting).is_err());
+}
+#[test]
+fn investigation_switch_preserves_original_focus_in_next_round() {
+    let (_t,w,r,run)=automatic_setup();add_marker_history(&w);
+    let mut review=history_review("optimize");review["focus"]["mode"]=json!("switch");review["focus"]["disposition"]=json!("awaiting_reproduction");
+    w.edit_query(&run,"optimization_review",review).unwrap();
+    let mut d=w.data.lock().unwrap();let mut next=d.rounds.iter().find(|x|x.id==r).unwrap().clone();next.id="next-focus".into();next.runs.clear();d.rounds.push(next);
+    let c=investigation::context(&d,"next-focus");assert_eq!(c["focus"]["roundId"],"previous");assert_eq!(c["focus"]["taskId"],"t");
+}
+#[test]
+fn investigation_necessary_marker_allowed_after_many_sampling_rounds() {
+    let (_t,w,r,_run)=automatic_setup();add_marker_history(&w);
+    let mut c=investigation::context(&w.data.lock().unwrap(),&r);c["consecutiveMarkerOnlyRounds"]=json!(20);
+    let review:investigation::Review=serde_json::from_value(history_review("marker")).unwrap();
+    investigation::guard(&c,Some(&review),"marker",&["Public.Getter.Branch".into()],"t").unwrap();
+    assert!(investigation::guard(&c,Some(&review),"marker",&["Public.Existing".into()],"t").is_err());
 }
