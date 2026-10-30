@@ -92,6 +92,7 @@ pub enum Action {
         confirmed: bool,
     },
     SkipComparison { round_id: String },
+    FinishInvestigation { round_id: String },
     Decide {
         round_id: String,
         decision: String,
@@ -140,7 +141,9 @@ pub(super) fn view(w: &Workspace) -> Value {
     "captures":d.captures.iter().map(|c|json!({"id":c.id,"sceneId":c.scene_id,"codeRevision":c.code_revision,"path":c.path,"hash":c.hash,"conditions":c.conditions,"snapshot":c.snapshot.meta})).collect::<Vec<_>>(),
     "rounds":d.rounds.iter().map(|r|{let mut value=json!({"sceneId":r.scene_id,"workflow":r.workflow,"performanceStatus":r.performance_status(),"id":r.id,"baseline":r.baseline,"candidate":r.candidate,"tasks":r.tasks,"taskVersion":r.task_version,"taskVerifications":r.task_verifications,"tests":r.tests,"comparison":compact_comparison(&r.comparison),"correctness":r.correctness,"decision":r.decision,
         "reports":r.reports.iter().enumerate().map(|(i,p)|json!({"attempt":r.reports[..=i].iter().filter(|q|q.stage==p.stage).count(),"reportId":p.report_id,"sessionId":p.session_id,"stage":p.stage,"agentId":p.agent_id,"status":p.status,"createdAt":p.created_at,"parentReportId":p.parent_report_id,"reason":p.incomplete_reason})).collect::<Vec<_>>(),
-        "runs":r.runs.iter().map(run_view).collect::<Vec<_>>() });value["markerOnly"]=json!(r.marker_only());value["samplingAccepted"]=json!(r.sampling_accepted());value}).collect::<Vec<_>>()})
+        "runs":r.runs.iter().map(run_view).collect::<Vec<_>>() });value["canFinishInvestigation"]=json!(r.decision=="pending" && r.investigation_only());
+        value["investigationOutcome"]=r.runs.last().and_then(|run|run.investigation_review.as_ref()).map(|review|json!({"reason":review.reason,"coverageComplete":review.coverage.as_ref().map(|c|c.complete),"resumeCondition":review.focus.as_ref().map(|f|&f.resume_condition)})).unwrap_or(Value::Null);
+        value["markerOnly"]=json!(r.marker_only());value["samplingAccepted"]=json!(r.sampling_accepted());value}).collect::<Vec<_>>()})
 }
 pub(super) async fn capture(path: PathBuf, conditions: Conditions) -> Result<Capture, String> {
     capture_observed(path, conditions, None).await
@@ -364,6 +367,7 @@ pub async fn optimization_command(
             | Action::Rollback { round_id }
             | Action::Compare { round_id, .. }
             | Action::SkipComparison { round_id }
+            | Action::FinishInvestigation { round_id }
             | Action::Decide { round_id, .. }
             | Action::VerifyTask { round_id, .. } => Some(round_id),
             _ => None,
@@ -373,7 +377,7 @@ pub async fn optimization_command(
             if scene_id.as_ref() != Some(&r.scene_id) {
                 return Err("轮次不属于此场景".into());
             }
-            scenes::round_access(&d, rid, !matches!(action, Action::Rollback { .. }))?;
+            scenes::round_access(&d, rid, !matches!(action, Action::Rollback { .. } | Action::FinishInvestigation { .. }))?;
         }
         if matches!(action, Action::Adopt { .. })
             && !d.scenes.is_empty()
@@ -931,6 +935,7 @@ pub async fn optimization_command(
             r.comparison = Some(result);
             w.save(&d)?;
         }
+        Action::FinishInvestigation { round_id } => { w.finish_investigation(&round_id)?; }
         Action::SkipComparison { round_id } => { w.accept_sampling(&round_id)?; }
         Action::Decide {
             round_id,

@@ -15,7 +15,7 @@ export function ScenePanel({ project, pending, onAction }: {
     const r = project.rounds.filter(r => r.sceneId === sid).at(-1);
     if (!r) return '等待导入';
     const status = r.decision !== 'pending' ? r.decision : r.runs.at(-1)?.status || r.workflow?.status || 'pending';
-    return ({accepted:'已接受',rolled_back:'已回退',running:'正在进行',completed:'诊断完成',modified:'待复测',partial:'部分完成',failed:'失败',cancelled:'已停止',interrupted:'已中断',investigated:'调查完成',pending:'待处理'} as Record<string,string>)[status] ?? '待处理';
+    return ({deferred:'调查已归档，未修改',accepted:'已接受',rolled_back:'已回退',running:'正在进行',completed:'诊断完成',modified:'待复测',partial:'部分完成',failed:'失败',cancelled:'已停止',interrupted:'已中断',investigated:'调查完成',pending:'待处理'} as Record<string,string>)[status] ?? '待处理';
   };
   useEffect(() => { setEditing(null); }, [project.id, project.activeSceneId]);
   return <section className="workflow-card" aria-label="优化场景">

@@ -93,6 +93,14 @@ pub struct Round {
     pub decision: String,
 }
 impl Round {
+    pub fn investigation_only(&self) -> bool {
+        self.runs.iter().all(|run| run.changes.is_empty() && run.status != "running")
+            && self.runs.last().is_some_and(|run| {
+                run.status == "investigated"
+                    && (!run.text.trim().is_empty() || run.investigation_review.is_some())
+            })
+    }
+
     /// Classify applied ledger entries, not merely the current proposed tasks.
     pub fn marker_only(&self) -> bool {
         let mut applied = false;
@@ -110,7 +118,9 @@ impl Round {
     }
 
     pub fn performance_status(&self) -> &'static str {
-        if self.sampling_accepted() { return "已保留补点，跳过性能对比；待重录取证"; }
+        if self.decision == "deferred" { return "调查已归档，未修改；原目标仍开放"; }
+        if self.investigation_only() { return "调查完成，未修改；可结束本轮并重录"; }
+        if self.sampling_accepted() { return if self.candidate.is_some() {"已导入 B，跳过性能对比；待继续取证"} else {"旧版补点轮次缺少 B，下一轮须导入新录制"}; }
         if !self.runs.is_empty() && self.runs.iter().all(|r| r.status == "rolled_back") {
             return "不可判定（本轮已回退）";
         }

@@ -48,12 +48,17 @@ impl super::Workspace {
         if self.busy.load(std::sync::atomic::Ordering::SeqCst) { return Err("请先结束运行".into()); }
         let mut saved=self.data.lock().unwrap();let mut d=saved.clone();
         super::scenes::round_access(&d,rid,false)?;
-        let round=d.rounds.iter_mut().find(|r|r.id==rid).ok_or("轮次不存在")?;
+        let round=d.rounds.iter().find(|r|r.id==rid).ok_or("轮次不存在")?;
         if !round.marker_only() { return Err("只有实际改动全部属于补点任务且无冲突时，才能跳过性能对比".into()); }
+        let bid=round.candidate.as_ref().ok_or("纯补点也必须先导入重录 B，才能跳过性能对比")?;
+        let capture=d.captures.iter().find(|c|&c.id==bid).ok_or("B 录制不存在，请重新导入 B")?;
+        if bid==&round.baseline || capture.scene_id!=round.scene_id || capture.code_revision!=Some(d.code_revision) {
+            return Err("B 必须属于本场景且对应当前代码，请重新录制并导入 B".into());
+        }
+        let round=d.rounds.iter_mut().find(|r|r.id==rid).unwrap();
         round.decision="accepted".into();
         round.comparison=None;
-        // A previously selected B has not been accepted as evidence by this action.
-        round.candidate=None;
+        // Retain the imported recording as the next baseline; skipping comparison is not a performance verdict.
         self.save(&d)?;*saved=d;
         Ok(())
     }
